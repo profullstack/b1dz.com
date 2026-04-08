@@ -1,0 +1,25 @@
+{
+  "name": "@b1dz/storage-supabase",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:integration": "INTEGRATION=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@b1dz/core": "workspace:*",
+    "@supabase/supabase-js": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

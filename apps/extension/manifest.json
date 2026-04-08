@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "b1dz Sync",
+  "version": "0.0.1",
+  "description": "Sync your DealDash session to b1dz.com so the daemon can bid on your behalf.",
+  "permissions": ["cookies", "storage", "activeTab"],
+  "host_permissions": [
+    "https://*.dealdash.com/*",
+    "https://b1dz.com/*",
+    "http://localhost:3000/*"
+  ],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  }
+}

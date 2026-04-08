@@ -1,0 +1,31 @@
+{
+  "name": "b1dz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "dev:web": "pnpm --filter @b1dz/web dev",
+    "b1dz": "pnpm --filter @b1dz/cli dev --"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["puppeteer", "esbuild", "sharp"]
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "eslint": "latest",
+    "turbo": "latest",
+    "typescript": "latest",
+    "typescript-eslint": "latest",
+    "vitest": "latest"
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>b1dz Sync</title>
+    <style>
+      body { font-family: -apple-system, system-ui, sans-serif; width: 320px; margin: 0; padding: 16px; background: #0a0a0a; color: #fff; }
+      h1 { font-size: 16px; margin: 0 0 8px; }
+      p { font-size: 12px; color: #aaa; margin: 0 0 12px; }
+      input { width: 100%; box-sizing: border-box; background: #181818; border: 1px solid #333; color: #fff; padding: 8px; border-radius: 4px; font-size: 12px; }
+      button { width: 100%; background: #10b981; color: #000; border: 0; padding: 10px; border-radius: 4px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+      button:disabled { opacity: 0.5; }
+      .row { margin-bottom: 12px; }
+      .status { font-size: 12px; margin-top: 12px; }
+      .ok { color: #10b981; }
+      .err { color: #ef4444; }
+      label { font-size: 11px; color: #888; display: block; margin-bottom: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>b1dz Sync</h1>
+    <p>Pushes your DealDash session to b1dz so the daemon can bid for you.</p>
+
+    <div class="row">
+      <label>API endpoint</label>
+      <input id="endpoint" type="text" placeholder="https://b1dz.com" />
+    </div>
+    <div class="row">
+      <label>API token</label>
+      <input id="token" type="password" placeholder="b1dz_..." />
+    </div>
+
+    <button id="sync">Sync DealDash session</button>
+    <div id="status" class="status"></div>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

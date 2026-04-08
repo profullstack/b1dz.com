@@ -1,0 +1,31 @@
+{
+  "name": "@b1dz/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@b1dz/core": "workspace:*",
+    "@b1dz/storage-json": "workspace:*",
+    "@b1dz/storage-supabase": "workspace:*",
+    "@supabase/supabase-js": "latest",
+    "@supabase/ssr": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tailwindcss": "latest",
+    "typescript": "latest"
+  }
+}

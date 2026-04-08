@@ -1,0 +1,39 @@
+{
+  "name": "@b1dz/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": { "b1dz": "./bin/b1dz" },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "postinstall": "pnpm exec puppeteer browsers install chrome",
+    "build": "pnpm exec puppeteer browsers install chrome && tsc -p tsconfig.build.json",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@b1dz/core": "workspace:*",
+    "@b1dz/storage-json": "workspace:*",
+    "@b1dz/storage-supabase": "workspace:*",
+    "@b1dz/source-dealdash": "workspace:*",
+    "@b1dz/source-crypto-arb": "workspace:*",
+    "@b1dz/source-crypto-trade": "workspace:*",
+    "@supabase/supabase-js": "latest",
+    "@ink-tools/ink-mouse": "latest",
+    "chalk": "latest",
+    "cli-table3": "latest",
+    "dotenv": "latest",
+    "ink": "latest",
+    "ink-text-input": "latest",
+    "puppeteer": "latest",
+    "react": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

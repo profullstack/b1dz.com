@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# b1dz launcher — runs the CLI entry via tsx so no build step is needed.
+# Resolves the package directory from this script's location and uses the
+# package-local tsx binary, so it works no matter where the user invokes it.
+set -e
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+PKG_DIR="$(cd "$HERE/.." && pwd)"
+TSX="$PKG_DIR/node_modules/.bin/tsx"
+if [ ! -x "$TSX" ]; then
+  echo "b1dz: tsx not found at $TSX — run \`pnpm install\` in $PKG_DIR" >&2
+  exit 1
+fi
+cd "$PKG_DIR"
+exec "$TSX" "$PKG_DIR/src/index.ts" "$@"

@@ -1,0 +1,29 @@
+node_modules
+.next
+dist
+.turbo
+.env
+.env.local
+data/*.json
+*.log
+.DS_Store
+
+# Supabase CLI scratch
+supabase/.temp/
+supabase/.branches/
+
+# DealDash runtime caches (will move into source_state.payload eventually)
+.bin-cache.json
+.category-cache.json
+.dd-hours.json
+.dd-pl.json
+.dd-pl-samples.json
+.dd-seen.json
+.exchangeable-cache.json
+.market-prices.json
+.title-cache.json
+.bids-spent.json
+.dd.log
+.dd.log.*
+.notifications-debug.json
+.orders-debug.json
