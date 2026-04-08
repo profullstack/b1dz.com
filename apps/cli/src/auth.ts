@@ -16,7 +16,7 @@ import { createInterface } from 'node:readline/promises';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { createClient } from '@supabase/supabase-js';
+import { apiSignup, apiLogin, B1dzApiStorage } from '@b1dz/storage-b1dz-api';
 
 const CRED_PATH = join(homedir(), '.config', 'b1dz', 'credentials.json');
 
@@ -28,11 +28,39 @@ export interface StoredCredentials {
   savedAt: string;
 }
 
-function publicClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (!url || !key) throw new Error('Supabase env not set in .env');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+function apiBaseUrl(): string {
+  const url = process.env.B1DZ_API_URL;
+  if (!url) throw new Error('B1DZ_API_URL missing in .env');
+  return url;
+}
+
+/**
+ * Shared B1dzApiStorage factory with auto-persisting refresh.
+ *
+ * Returns a SINGLETON per process so multiple modules don't each maintain
+ * their own copy of the tokens (and end up loading stale ones from disk
+ * after a sibling has already refreshed). Every time the API tells us
+ * the access token expired, we refresh and write the new tokens back to
+ * `~/.config/b1dz/credentials.json` so the next CLI invocation also has them.
+ */
+let cachedApi: B1dzApiStorage | null = null;
+export function getApiClient(): B1dzApiStorage {
+  if (cachedApi) return cachedApi;
+  const c = loadCredentials();
+  if (!c) throw new Error('not signed in — run `b1dz signup` or `b1dz login`');
+  cachedApi = new B1dzApiStorage({
+    baseUrl: apiBaseUrl(),
+    tokens: { accessToken: c.accessToken, refreshToken: c.refreshToken },
+    onRefresh: (t) => {
+      const updated = { ...c, accessToken: t.accessToken, refreshToken: t.refreshToken, savedAt: new Date().toISOString() };
+      try {
+        mkdirSync(dirname(CRED_PATH), { recursive: true });
+        writeFileSync(CRED_PATH, JSON.stringify(updated, null, 2));
+        chmodSync(CRED_PATH, 0o600);
+      } catch {}
+    },
+  });
+  return cachedApi;
 }
 
 function saveCredentials(c: StoredCredentials) {
@@ -106,41 +134,39 @@ export async function promptPassword(label: string): Promise<string> {
 export async function signup() {
   const email = (await prompt('Email: ')).trim();
   const password = await promptPassword('Password: ');
-  const client = publicClient();
-  const { data, error } = await client.auth.signUp({ email, password });
-  if (error) { console.error('signup failed:', error.message); process.exit(1); }
-  if (!data.user || !data.session) {
-    console.error('signup succeeded but session missing — confirm your email and run `b1dz login`');
-    process.exit(0);
-  }
-  saveCredentials({
-    email,
-    userId: data.user.id,
-    accessToken: data.session.access_token,
-    refreshToken: data.session.refresh_token,
-    savedAt: new Date().toISOString(),
-  });
-  console.log(`✓ signed up as ${email}`);
-  console.log(`  user_id: ${data.user.id}`);
+  try {
+    const r = await apiSignup(apiBaseUrl(), email, password);
+    if (!r.session) {
+      console.log('Account created — confirm your email then run `b1dz login`');
+      process.exit(0);
+    }
+    saveCredentials({
+      email,
+      userId: r.user.id,
+      accessToken: r.session.access_token,
+      refreshToken: r.session.refresh_token,
+      savedAt: new Date().toISOString(),
+    });
+    console.log(`✓ signed up as ${email}`);
+    console.log(`  user_id: ${r.user.id}`);
+  } catch (e) { console.error('signup failed:', (e as Error).message); process.exit(1); }
 }
 
 export async function login() {
   const email = (await prompt('Email: ')).trim();
   const password = await promptPassword('Password: ');
-  const client = publicClient();
-  const { data, error } = await client.auth.signInWithPassword({ email, password });
-  if (error || !data.user || !data.session) {
-    console.error('login failed:', error?.message || 'no session');
-    process.exit(1);
-  }
-  saveCredentials({
-    email,
-    userId: data.user.id,
-    accessToken: data.session.access_token,
-    refreshToken: data.session.refresh_token,
-    savedAt: new Date().toISOString(),
-  });
-  console.log(`✓ logged in as ${email}`);
+  try {
+    const r = await apiLogin(apiBaseUrl(), email, password);
+    if (!r.session) { console.error('login returned no session'); process.exit(1); }
+    saveCredentials({
+      email,
+      userId: r.user.id,
+      accessToken: r.session.access_token,
+      refreshToken: r.session.refresh_token,
+      savedAt: new Date().toISOString(),
+    });
+    console.log(`✓ logged in as ${email}`);
+  } catch (e) { console.error('login failed:', (e as Error).message); process.exit(1); }
 }
 
 export function logout() {

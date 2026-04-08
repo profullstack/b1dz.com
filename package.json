@@ -1,6 +1,6 @@
 {
   "name": "b1dz",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.0.0",
@@ -15,10 +15,20 @@
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "dev:web": "pnpm --filter @b1dz/web dev",
-    "b1dz": "pnpm --filter @b1dz/cli dev --"
+    "dev:daemon": "pnpm --filter @b1dz/daemon dev",
+    "start": "pnpm --filter @b1dz/web start",
+    "daemon": "pnpm --filter @b1dz/daemon start",
+    "b1dz": "pnpm --filter @b1dz/cli dev --",
+    "version:patch": "node scripts/bump-version.mjs patch",
+    "version:minor": "node scripts/bump-version.mjs minor",
+    "version:major": "node scripts/bump-version.mjs major"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["puppeteer", "esbuild", "sharp"]
+    "onlyBuiltDependencies": [
+      "puppeteer",
+      "esbuild",
+      "sharp"
+    ]
   },
   "devDependencies": {
     "@eslint/js": "latest",

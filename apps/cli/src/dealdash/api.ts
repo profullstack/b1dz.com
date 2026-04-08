@@ -50,26 +50,12 @@ interface GonzalesResponse {
 }
 
 // PERSISTENT CACHES
-// Persisted caches: titles, categories, exchangeable flags, BIN prices.
-// All keyed by auction id. Reduces API/scrape pressure on restart.
-import { readFileSync as __r, writeFileSync as __w, existsSync as __e } from 'node:fs';
-const TITLE_FILE = '.title-cache.json';
-const CAT_FILE = '.category-cache.json';
-const BIN_FILE = '.bin-cache.json';
-const EXCH_FILE = '.exchangeable-cache.json';
-function loadMap<V>(path: string): Map<number, V> {
-  if (!__e(path)) return new Map();
-  try { return new Map(Object.entries(JSON.parse(__r(path, 'utf8'))).map(([k, v]) => [Number(k), v as V])); } catch { return new Map(); }
-}
-function saveMap<V>(path: string, m: Map<number, V>) {
-  try {
-    const obj: Record<string, V> = {};
-    for (const [k, v] of m) obj[k] = v;
-    __w(path, JSON.stringify(obj));
-  } catch {}
-}
-export const titleCache = loadMap<string>(TITLE_FILE);
-export const categoryCache = loadMap<string>(CAT_FILE);
+// All Maps below are kept in memory at runtime and persisted to Supabase
+// via the state-sync layer. No more local JSON files. Each Map is registered
+// at the bottom of this module so state-sync can hydrate/serialize it.
+import { registerMap, markDirty } from './state-sync.js';
+export const titleCache = new Map<number, string>();
+export const categoryCache = new Map<number, string>();
 const categoryInflight = new Set<number>();
 
 // Scrape categoryName out of the auction page HTML — staticData API doesn't
@@ -90,6 +76,44 @@ export async function fetchCategoryFromPage(id: number): Promise<void> {
   }
 }
 
+// Scrape the win-payment page to find the exchange offer for a won auction.
+// Returns the number of bids offered, or null if we can't find it. Stores
+// the result keyed by productId so future auctions for the same product
+// can predict their exchange rate without re-scraping.
+export async function fetchWinPaymentExchangeRate(auctionId: number): Promise<number | null> {
+  try {
+    const res = await fetch(`https://www.dealdash.com/auction/${auctionId}/win-payment`, { headers: HEADERS });
+    if (!res.ok) return null;
+    const html = await res.text();
+    // Try a few patterns — DealDash's exchange UI uses different copy in
+    // different contexts. We're looking for a number of bids near
+    // "exchange" / "exchanged for".
+    const patterns = [
+      /"exchangedFor"\s*:\s*(\d+)/i,
+      /"exchange[^"]*"\s*:\s*(\d+)/i,
+      /exchange[^<]{0,40}?(\d{2,5})\s*bids/i,
+      /(\d{2,5})\s*bids[^<]{0,40}?exchange/i,
+    ];
+    for (const re of patterns) {
+      const m = html.match(re);
+      if (m) {
+        const n = Number(m[1]);
+        if (n > 0 && n < 100_000) {
+          // Also stash by productId so future auctions for the same product
+          // can read the rate without re-scraping.
+          const pid = productIdCache.get(auctionId);
+          if (pid) exchangeRatesByProductId.set(pid, n);
+          markDirty();
+          return n;
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Scrape exchange info from the auction page HTML. The server-rendered page
 // embeds a `static` block with `exchangedAt` and `exchangedFor` fields when
 // the auction was won and exchanged for bids.
@@ -105,7 +129,12 @@ export interface AuctionPageInfo {
 }
 export const productIdCache = new Map<number, number>(); // auctionId → productId
 export const noReEntryCache = new Map<number, boolean>();
-export const exchangeableCache = loadMap<boolean>(EXCH_FILE);
+// productId → bids offered when exchanging a win for this product. Built up
+// over time by scraping /auction/{id}/win-payment after every win. Once a
+// productId is in here we know what we'd get for any future auction of the
+// same product without winning it again.
+export const exchangeRatesByProductId = new Map<number, number>();
+export const exchangeableCache = new Map<number, boolean>();
 
 // Extract the `dd.auctionFeed = {...};` JSON literal from a server-rendered
 // auction page by walking braces from the assignment.
@@ -194,19 +223,22 @@ export async function fetchCategoriesParallel(ids: number[], limit = 10): Promis
   const missing = ids.filter(id => !categoryCache.has(id) && !categoryInflight.has(id)).slice(0, limit);
   await Promise.all(missing.map(id => fetchCategoryFromPage(id)));
 }
-export const binCache = loadMap<number>(BIN_FILE); // buyItNowPrice (retail) per auction
+export const binCache = new Map<number, number>(); // buyItNowPrice (retail) per auction
 
-// Periodic flush to disk so caches survive restart.
-let cacheDirty = 0;
-export function markCacheDirty() { cacheDirty++; if (cacheDirty >= 10) flushCaches(); }
-export function flushCaches() {
-  cacheDirty = 0;
-  saveMap(TITLE_FILE, titleCache);
-  saveMap(CAT_FILE, categoryCache);
-  saveMap(BIN_FILE, binCache);
-  saveMap(EXCH_FILE, exchangeableCache);
-}
-process.on('exit', flushCaches);
+// State-sync compatibility shims — keep the old function names so call
+// sites don't change, but route to the new dirty-marker.
+export function markCacheDirty() { markDirty(); }
+export function flushCaches() { /* no-op — state-sync handles it */ }
+
+// Register every persistent Map with state-sync. The keys here become
+// `source_state.payload.caches.<key>` in Supabase.
+registerMap('titles', titleCache);
+registerMap('categories', categoryCache);
+registerMap('bin', binCache);
+registerMap('exchangeable', exchangeableCache);
+registerMap('productIds', productIdCache);
+registerMap('noReEntry', noReEntryCache);
+registerMap('exchangeRates', exchangeRatesByProductId);
 const alertedAuctions = new Set<number>();
 
 // Bid pack mode tunables (more aggressive than normal)
@@ -536,28 +568,12 @@ export async function cancelBidBuddy(auctionId: number): Promise<boolean> {
   }
 }
 
-// Track total bids spent per auction, persisted across restarts
+// Track total bids spent per auction. Persisted to Supabase via state-sync.
 const REBID_BATCH = 5;
 const REBID_CAP = 200;
-const SPENT_FILE = '.bids-spent.json';
-
-function loadSpent(): Map<number, number> {
-  if (!existsSync(SPENT_FILE)) return new Map();
-  try {
-    const obj = JSON.parse(readFileSync(SPENT_FILE, 'utf8')) as Record<string, number>;
-    return new Map(Object.entries(obj).map(([k, v]) => [Number(k), v]));
-  } catch {
-    return new Map();
-  }
-}
-
-function saveSpent(m: Map<number, number>) {
-  const obj: Record<string, number> = {};
-  for (const [k, v] of m) obj[k] = v;
-  try { writeFileSync(SPENT_FILE, JSON.stringify(obj, null, 2)); } catch {}
-}
-
-export const bidsSpent = loadSpent();
+export const bidsSpent = new Map<number, number>();
+function saveSpent(_m: Map<number, number>) { markDirty(); }
+registerMap('bidsSpent', bidsSpent);
 // Last seen "booked" count per auction, for delta tracking
 const prevBooked = new Map<number, number>();
 // Last seen leader per auction id, for win detection

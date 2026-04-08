@@ -1,0 +1,18 @@
+# Railway uses the Dockerfile at the root.
+# Deploy this repo as TWO services from the same image:
+#   1. Web service     — startCommand defaults from CMD (`pnpm start`)
+#   2. Daemon service  — override startCommand with: `pnpm daemon`
+#
+# Required env vars on BOTH services (set in the Railway dashboard):
+#   NEXT_PUBLIC_SUPABASE_URL
+#   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+#   SUPABASE_SECRET_KEY
+#   B1DZ_API_URL                  https://<your-railway-domain> (web service URL)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

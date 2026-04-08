@@ -5,7 +5,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
-const PUBLIC_PATHS = ['/login', '/signup', '/auth', '/api/auth', '/manifest.webmanifest', '/sw.js'];
+// API routes self-authenticate via Bearer header or cookie, so the
+// middleware doesn't gate them. /login + /signup are always public.
+const PUBLIC_PATHS = ['/login', '/signup', '/auth', '/api', '/manifest.webmanifest', '/sw.js'];
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });

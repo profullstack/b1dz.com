@@ -15,7 +15,7 @@
  * so RLS attribution stays correct when the dashboard reads.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { getApiClient } from '../auth.js';
 
 export interface DealDashCreds { phpsessid: string; rememberme: string; savedAt: string; }
 
@@ -40,39 +40,17 @@ export function buildCookieHeader(c: DealDashCreds): string {
   return `PHPSESSID=${c.phpsessid}; REMEMBERME=${c.rememberme}`;
 }
 
-function adminClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY;
-  if (!url || !key) throw new Error('Supabase admin env not set in .env');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+const makeApi = getApiClient;
+
+export async function loadDealDashCreds(_userId: string): Promise<DealDashCreds | null> {
+  const api = makeApi();
+  const payload = await api.get<{ credentials?: DealDashCreds }>('source-state', 'dealdash');
+  return payload?.credentials ?? null;
 }
 
-export async function loadDealDashCreds(userId: string): Promise<DealDashCreds | null> {
-  const client = adminClient();
-  const { data, error } = await client
-    .from('source_state')
-    .select('payload')
-    .eq('user_id', userId)
-    .eq('source_id', 'dealdash')
-    .maybeSingle();
-  if (error || !data) return null;
-  const creds = (data.payload as { credentials?: DealDashCreds })?.credentials;
-  return creds ?? null;
-}
-
-export async function saveDealDashCreds(userId: string, creds: DealDashCreds): Promise<void> {
-  const client = adminClient();
-  // Read existing payload so we don't clobber other source_state fields
-  const { data: existing } = await client
-    .from('source_state')
-    .select('payload')
-    .eq('user_id', userId)
-    .eq('source_id', 'dealdash')
-    .maybeSingle();
-  const payload = { ...(existing?.payload ?? {}), credentials: creds };
-  const { error } = await client.from('source_state').upsert(
-    { user_id: userId, source_id: 'dealdash', payload, updated_at: new Date().toISOString() },
-    { onConflict: 'user_id,source_id' },
-  );
-  if (error) throw error;
+export async function saveDealDashCreds(_userId: string, creds: DealDashCreds): Promise<void> {
+  const api = makeApi();
+  const existing = (await api.get<Record<string, unknown>>('source-state', 'dealdash')) ?? {};
+  const payload = { ...existing, credentials: creds, sourceId: 'dealdash' };
+  await api.put('source-state', 'dealdash', payload);
 }

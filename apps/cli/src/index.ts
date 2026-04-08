@@ -22,13 +22,16 @@ import { loadRootEnv, Runner, AlertBus, type Source, type Storage } from '@b1dz/
 loadRootEnv();
 import { JsonStorage } from '@b1dz/storage-json';
 import { SupabaseStorage } from '@b1dz/storage-supabase';
+import { B1dzApiStorage } from '@b1dz/storage-b1dz-api';
 import { createClient } from '@supabase/supabase-js';
+import { loadCredentials, getApiClient } from './auth.js';
 import { dealDashSource } from '@b1dz/source-dealdash';
 import { cryptoArbSource } from '@b1dz/source-crypto-arb';
 import { cryptoTradeSource } from '@b1dz/source-crypto-trade';
 import { signup, login, logout, whoami, currentUser, promptPassword } from './auth.js';
 import { parseDealDashCookie, saveDealDashCreds, loadDealDashCreds, buildCookieHeader } from './dealdash/credentials.js';
 import { autoLoginDealDash } from './dealdash/auto-login.js';
+import { hydrateAll as hydrateDealDashState, startBackgroundFlush as startDealDashStateFlush } from './dealdash/state-sync.js';
 import { createInterface } from 'node:readline/promises';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -43,14 +46,20 @@ const SOURCE_REGISTRY: Record<string, Source[]> = {
 };
 
 function makeStorage(): Storage {
-  // STORAGE=json forces the local file backend; default is Supabase if creds
-  // are present, otherwise fall back to JSON so dev still works offline.
+  // STORAGE=json forces local files (offline dev).
+  // STORAGE=supabase uses the direct Supabase adapter (legacy / local trusted host).
+  // Default = b1dz API adapter — talks to b1dz.com (or B1DZ_API_URL) with the
+  // signed-in user's bearer token. RLS enforced. No secret key needed.
   if (process.env.STORAGE === 'json') return new JsonStorage(dataDir);
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  // Server-side runner uses the secret key so it can write through RLS.
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (url && key) return new SupabaseStorage({ url, key, userId: process.env.B1DZ_USER_ID });
-  console.warn('Supabase env not set — falling back to JsonStorage in', dataDir);
+  if (process.env.STORAGE === 'supabase') {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+    if (url && key) return new SupabaseStorage({ url, key, userId: process.env.B1DZ_USER_ID });
+  }
+  if (process.env.B1DZ_API_URL && loadCredentials()) {
+    return getApiClient();
+  }
+  console.warn('No b1dz API URL or credentials — falling back to JsonStorage in', dataDir);
   return new JsonStorage(dataDir);
 }
 
@@ -134,16 +143,20 @@ async function runDealDashTui() {
 }
 
 /** Pull DealDash creds from the DB and inject into env so the vendored
- *  api.ts (which reads process.env.DEALDASH_COOKIE) keeps working unchanged. */
+ *  api.ts (which reads process.env.DEALDASH_COOKIE) keeps working unchanged.
+ *  Also hydrate every persistent cache from `source_state.payload.caches` and
+ *  start the background flush timer. */
 async function ensureDealDashCookie() {
   const userId = process.env.B1DZ_USER_ID;
   if (!userId) return;
   const creds = await loadDealDashCreds(userId);
   if (!creds) {
-    console.error('No DealDash session saved — run `b1dz dealdash connect` first.');
+    console.error('No DealDash session saved — run `b1dz dealdash login` (auto) or `b1dz dealdash connect` (paste).');
     process.exit(1);
   }
   process.env.DEALDASH_COOKIE = buildCookieHeader(creds);
+  // The TUI module hydrates its caches from Supabase on its own startup
+  // (using B1DZ_USER_ID, which requireAuth() already set in env).
 }
 
 /** Interactive automated login — uses browserless + capsolver to log in

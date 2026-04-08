@@ -1,9 +1,11 @@
 {
   "name": "@b1dz/cli",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "bin": { "b1dz": "./bin/b1dz" },
+  "bin": {
+    "b1dz": "./bin/b1dz"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "postinstall": "pnpm exec puppeteer browsers install chrome",
@@ -19,6 +21,8 @@
     "@b1dz/source-dealdash": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
+    "@b1dz/storage-b1dz-api": "workspace:*",
+    "@b1dz/sdk": "workspace:*",
     "@supabase/supabase-js": "latest",
     "@ink-tools/ink-mouse": "latest",
     "chalk": "latest",

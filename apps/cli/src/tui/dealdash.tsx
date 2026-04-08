@@ -46,41 +46,25 @@ const {
   getMyLiveAuctions, getAllLiveAuctions, getAuctionData, getBiddingHistory,
   getMyWins, getCostPerBid, getStoreBidPrice, fetchTitlesParallel, fetchCategoriesParallel, fetchAuctionPageInfo, exchangeWinForBids, fetchNotifications,
   bookBid, cancelBidBuddy, getBidders, toDisplay, isPack, packSizeFromTitle,
-  refreshLifetimeIfStale, getLifetimeStats, bidsSpent, binCache, titleCache, categoryCache, exchangeableCache, productIdCache, noReEntryCache, USERNAME, AUTO_BID,
+  refreshLifetimeIfStale, getLifetimeStats, bidsSpent, binCache, titleCache, categoryCache, exchangeableCache, productIdCache, noReEntryCache, exchangeRatesByProductId, USERNAME, AUTO_BID,
 } = dd;
 
 const POLL_MS = 5000;
 const VALUESERP_KEY = process.env.VALUESERP_API_KEY || '';
 
-// Cache market prices by title to avoid burning ValueSERP queries.
-// Persisted to disk so cache survives restarts.
-import { readFileSync as _read, writeFileSync as _write, existsSync as _exists } from 'node:fs';
-const MARKET_FILE = '.market-prices.json';
-const marketCache: Record<string, { min: number; median: number; mean?: number; count: number }> =
-  _exists(MARKET_FILE) ? JSON.parse(_read(MARKET_FILE, 'utf8')) : {};
-function saveMarket() {
-  try { _write(MARKET_FILE, JSON.stringify(marketCache, null, 2)); } catch {}
-}
+// Cache market prices by title (ValueSERP results). Persisted to Supabase
+// via state-sync — same per-user source_state.payload row as the others.
+import { registerRecord, registerMap, registerObject, markDirty } from '../dealdash/state-sync.js';
+const marketCache: Record<string, { min: number; median: number; mean?: number; count: number }> = {};
+function saveMarket() { markDirty(); }
 const marketInflight = new Set<string>();
+registerRecord('marketPrices', marketCache);
 
-// Background tracker: every auction we've ever seen in the live feed, with last
-// observed bid count + price + BIN. When an id disappears it's considered ended.
+// Background tracker: every auction we've ever seen in the live feed.
 interface SeenAuction { id: number; title: string; bids: number; price: number; bin: number; firstSeen: number; lastSeen: number; ended: boolean; }
-const SEEN_FILE = '.dd-seen.json';
-const seenAuctions: Map<number, SeenAuction> = (() => {
-  if (!_exists(SEEN_FILE)) return new Map();
-  try {
-    const raw = JSON.parse(_read(SEEN_FILE, 'utf8')) as Record<string, SeenAuction>;
-    return new Map(Object.entries(raw).map(([k, v]) => [Number(k), v]));
-  } catch { return new Map(); }
-})();
-function saveSeen() {
-  try {
-    const obj: Record<string, SeenAuction> = {};
-    for (const [k, v] of seenAuctions) obj[k] = v;
-    _write(SEEN_FILE, JSON.stringify(obj, null, 2));
-  } catch {}
-}
+const seenAuctions: Map<number, SeenAuction> = new Map();
+function saveSeen() { markDirty(); }
+registerMap('seenAuctions', seenAuctions);
 // Mirror of the current tick's locked title set so non-React helpers
 // (profitability, MyAuctionsView) can read it.
 let lockedTitlesGlobal = new Set<string>();
@@ -89,6 +73,24 @@ let lockedTitlesGlobal = new Set<string>();
 // is exchangeable for bids — useful for grinding bid balance without taking
 // physical delivery. Toggled with 'e'.
 let exchangeableOnly = process.env.EXCHANGEABLE_ONLY === '1';
+
+// Low-balance focus mode hysteresis: once we trip below LOW_BALANCE_ENTER
+// we stay in focus mode until balance climbs back above LOW_BALANCE_EXIT.
+// Without this gap, cancelling fights frees bids → balance rises → focus
+// turns off → we open new fights → balance drops → flap.
+let inLowBalanceMode = false;
+// Manual override: force survival/acquire mode regardless of bid balance.
+// Toggle with `l`. Same behavior as auto-trip below 1000, but stays on
+// until the user explicitly turns it off.
+let lifeSavingMode = process.env.LIFE_SAVING_MODE === '1';
+// While in low-balance mode, only refill BidBuddy on this single auction.
+// Set by the focus pass each tick; null when we're not focusing.
+let focusKeepId: number | null = null;
+// Same-product duplicates we should NOT bid on (DealDash's 30-day rebid
+// lockout means winning one of them blocks all the others). Updated each
+// tick by the waiting builder. Used by the AuctionRow renderer to dim
+// these and prefix them with [DUP].
+const duplicateAuctionIds = new Set<number>();
 // Snipe mode: only enter NEW auctions in their final window (timer about to
 // expire, no war in progress yet). Avoids long bidding fights entirely.
 let snipeMode = process.env.SNIPE_MODE === '1';
@@ -149,12 +151,17 @@ function cleanTitle(title: string): string {
 }
 
 async function fetchMarketPrice(title: string): Promise<void> {
-  if (!VALUESERP_KEY || !title || marketCache[title] || marketInflight.has(title)) return;
+  if (!VALUESERP_KEY) { console.log(`market: VALUESERP_API_KEY missing — "calc..." will never resolve`); return; }
+  if (!title || marketCache[title] || marketInflight.has(title)) return;
   marketInflight.add(title);
   try {
     const cleaned = cleanTitle(title);
     const url = `https://api.valueserp.com/search?api_key=${VALUESERP_KEY}&search_type=shopping&q=${encodeURIComponent(cleaned.slice(0, 100))}&gl=us`;
     const res = await fetch(url);
+    if (!res.ok) {
+      console.log(`market: ${res.status} ${res.statusText} for "${cleaned.slice(0, 50)}"`);
+      return;
+    }
     const data = await res.json() as { shopping_results?: { price_parsed?: { value?: number } }[] };
     const prices = (data.shopping_results || [])
       .map(r => r.price_parsed?.value)
@@ -163,8 +170,6 @@ async function fetchMarketPrice(title: string): Promise<void> {
     if (prices.length) {
       const min = prices[0];
       const median = prices[Math.floor(prices.length / 2)];
-      // Trimmed mean: drop bottom and top 20% to ignore garbage listings
-      // (knockoffs, accessories, "lot of 1 part" results, etc.)
       const trim = Math.floor(prices.length * 0.2);
       const middle = prices.length > 4 ? prices.slice(trim, prices.length - trim) : prices;
       const mean = middle.reduce((s, n) => s + n, 0) / middle.length;
@@ -174,8 +179,8 @@ async function fetchMarketPrice(title: string): Promise<void> {
       marketCache[title] = { min: 0, median: 0, mean: 0, count: 0 };
       saveMarket();
     }
-  } catch {
-    // leave uncached so we retry later
+  } catch (e) {
+    console.log(`market: error for "${title.slice(0, 50)}": ${(e as Error).message}`);
   } finally {
     marketInflight.delete(title);
   }
@@ -277,16 +282,84 @@ async function tick(): Promise<State> {
   const joinable = joinDetails.slice(0, 30).map(d => toDisplay(d, info));
 
   const visible = allDisplay.filter(d => d.bidsBooked > 0 || d.bidders <= 2);
-  const waiting = allDisplay
-    .filter(d => {
-      const placed = (bidsSpent.get(d.id) || 0) > 0;
-      const inHist = (myDetails.find(x => x.auctionId === d.id)?.history || []).some(h => h[2] === USERNAME);
-      // Exclude underwater items — we won't rejoin them, no point showing
-      const status = profitability(d, costPerBid, storeBidPrice);
-      if (status === 'loss') return false;
-      return (placed || inHist) && d.bidsBooked === 0 && d.bidders === 3 && d.totalBids > 2;
-    })
-    .sort((a, b) => b.bidsSpent - a.bidsSpent);
+  // Waiting tab: show every auction we've sunk bids into where our queue is
+  // currently empty. Includes auctions DealDash no longer lists under "my
+  // auctions" because we cancelled BidBuddy — those still live in
+  // `allDetails` (the global live feed) and we use `bidsSpent` as the
+  // ground-truth of "we have a stake in this".
+  const waitingMap = new Map<number, DisplayAuction>();
+  // First pass: my own live auctions. Show ALL of them, including ones
+  // currently classified as 'loss' — the user wants visibility on every
+  // stake, the rejoin sort puts the best ones first anyway.
+  for (const d of allDisplay) {
+    const placed = (bidsSpent.get(d.id) || 0) > 0;
+    const inHist = (myDetails.find(x => x.auctionId === d.id)?.history || []).some(h => h[2] === USERNAME);
+    if (!(placed || inHist)) continue;
+    if (d.bidsBooked > 0) continue;
+    waitingMap.set(d.id, d);
+  }
+  // Second pass: anything we've spent bids on that's still live in the
+  // global feed, even if DealDash no longer lists it under our auctions
+  for (const det of allDetails) {
+    const id = det.auctionId;
+    if (waitingMap.has(id)) continue;
+    if ((bidsSpent.get(id) || 0) <= 0) continue;
+    const display = toDisplay(det, info);
+    if (display.bidsBooked > 0) continue;
+    waitingMap.set(id, display);
+  }
+  // Sort by "next to jump back in" — same scoring as the auto-bid focus
+  // mode: packs always beat non-packs, then within each group highest
+  // (profit per bidder) wins.
+  function rejoinScore(d: DisplayAuction): { pack: boolean; score: number } {
+    const spent$ = d.bidsSpent * costPerBid + Number(d.ddPrice || 0);
+    const pack = isPack(d.id);
+    // sqrt penalty for bidder count — a 5-way is ~1.6x harder than a 2-way,
+    // not 2.5x. Big upside still wins.
+    const competition = Math.sqrt(Math.max(1, d.bidders));
+    if (pack) {
+      const sz = packSizeFromTitle(d.title) || 1;
+      const effPerBid = spent$ / sz;
+      // Total marginal upside in dollars (not per-bid) so a 9682 pack at
+      // $0.003/b ranks above a 700 pack at $0.001/b — pack size matters.
+      const totalUpside = (storeBidPrice - effPerBid) * sz;
+      return { pack: true, score: totalUpside / competition };
+    }
+    const v = getResaleValue(d, storeBidPrice);
+    const projected = v ? v.value - spent$ : 0;
+    return { pack: false, score: projected / competition };
+  }
+  // Mark same-product duplicates: among any group of waiting auctions with
+  // the same productId, the one with the most bidsSpent is the "winner"
+  // (sunk cost preservation), all others get flagged as duplicates so the
+  // UI can render them as "Skipped/dup" without actually hiding them.
+  duplicateAuctionIds.clear();
+  {
+    const byPid = new Map<number, { id: number; spent: number }>();
+    for (const d of waitingMap.values()) {
+      const pid = productIdCache.get(d.id);
+      if (!pid) continue;
+      const prev = byPid.get(pid);
+      if (!prev || d.bidsSpent > prev.spent) byPid.set(pid, { id: d.id, spent: d.bidsSpent });
+    }
+    for (const d of waitingMap.values()) {
+      const pid = productIdCache.get(d.id);
+      if (!pid) continue;
+      const winner = byPid.get(pid);
+      if (winner && winner.id !== d.id) duplicateAuctionIds.add(d.id);
+    }
+  }
+
+  const waiting = [...waitingMap.values()].sort((a, b) => {
+    // Duplicates always go to the bottom — they're informational only
+    const da = duplicateAuctionIds.has(a.id);
+    const db = duplicateAuctionIds.has(b.id);
+    if (da !== db) return da ? 1 : -1;
+    const sa = rejoinScore(a);
+    const sb = rejoinScore(b);
+    if (sa.pack !== sb.pack) return sa.pack ? -1 : 1;
+    return sb.score - sa.score;
+  });
 
   // Cancel any booked bids whose projected profit is under $100. We can't do
   // this strictly once at startup because market prices arrive async — first
@@ -312,30 +385,108 @@ async function tick(): Promise<State> {
 
   // AUTO-BID logic (mirrors dealdash.ts)
   if (AUTO_BID) {
-    // LOW BALANCE FOCUS MODE: when our reserve drops under 200 bids, stop
-    // spreading thin across multiple fights. Pick the single auction with
-    // the biggest projected gain AND the fewest opponents, then cancel
-    // BidBuddy on every other auction we're in.
-    // Score = projected_profit / bidders  (more profit, fewer competitors = better)
-    const LOW_BALANCE_THRESHOLD = 500;
-    if (bidBalance < LOW_BALANCE_THRESHOLD) {
-      const committed = allDisplay.filter(d => d.bidsBooked > 0);
-      if (committed.length > 1) {
-        const scored = committed.map(d => {
-          const v = getResaleValue(d, storeBidPrice);
-          const spent$ = d.bidsSpent * costPerBid + Number(d.ddPrice || 0);
-          const projected = v ? v.value - spent$ : 0;
-          // Penalize crowded fights heavily — divide by bidders count
-          const score = projected / Math.max(1, d.bidders);
-          return { d, projected, score };
-        }).sort((a, b) => b.score - a.score);
-        const keep = scored[0].d;
-        console.log(`🪫 LOW BALANCE (${bidBalance}<${LOW_BALANCE_THRESHOLD}): focusing on ${keep.id} (${keep.bidders}-way, projected $${scored[0].projected.toFixed(2)}); cancelling ${committed.length - 1} others`);
-        for (const { d } of scored.slice(1)) {
+    // LOW BALANCE → ACQUIRE-BIDS + FOCUS MODE
+    // Hysteresis: enter at ENTER threshold, only exit at EXIT threshold.
+    // Without the gap, cancelling frees bids → balance rises → mode flips
+    // off → we open new fights → balance drops → flap.
+    const LOW_BALANCE_ENTER = 1000;
+    const LOW_BALANCE_EXIT  = 1500;
+    if (!inLowBalanceMode && bidBalance <= LOW_BALANCE_ENTER) {
+      inLowBalanceMode = true;
+      console.log(`🪫 LOW BALANCE ENTERED (${bidBalance} ≤ ${LOW_BALANCE_ENTER}): acquire+focus mode ON`);
+    } else if (inLowBalanceMode && bidBalance >= LOW_BALANCE_EXIT) {
+      inLowBalanceMode = false;
+      console.log(`🔋 LOW BALANCE EXITED (${bidBalance} ≥ ${LOW_BALANCE_EXIT}): normal mode resumed`);
+    }
+    const lowBalance = inLowBalanceMode || lifeSavingMode;
+    const acquireMode = exchangeableOnly || lowBalance;
+    if (acquireMode) {
+      // Pass 1: drop any committed fight that won't refill our bid pool
+      for (const d of allDisplay) {
+        if (d.bidsBooked <= 0) continue;
+        if (isPack(d.id)) continue; // packs DO acquire bids — keep them
+        if (exchangeableCache.get(d.id) === true) continue; // exchangeables can be flipped — keep them
+        if (exchangeableCache.get(d.id) === undefined) continue; // unknown — leave alone (cache will fill)
+        await cancelBidBuddy(d.id);
+        recordExit(d.id, `acquire mode: not a pack/exchangeable (balance=${bidBalance})`);
+      }
+    }
+
+    // LOW BALANCE FOCUS: when we're low, we can't afford to defend multiple
+    // fronts. Pick the single best surviving committed auction (highest
+    // projected_profit / bidders) and cancel BidBuddy on all the others —
+    // even if they're all packs/exchangeables. One fight at a time.
+    // The "keep" id is also stashed in `focusKeepId` so the rebook path
+    // below knows to skip every other auction this tick.
+    if (lowBalance) {
+      // Anything we have a stake in — already-spent bids count even if the
+      // current queue is 0 (we just got drained on the last tick).
+      const stakeRaw = allDisplay.filter(d => d.bidsBooked > 0 || d.bidsSpent > 0);
+      // Deduplicate by productId: DealDash locks you out of the same product
+      // for 30 days after a win, so spreading across identical auctions is
+      // pointless. Keep the one we've already sunk the most bids into.
+      const byProduct = new Map<number, DisplayAuction>();
+      const standalone: DisplayAuction[] = [];
+      for (const d of stakeRaw) {
+        const pid = productIdCache.get(d.id);
+        if (!pid) { standalone.push(d); continue; }
+        const prev = byProduct.get(pid);
+        if (!prev || d.bidsSpent > prev.bidsSpent) byProduct.set(pid, d);
+      }
+      // The losers of the dedup get cancelled — no sense maintaining a queue
+      // on auctions for products we're already chasing on a richer auction.
+      for (const d of stakeRaw) {
+        const pid = productIdCache.get(d.id);
+        if (!pid) continue;
+        const winner = byProduct.get(pid);
+        if (winner && winner.id !== d.id && d.bidsBooked > 0) {
           await cancelBidBuddy(d.id);
-          recordExit(d.id, `low balance ${bidBalance}<${LOW_BALANCE_THRESHOLD}: focusing on ${keep.id}`);
+          recordExit(d.id, `dup-product: ${winner.id} has more sunk cost`);
         }
       }
+      const committed = [...standalone, ...byProduct.values()];
+      if (committed.length >= 1) {
+        const scored = committed.map(d => {
+          const spent$ = d.bidsSpent * costPerBid + Number(d.ddPrice || 0);
+          const pack = isPack(d.id);
+          let projected: number;
+          let score: number;
+          if (pack) {
+            const packSize = packSizeFromTitle(d.title) || 1;
+            const effPerBid = spent$ / packSize;
+            score = (storeBidPrice - effPerBid) / Math.max(1, d.bidders);
+            projected = (storeBidPrice - effPerBid) * packSize;
+          } else {
+            const v = getResaleValue(d, storeBidPrice);
+            projected = v ? v.value - spent$ : 0;
+            score = projected / Math.max(1, d.bidders);
+          }
+          return { d, projected, score, pack };
+        }).sort((a, b) => {
+          // In acquire mode, packs always win over non-packs (a pack
+          // refills our bid pool, a non-pack only sells for cash). Within
+          // each group we sort by score.
+          if (a.pack !== b.pack) return a.pack ? -1 : 1;
+          return b.score - a.score;
+        });
+        const keep = scored[0].d;
+        focusKeepId = keep.id;
+        if (scored.length > 1) {
+          console.log(`🪫 FOCUS (balance=${bidBalance}): keeping ${keep.id} (${keep.bidders}-way, ${scored[0].pack ? 'pack' : 'item'}, projected $${scored[0].projected.toFixed(2)})`);
+          for (const { d } of scored.slice(1)) {
+            // Skip ones already drained — cancelling an empty queue spams
+            // DealDash with "no bids left" notifications.
+            if (d.bidsBooked > 0) {
+              await cancelBidBuddy(d.id);
+              recordExit(d.id, `low-balance focus: keeping only ${keep.id} (balance=${bidBalance})`);
+            }
+          }
+        }
+      } else {
+        focusKeepId = null;
+      }
+    } else {
+      focusKeepId = null;
     }
 
     // Build per-product pick map: among auctions for the same productId,
@@ -406,7 +557,20 @@ async function tick(): Promise<State> {
         // No re-entry: if we cancel BidBuddy we can't rejoin, so only enter
         // these in snipe mode where we're going for the kill anyway.
         if (noReEntryCache.get(d.id) === true && !snipeMode) continue;
-        if (exchangeableOnly && !isPack(d.id) && exchangeableCache.get(d.id) !== true) continue;
+        if (lowBalance) {
+          // Survival mode: only enter bid packs, and only when there are
+          // exactly 2 bidders (us + one other). Anything else is too risky
+          // when our reserve is this low.
+          if (!isPack(d.id)) continue;
+          if (d.bidders !== 2) continue;
+        } else if (acquireMode) {
+          // Manual ExchangeOnly above 1k balance: packs always, plus
+          // exchangeables ONLY if we already know their bid exchange rate.
+          const isExch = exchangeableCache.get(d.id) === true;
+          const pidLow = productIdCache.get(d.id);
+          const knownRate = pidLow ? exchangeRatesByProductId.get(pidLow) : undefined;
+          if (!isPack(d.id) && !(isExch && knownRate != null)) continue;
+        }
         // Bid balance floor — protect reserve when opening new fronts
         const entryCount = d.bidders === 2 ? 2 : 1;
         if (bidBalance - entryCount < BID_BALANCE_FLOOR) continue;
@@ -445,6 +609,11 @@ async function tick(): Promise<State> {
         }
         continue;
       }
+      // Low-balance focus: in this mode the focus pass picks ONE auction
+      // to defend. Skip every other auction's rebook so cancelled queues
+      // can't be re-filled within the same tick.
+      if (lowBalance && focusKeepId !== null && d.id !== focusKeepId) continue;
+
       // Top up if we're in the auction and our queue is shallow — don't
       // require an opponent to be currently bidding (they may have paused
       // for a tick, and if our queue hits 0 in that gap we lose).
@@ -538,7 +707,7 @@ async function tick(): Promise<State> {
       // Skip known losers in the joinable list too
       if (profitability(d, costPerBid, storeBidPrice) === 'loss') continue;
       if (noReEntryCache.get(d.id) === true && !snipeMode) continue;
-      if (exchangeableOnly && !isPack(d.id) && exchangeableCache.get(d.id) !== true) continue;
+      if (acquireMode && !isPack(d.id) && exchangeableCache.get(d.id) !== true) continue;
       const ji = info.get(d.id);
       const wname = (ji?.w || '').toLowerCase();
       if (SKIP_BIDDERS.has(wname)) continue;
@@ -718,6 +887,12 @@ async function tick(): Promise<State> {
       seenWinForHour.add(w.id);
       bumpHour('wins');
       addAlert('good', `🏆 WON ${w.id} — ${w.title}${w.exchanged ? ` (exchanged for ${w.exchangedBids} bids)` : ''}`);
+      // Fire-and-forget: scrape the win-payment page to learn the bid
+      // exchange rate for this product, so future identical-product
+      // auctions can be priced without re-winning.
+      void dd.fetchWinPaymentExchangeRate(w.id).then((bids) => {
+        if (bids != null) console.log(`exchange rate learned: auction ${w.id} = ${bids} bids`);
+      });
     }
   }
   for (const l of history.filter(h => h.status === 'Sold' || h.status === 'Lost')) {
@@ -938,14 +1113,10 @@ const DAILY_STOP_LOSS = Number(process.env.DAILY_STOP_LOSS || '-50');
 let stopLossTripped = false;
 
 // Daily P/L: snapshot bids spent + value gained at session start, compute
-// delta each tick. Persisted so multiple restarts in a day stay consistent.
-const PL_FILE = '.dd-pl.json';
+// delta each tick. Persisted to Supabase via state-sync.
 interface DailyPL { date: string; startingBids: number; spentBids: number; gainedValue: number; }
 function todayKey(): string { return new Date().toISOString().slice(0, 10); }
-function loadPL(): DailyPL | null {
-  try { return JSON.parse(_read(PL_FILE, 'utf8')); } catch { return null; }
-}
-function savePL(p: DailyPL) { try { _write(PL_FILE, JSON.stringify(p)); } catch {} }
+function savePL(_p: DailyPL) { markDirty(); }
 // #7 Loss postmortem: record why we exited each auction so the Lost tab can
 // explain what went wrong. Keyed by auctionId.
 const exitReason = new Map<number, string>();
@@ -954,17 +1125,15 @@ function recordExit(id: number, reason: string) {
   console.log(`exit ${id}: ${reason}`);
 }
 
-// #1 Time-of-day stats: per-hour wins/losses, persisted
-const HOUR_FILE = '.dd-hours.json';
+// #1 Time-of-day stats: per-hour wins/losses, persisted to Supabase via state-sync
 interface HourStats { wins: number; losses: number; }
-const hourStats: Record<number, HourStats> = (() => {
-  try { return JSON.parse(_read(HOUR_FILE, 'utf8')); } catch { return {}; }
-})();
+const hourStats: Record<number, HourStats> = {};
+registerRecord('hourStats', hourStats);
 function bumpHour(field: 'wins' | 'losses') {
   const h = new Date().getHours();
   if (!hourStats[h]) hourStats[h] = { wins: 0, losses: 0 };
   hourStats[h][field]++;
-  try { _write(HOUR_FILE, JSON.stringify(hourStats)); } catch {}
+  markDirty();
 }
 const seenWinForHour = new Set<number>();
 const seenLossForHour = new Set<number>();
@@ -987,28 +1156,21 @@ function getVelocity(): { spentPerMin: number; earnedPerMin: number } {
 let lastBalanceForVelocity = 0;
 let lastExchangedTotalForVelocity = 0;
 
-let dailyPL: DailyPL = (() => {
-  const stored = loadPL();
-  if (stored && stored.date === todayKey()) return stored;
-  return { date: todayKey(), startingBids: 0, spentBids: 0, gainedValue: 0 };
-})();
+let dailyPL: DailyPL = { date: todayKey(), startingBids: 0, spentBids: 0, gainedValue: 0 };
+registerObject<DailyPL>('dailyPL', () => dailyPL, (v) => { if (v && v.date === todayKey()) dailyPL = v; });
 
 // Rolling P/L samples — one per tick. Used to compute net change over the
-// last hour / day / week / month. Persisted so rates survive restarts.
-const SAMPLES_FILE = '.dd-pl-samples.json';
+// last 1m/5m/15m/30m/1h/1d/1w/1mo/1y windows. Persisted via state-sync.
 interface PLSample { at: number; net: number; }
-const plSamples: PLSample[] = (() => {
-  try { return JSON.parse(_read(SAMPLES_FILE, 'utf8')); } catch { return []; }
-})();
+const plSamples: PLSample[] = [];
+registerObject<PLSample[]>('plSamples', () => plSamples, (v) => { if (Array.isArray(v)) plSamples.push(...v); });
 function pushSample(net: number) {
   plSamples.push({ at: Date.now(), net });
   // Trim to 30 days × 1 sample per minute = 43200 max
   const cutoff = Date.now() - 30 * 86_400_000;
   while (plSamples.length && plSamples[0].at < cutoff) plSamples.shift();
-  // Throttle disk writes — every 12 samples (~1 minute at 5s tick)
-  if (plSamples.length % 12 === 0) {
-    try { _write(SAMPLES_FILE, JSON.stringify(plSamples)); } catch {}
-  }
+  // Mark dirty every 12 samples (~1 minute at 5s tick) so state-sync flushes it
+  if (plSamples.length % 12 === 0) markDirty();
 }
 /** Net change over the last `windowMs`. Returns null if we don't have a
  *  baseline old enough yet. */
@@ -1025,7 +1187,7 @@ function Header({ s }: { s: State }) {
   const lowBalance = s.bidBalance < 5;
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold color="cyan">🎯 DealDash Auction Monitor 🎯  {s.loading ? '(loading...)' : s.ts}  AutoBid: <Text color={AUTO_BID ? 'green' : 'gray'}>{AUTO_BID ? 'ON' : 'OFF'}</Text>  ExchangeOnly: <Text color={exchangeableOnly ? 'yellow' : 'gray'}>{exchangeableOnly ? 'ON' : 'OFF'}</Text>  Snipe: <Text color={snipeMode ? 'yellow' : 'gray'}>{snipeMode ? 'ON' : 'OFF'}</Text></Text>
+      <Text bold color="cyan">🎯 DealDash Auction Monitor 🎯  {s.loading ? '(loading...)' : s.ts}  AutoBid: <Text color={AUTO_BID ? 'green' : 'gray'}>{AUTO_BID ? 'ON' : 'OFF'}</Text>  ExchangeOnly: <Text color={exchangeableOnly ? 'yellow' : 'gray'}>{exchangeableOnly ? 'ON' : 'OFF'}</Text>  Snipe: <Text color={snipeMode ? 'yellow' : 'gray'}>{snipeMode ? 'ON' : 'OFF'}</Text>  LifeSaving: <Text color={lifeSavingMode ? 'red' : 'gray'} bold={lifeSavingMode}>{lifeSavingMode ? 'ON' : 'OFF'}</Text></Text>
       <Text>
         💰 Balance: <Text bold color={lowBalance ? 'red' : 'cyan'}>{s.bidBalance}</Text> bids
         {'  |  '}📌 Booked: <Text bold color="green">{s.totalBooked}</Text> across {s.myAuctionsCount} auctions
@@ -1109,10 +1271,27 @@ function AuctionRow({ a, showSpent, costPerBid, storeBidPrice, selected, catWidt
   const packPerBidColor: 'green' | 'yellow' | 'red' | 'gray' =
     !pack ? 'gray' : packPerBid <= 0.03 ? 'green' : packPerBid <= 0.05 ? 'yellow' : 'red';
   const packPerBidText = pack ? (packSize > 0 ? `$${packPerBid.toFixed(3)}/b` : 'no size') : '';
+  // For exchangeable non-pack items, show the bid exchange offer if we've
+  // learned it from a previous win of the same product. Falls back to the
+  // resale-profit display when we haven't seen this product yet.
+  const pid = productIdCache.get(a.id);
+  const exchRate = pid ? exchangeRatesByProductId.get(pid) : undefined;
+  const isExchangeable = exchangeableCache.get(a.id) === true;
+  const showExchangeRate = !pack && isExchangeable && exchRate != null;
+  const exchPerBid = showExchangeRate && exchRate ? spent$ / exchRate : 0;
+  const exchPerBidColor: 'green' | 'yellow' | 'red' =
+    exchPerBid <= 0.03 ? 'green' : exchPerBid <= 0.05 ? 'yellow' : 'red';
+
   const profitText = pack
     ? packPerBidText
-    : (!resale && !noResults ? 'calc...' : noResults ? 'no match' : (profit > 0 ? `+$${profit.toFixed(2)}` : `-$${Math.abs(profit).toFixed(2)}`));
-  const profitCellColor = pack ? packPerBidColor : profitColor;
+    : showExchangeRate
+      ? `${exchRate}b @ $${exchPerBid.toFixed(3)}/b`
+      : (!resale && !noResults ? 'calc...' : noResults ? 'no match' : (profit > 0 ? `+$${profit.toFixed(2)}` : `-$${Math.abs(profit).toFixed(2)}`));
+  const profitCellColor = pack
+    ? packPerBidColor
+    : showExchangeRate
+      ? exchPerBidColor
+      : profitColor;
   const pad = (s: string | number, n: number) => String(s).padEnd(n).slice(0, n);
   return (
     <Box>
@@ -1131,7 +1310,15 @@ function AuctionRow({ a, showSpent, costPerBid, storeBidPrice, selected, catWidt
       <Text color="gray" backgroundColor={bg}>{pad(categoryCache.get(a.id) || '', catWidth)}</Text>
       <Text>   </Text>
       {isLocked(a.title) && <Text color="yellow" backgroundColor={bg} bold>[LOCKED] </Text>}
-      <Text backgroundColor={bg}>{pad(a.title || '(loading...)', 60)}</Text>
+      {duplicateAuctionIds.has(a.id) && <Text color="gray" backgroundColor={bg} bold dimColor>[DUP] </Text>}
+      {(() => {
+        // Title column is 60 chars total. Subtract whatever the badges
+        // consumed so the URL column stays aligned.
+        const lockedW = isLocked(a.title) ? '[LOCKED] '.length : 0;
+        const dupW    = duplicateAuctionIds.has(a.id) ? '[DUP] '.length : 0;
+        const titleW  = 60 - lockedW - dupW;
+        return <Text backgroundColor={bg}>{pad(a.title || '(loading...)', titleW)}</Text>;
+      })()}
       <Text>   </Text>
       <Text color="blue">https://www.dealdash.com/auction/{a.id}</Text>
     </Box>
@@ -1173,10 +1360,12 @@ function isArtCategory(id: number): boolean {
 }
 
 interface RatesShape { m1: number | null; m5: number | null; m15: number | null; m30: number | null; h1: number | null; d1: number | null; w1: number | null; mo1: number | null; y1: number | null }
-function MyAuctionsView({ items, allItems, costPerBid, storeBidPrice, selectedId, dailyNet, velocity, rates, tightness, alerts }: { items: DisplayAuction[]; allItems?: DisplayAuction[]; costPerBid: number; storeBidPrice: number; selectedId?: number | null; dailyNet?: number; velocity?: { spentPerMin: number; earnedPerMin: number }; rates?: RatesShape; tightness?: number; alerts?: Alert[] }) {
+function MyAuctionsView({ items, allItems, costPerBid, storeBidPrice, selectedId, dailyNet, velocity, rates, tightness, alerts, presorted }: { items: DisplayAuction[]; allItems?: DisplayAuction[]; costPerBid: number; storeBidPrice: number; selectedId?: number | null; dailyNet?: number; velocity?: { spentPerMin: number; earnedPerMin: number }; rates?: RatesShape; tightness?: number; alerts?: Alert[]; presorted?: boolean }) {
   // Skip art unless it's exchangeable (then we can flip it for bids)
   const filtered = items.filter(a => !isArtCategory(a.id) || exchangeableCache.get(a.id) === true);
-  const sorted = [...filtered].sort((a, b) => a.bidders - b.bidders);
+  // If the upstream already sorted these (e.g. Waiting tab uses rejoin score)
+  // don't clobber it by re-sorting here.
+  const sorted = presorted ? filtered : [...filtered].sort((a, b) => a.bidders - b.bidders);
   if (!sorted.length) return <Text color="gray">No auctions to show.</Text>;
 
   // Aggregate totals across the FULL list (all pages), not just the current page
@@ -1527,7 +1716,11 @@ function App() {
   const listsByTab: Partial<Record<Tab, DisplayAuction[]>> = {
     My: state.myDisplay, '1v1': oneVone, Profit: profit, Loss: loss, Waiting: state.waiting, Joinable: state.joinable,
   };
-  const fullList = (listsByTab[tab] ? [...listsByTab[tab]!].filter(a => !isArtCategory(a.id) || exchangeableCache.get(a.id) === true).sort((a, b) => a.bidders - b.bidders) : []);
+  // Waiting tab is already sorted by rejoin score in the tick — preserve
+  // that order. Everything else gets a default by-bidders sort.
+  const _src = listsByTab[tab] ? [...listsByTab[tab]!].filter(a => !isArtCategory(a.id) || exchangeableCache.get(a.id) === true) : [];
+  const fullList = tab === 'Waiting' ? _src : _src.sort((a, b) => a.bidders - b.bidders);
+  const presorted = tab === 'Waiting';
   const WON_LOST_PAGE_SIZE_PRE = 10;
   const wonPagesPre = Math.max(1, Math.ceil(state.wins.length / WON_LOST_PAGE_SIZE_PRE));
   const lostPagesPre = Math.max(1, Math.ceil(state.lost.length / WON_LOST_PAGE_SIZE_PRE));
@@ -1555,7 +1748,22 @@ function App() {
       return;
     }
     if (key.ctrl && input === 'c') { exit(); return; }
-    if (input === 'q') { exit(); return; }
+    if (input === 'q') {
+      // Final flush of pending state, then hard exit so the background
+      // setInterval timer can't keep the event loop alive.
+      void (async () => {
+        try {
+          const sync = await import('../dealdash/state-sync.js');
+          sync.stopBackgroundFlush();
+          const userId = process.env.B1DZ_USER_ID;
+          if (userId) await sync.flushAll(userId, 'dealdash');
+        } catch {}
+        exit();
+        // Belt + suspenders — give Ink ~50ms to unmount, then force-exit.
+        setTimeout(() => process.exit(0), 50);
+      })();
+      return;
+    }
     if (input === 'e') {
       exchangeableOnly = !exchangeableOnly;
       console.log(`exchangeable-only mode: ${exchangeableOnly ? 'ON' : 'OFF'}`);
@@ -1564,6 +1772,11 @@ function App() {
     if (input === 's') {
       snipeMode = !snipeMode;
       console.log(`snipe mode: ${snipeMode ? 'ON' : 'OFF'}`);
+      return;
+    }
+    if (input === 'l') {
+      lifeSavingMode = !lifeSavingMode;
+      console.log(`life-saving mode: ${lifeSavingMode ? 'ON' : 'OFF'}`);
       return;
     }
     if (tab === 'Lookup' && input === 'i') { setLookupFocused(true); return; }
@@ -1609,16 +1822,28 @@ function App() {
       {tab === '1v1' && <MyAuctionsView items={currentList} allItems={fullList} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} selectedId={selectedId} dailyNet={state.dailyNet} velocity={state.velocity} rates={state.rates} tightness={state.tightness} alerts={state.alerts} />}
       {tab === 'Profit' && <MyAuctionsView items={currentList} allItems={fullList} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} selectedId={selectedId} dailyNet={state.dailyNet} velocity={state.velocity} rates={state.rates} tightness={state.tightness} alerts={state.alerts} />}
       {tab === 'Loss' && <MyAuctionsView items={currentList} allItems={fullList} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} selectedId={selectedId} dailyNet={state.dailyNet} velocity={state.velocity} rates={state.rates} tightness={state.tightness} alerts={state.alerts} />}
-      {tab === 'Waiting' && <MyAuctionsView items={currentList} allItems={fullList} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} selectedId={selectedId} dailyNet={state.dailyNet} velocity={state.velocity} rates={state.rates} tightness={state.tightness} alerts={state.alerts} />}
+      {tab === 'Waiting' && <MyAuctionsView items={currentList} allItems={fullList} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} selectedId={selectedId} dailyNet={state.dailyNet} velocity={state.velocity} rates={state.rates} tightness={state.tightness} alerts={state.alerts} presorted />}
       {tab === 'Joinable' && <MyAuctionsView items={currentList} allItems={fullList} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} selectedId={selectedId} dailyNet={state.dailyNet} velocity={state.velocity} rates={state.rates} tightness={state.tightness} alerts={state.alerts} />}
       {tab === 'Won' && <WonView wins={pageOfWins} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} />}
       {tab === 'Lost' && <LostView lost={pageOfLost} allLost={state.lost} costPerBid={state.costPerBid} />}
       <Box marginTop={1}><Text color="gray">page {safePage + 1}/{tab === 'Won' ? wonPages : tab === 'Lost' ? lostPages : totalPages}  ([ ] or PgUp/PgDn)</Text></Box>
       {tab === 'Lookup' && <LookupView costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} focused={lookupFocused} setFocused={setLookupFocused} />}
       {tab === 'Logs' && <LogsView />}
-      <Box marginTop={1}><Text color="gray">q quit  |  ←/→ or 1-9 tabs  |  ↑/↓ (j/k) row  |  [ ] or PgUp/PgDn page  |  x cancel BidBuddy  |  e ExchangeOnly  |  s Snipe</Text></Box>
+      <Box marginTop={1}><Text color="gray">q quit  |  ←/→ or 1-9 tabs  |  ↑/↓ (j/k) row  |  [ ] or PgUp/PgDn page  |  x cancel BidBuddy  |  e ExchangeOnly  |  s Snipe  |  l LifeSaving</Text></Box>
     </Box>
   );
+}
+
+// Hydrate every persisted cache from Supabase BEFORE the first tick fires,
+// then start the background flush. By this point both api.ts and this file
+// have run all their registerCache() calls, so the registry is complete.
+{
+  const { hydrateAll, startBackgroundFlush } = await import('../dealdash/state-sync.js');
+  const userId = process.env.B1DZ_USER_ID;
+  if (userId) {
+    try { await hydrateAll(userId, 'dealdash'); } catch (e) { console.error(`hydrate failed: ${(e as Error).message}`); }
+    startBackgroundFlush(userId, 'dealdash', 30_000);
+  }
 }
 
 render(

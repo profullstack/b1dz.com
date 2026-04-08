@@ -1,0 +1,28 @@
+[Unit]
+Description=b1dz daemon — multi-source profit monitor
+Documentation=https://github.com/profullstack/b1dz.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust these for your install location and user
+User=%i
+WorkingDirectory=/home/%i/src/b1dz.com
+EnvironmentFile=/home/%i/src/b1dz.com/.env
+ExecStart=/home/%i/src/b1dz.com/apps/daemon/bin/b1dzd
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=b1dzd
+
+# Lock down a bit (loosen if you need more access)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/%i/.cache/b1dz /home/%i/.config/b1dz
+
+[Install]
+WantedBy=default.target
