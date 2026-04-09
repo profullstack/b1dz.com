@@ -1,28 +1,20 @@
 /**
- * DealDash source — placeholder.
+ * @b1dz/source-dealdash
  *
- * Migration plan: lift functions from ~/src/dealdash/dealdash.ts and the
- * tick() loop from ~/src/dealdash/dealdash-ink.tsx into this package.
- *
- *   - poll()      → fetch live auctions + my auctions + history + wins
- *   - evaluate()  → compute Opportunity from each auction (existing profit math)
- *   - act()       → bookBid / cancelBidBuddy / exchangeWinForBids
- *
- * The TUI in apps/cli will then become a thin renderer over the same
- * Source<DealDashAuction> instance, so behavior stays identical.
+ * Phase 3f status: strategy + polling + orchestrator + decision engine +
+ * daemon worker projection all lifted. The vendored TUI is now DUPLICATED
+ * — the daemon runs the same decisions via a different code path. Next
+ * phase deletes the TUI copy.
  */
 
 import type { Source } from '@b1dz/core';
+export * from './types.js';
+export * from './strategy/index.js';
+export * from './api/index.js';
+export * from './poll.js';
+export * from './project.js';
 
-export interface DealDashAuction {
-  id: number;
-  title: string;
-  bidders: number;
-  ddPrice: number;
-  bidsBooked: number;
-  bidsSpent: number;
-  totalBids: number;
-}
+import type { DealDashAuction } from './types.js';
 
 export const dealDashSource: Source<DealDashAuction> = {
   id: 'dealdash',
