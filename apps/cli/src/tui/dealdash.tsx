@@ -686,7 +686,7 @@ async function tick(): Promise<State> {
   };
 }
 
-const TABS = ['My', '1v1', 'Profit', 'Loss', 'Waiting', 'Joinable', 'Won', 'Lost', 'Lookup', 'Logs'] as const;
+const TABS = ['My', '1v1', 'Profit', 'Loss', 'Waiting', 'Joinable', 'Won', 'Lost', 'Arb', 'Trade', 'Lookup', 'Logs'] as const;
 
 const MIN_PROFIT = Number(process.env.MIN_PROFIT || '20');
 
@@ -1302,6 +1302,52 @@ function LookupView({ costPerBid, storeBidPrice, focused, setFocused }: { costPe
   );
 }
 
+function CryptoArbView() {
+  return (
+    <Box flexDirection="column">
+      <Text bold color="cyan">Cross-Exchange Arbitrage (Gemini / Kraken / Binance.US)</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Box>
+          <Box width={10}><Text bold>Pair</Text></Box>
+          <Box width={12}><Text bold>Buy @</Text></Box>
+          <Box width={12}><Text bold>Sell @</Text></Box>
+          <Box width={12}><Text bold>Spread</Text></Box>
+          <Box width={12}><Text bold>Net $/u</Text></Box>
+          <Box width={15}><Text bold>Buy Exch</Text></Box>
+          <Box width={15}><Text bold>Sell Exch</Text></Box>
+          <Text bold>Status</Text>
+        </Box>
+        <Text color="gray">No live data yet — feeds are stubbed. Implement @b1dz/source-crypto-arb feeds to activate.</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text color="gray">Pairs: BTC-USD, ETH-USD, SOL-USD  ·  Poll: 1s  ·  Taker fees: Gemini 0.40%, Kraken 0.26%, Binance.US 0.10%</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function CryptoTradeView() {
+  return (
+    <Box flexDirection="column">
+      <Text bold color="cyan">Day Trading (single-exchange strategies)</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Box>
+          <Box width={10}><Text bold>Pair</Text></Box>
+          <Box width={10}><Text bold>Side</Text></Box>
+          <Box width={12}><Text bold>Price</Text></Box>
+          <Box width={12}><Text bold>Strength</Text></Box>
+          <Box width={20}><Text bold>Strategy</Text></Box>
+          <Text bold>Reason</Text>
+        </Box>
+        <Text color="gray">No signals yet — momentum strategy is stubbed. Implement feed clients to activate.</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text color="gray">Strategy: momentum (3 rising ticks)  ·  Exchange: Gemini  ·  Poll: 5s</Text>
+      </Box>
+    </Box>
+  );
+}
+
 function LogsView() {
   const recent = logBuffer.slice(-30);
   if (!recent.length) return <Text color="gray">No log entries yet.</Text>;
@@ -1488,6 +1534,8 @@ function App() {
     Joinable: state.joinable.length,
     Won: state.wins.length,
     Lost: state.lost.length,
+    Arb: 0,
+    Trade: 0,
     Lookup: 0,
     Logs: logBuffer.length,
   };
@@ -1505,6 +1553,8 @@ function App() {
       {tab === 'Won' && <WonView wins={pageOfWins} costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} />}
       {tab === 'Lost' && <LostView lost={pageOfLost} allLost={state.lost} costPerBid={state.costPerBid} />}
       <Box marginTop={1}><Text color="gray">page {safePage + 1}/{tab === 'Won' ? wonPages : tab === 'Lost' ? lostPages : totalPages}  ([ ] or PgUp/PgDn)</Text></Box>
+      {tab === 'Arb' && <CryptoArbView />}
+      {tab === 'Trade' && <CryptoTradeView />}
       {tab === 'Lookup' && <LookupView costPerBid={state.costPerBid} storeBidPrice={state.storeBidPrice} focused={lookupFocused} setFocused={setLookupFocused} />}
       {tab === 'Logs' && <LogsView />}
       <Box marginTop={1}><Text color="gray">q quit  |  ←/→ or 1-9 tabs  |  ↑/↓ (j/k) row  |  [ ] or PgUp/PgDn page  |  x cancel BidBuddy  |  e ExchangeOnly  |  s Snipe  |  l LifeSaving</Text></Box>
