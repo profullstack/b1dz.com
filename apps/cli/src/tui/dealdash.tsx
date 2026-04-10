@@ -39,6 +39,18 @@ import { render, Box, Text, useInput, useApp, useStdin } from 'ink';
 import { MouseProvider, useOnClick, useMouse, useOnPress } from '@ink-tools/ink-mouse';
 import TextInput from 'ink-text-input';
 import type { DisplayAuction, AuctionInfo } from '../dealdash/api.js';
+import {
+  initBridge, pollTick, decideTick,
+  getModeState, setLifeSavingMode, setExchangeableOnly, setStopLoss, setLockedProductIds,
+  getFocusKeepId,
+  type PollTickResult, type DecideTickResult,
+} from './tui-bridge.js';
+import {
+  isPack as isPack_typed,
+  type DealDashAuction,
+  type MarketEntry as MarketEntry_typed,
+  DEFAULT_STRATEGY,
+} from '@b1dz/source-dealdash';
 
 // Dynamic import — ensures DEALDASH_NO_MAIN is set before api.ts executes
 const dd = await import('../dealdash/api.js');
@@ -240,34 +252,41 @@ const empty: State = {
 };
 
 async function tick(): Promise<State> {
-  const [myIds, allIds, history, wins, costPerBid, storeBidPrice] = await Promise.all([
-    getMyLiveAuctions(), getAllLiveAuctions(), getBiddingHistory(), getMyWins(), getCostPerBid(), getStoreBidPrice(),
-  ]);
-  await refreshLifetimeIfStale();
-  const { details: allDetails, info, bidBalance } = await getAuctionData([...new Set([...myIds, ...allIds])]);
+  // --- Phase 3g: data-gathering via typed pollOnce + toDisplayAuctions ---
+  const { poll: _poll, auctions: _typedAuctions } = await pollTick();
 
+  // Hydrate vendored caches from pollOnce result so downstream UI code
+  // (waiting tab, market lookup, seen-auctions tracker, etc.) still works.
+  for (const [k, v] of Object.entries(_poll.caches.titles)) titleCache.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.categories)) categoryCache.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.bidsSpent)) bidsSpent.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.bin)) binCache.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.exchangeable)) exchangeableCache.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.productIds)) productIdCache.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.noReEntry)) noReEntryCache.set(Number(k), v);
+  for (const [k, v] of Object.entries(_poll.caches.exchangeRates)) exchangeRatesByProductId.set(Number(k), v);
+
+  // Alias pollOnce outputs to match the variable names downstream code expects
+  const myIds = _poll.myIds;
+  const allIds = _poll.allIds;
+  const history = _poll.history;
+  const wins = _poll.wins as { id: number; title: string; price: number; status: string; timestamp: number; exchanged: boolean; exchangedBids: number; orderId: string | null }[];
+  const bidBalance = _poll.bidBalance;
+  const allDetails = _poll.details;
+  const info = _poll.info;
+  const costPerBid = DEFAULT_STRATEGY.costPerBid;
+  const storeBidPrice = DEFAULT_STRATEGY.storeBidPrice;
+
+  // Keep vendored bidsSpent map in sync (authoritative from history)
   for (const h of history) {
     bidsSpent.set(h.auctionId, h.bidsPlaced);
   }
 
+  // Refresh lifetime stats (TUI-specific, not in pollOnce)
+  await refreshLifetimeIfStale();
+
+  // Build allDisplay from vendored toDisplay for backward compat with UI components
   const myDetails = allDetails.filter(d => myIds.includes(d.auctionId));
-  // Fetch metadata for my live auctions AND my wins so titles + categories
-  // populate everywhere they're shown.
-  await fetchTitlesParallel([...myDetails.map(d => d.auctionId), ...wins.map(w => w.id)]);
-  // Categories aren't in the staticData API — scrape them from each auction's
-  // server-rendered HTML page (rate-limited fire-and-forget).
-  // Page info (incl. exchangeable flag) for everything we might bid on
-  Promise.all(
-    [...new Set([...myDetails.map(d => d.auctionId), ...allDetails.slice(0, 30).map(d => d.auctionId)])]
-      .filter(id => !exchangeableCache.has(id))
-      .slice(0, 10)
-      .map(id => fetchAuctionPageInfo(id))
-  );
-  fetchCategoriesParallel([
-    ...myDetails.map(d => d.auctionId),
-    ...wins.map(w => w.id),
-    ...history.filter(h => h.status === 'Sold').map(h => h.auctionId),
-  ], 10);
   const allDisplay = myDetails.map(d => toDisplay(d, info));
 
   // Fire off ValueSERP lookups for any titles we haven't priced yet (rate-limited to 5 per tick)
@@ -361,368 +380,27 @@ async function tick(): Promise<State> {
     return sb.score - sa.score;
   });
 
-  // Cancel any booked bids whose projected profit is under $100. We can't do
-  // this strictly once at startup because market prices arrive async — first
-  // tick has an empty marketCache. Running every tick is safe: cancelling an
-  // already-cancelled BidBuddy is a noop, and we only act once we actually
-  // know the resale value.
-  const STARTUP_MIN_PROFIT = 100;
-  const startupCancelled = new Set<number>();
-  for (const d of allDisplay) {
-    if (d.bidsBooked <= 0) continue;
-    if (isPack(d.id)) continue; // bid packs are exempt from the $100 floor
-    if (startupCancelled.has(d.id)) continue;
-    const v = getResaleValue(d, storeBidPrice);
-    if (!v) continue; // unknown value — leave it alone until market data lands
-    const spent = d.bidsSpent * costPerBid + Number(d.ddPrice || 0);
-    const projected = v.value - spent;
-    if (projected < STARTUP_MIN_PROFIT) {
-      startupCancelled.add(d.id);
-      await cancelBidBuddy(d.id);
-      console.log(`profit-floor cancel ${d.id}: projected $${projected.toFixed(2)} < $${STARTUP_MIN_PROFIT} — ${d.title}`);
-    }
-  }
+  // --- Phase 3g: strategy + execution via typed decide() ---
+  // Sync TUI toggle state → bridge mode state so decide() sees the latest
+  setLifeSavingMode(lifeSavingMode);
+  setExchangeableOnly(exchangeableOnly);
+  setStopLoss(stopLossTripped);
 
-  // AUTO-BID logic (mirrors dealdash.ts)
   if (AUTO_BID) {
-    // LOW BALANCE → ACQUIRE-BIDS + FOCUS MODE
-    // Hysteresis: enter at ENTER threshold, only exit at EXIT threshold.
-    // Without the gap, cancelling frees bids → balance rises → mode flips
-    // off → we open new fights → balance drops → flap.
-    const LOW_BALANCE_ENTER = 1000;
-    const LOW_BALANCE_EXIT  = 1500;
-    if (!inLowBalanceMode && bidBalance <= LOW_BALANCE_ENTER) {
-      inLowBalanceMode = true;
-      console.log(`🪫 LOW BALANCE ENTERED (${bidBalance} ≤ ${LOW_BALANCE_ENTER}): acquire+focus mode ON`);
-    } else if (inLowBalanceMode && bidBalance >= LOW_BALANCE_EXIT) {
-      inLowBalanceMode = false;
-      console.log(`🔋 LOW BALANCE EXITED (${bidBalance} ≥ ${LOW_BALANCE_EXIT}): normal mode resumed`);
-    }
-    const lowBalance = inLowBalanceMode || lifeSavingMode;
-    const acquireMode = exchangeableOnly || lowBalance;
-    if (acquireMode) {
-      // Pass 1: drop any committed fight that won't refill our bid pool
-      for (const d of allDisplay) {
-        if (d.bidsBooked <= 0) continue;
-        if (isPack(d.id)) continue; // packs DO acquire bids — keep them
-        if (exchangeableCache.get(d.id) === true) continue; // exchangeables can be flipped — keep them
-        if (exchangeableCache.get(d.id) === undefined) continue; // unknown — leave alone (cache will fill)
-        await cancelBidBuddy(d.id);
-        recordExit(d.id, `acquire mode: not a pack/exchangeable (balance=${bidBalance})`);
-      }
-    }
+    // Build the full typed auction list (my + joinable) for decide()
+    const allTyped = _typedAuctions;
+    const { result: decisionResult, executed: _execCount } = await decideTick(_poll, allTyped);
 
-    // LOW BALANCE FOCUS: when we're low, we can't afford to defend multiple
-    // fronts. Pick the single best surviving committed auction (highest
-    // projected_profit / bidders) and cancel BidBuddy on all the others —
-    // even if they're all packs/exchangeables. One fight at a time.
-    // The "keep" id is also stashed in `focusKeepId` so the rebook path
-    // below knows to skip every other auction this tick.
-    if (lowBalance) {
-      // Anything we have a stake in — already-spent bids count even if the
-      // current queue is 0 (we just got drained on the last tick).
-      const stakeRaw = allDisplay.filter(d => d.bidsBooked > 0 || d.bidsSpent > 0);
-      // Deduplicate by productId: DealDash locks you out of the same product
-      // for 30 days after a win, so spreading across identical auctions is
-      // pointless. Keep the one we've already sunk the most bids into.
-      const byProduct = new Map<number, DisplayAuction>();
-      const standalone: DisplayAuction[] = [];
-      for (const d of stakeRaw) {
-        const pid = productIdCache.get(d.id);
-        if (!pid) { standalone.push(d); continue; }
-        const prev = byProduct.get(pid);
-        if (!prev || d.bidsSpent > prev.bidsSpent) byProduct.set(pid, d);
-      }
-      // The losers of the dedup get cancelled — no sense maintaining a queue
-      // on auctions for products we're already chasing on a richer auction.
-      for (const d of stakeRaw) {
-        const pid = productIdCache.get(d.id);
-        if (!pid) continue;
-        const winner = byProduct.get(pid);
-        if (winner && winner.id !== d.id && d.bidsBooked > 0) {
-          await cancelBidBuddy(d.id);
-          recordExit(d.id, `dup-product: ${winner.id} has more sunk cost`);
-        }
-      }
-      const committed = [...standalone, ...byProduct.values()];
-      if (committed.length >= 1) {
-        const scored = committed.map(d => {
-          const spent$ = d.bidsSpent * costPerBid + Number(d.ddPrice || 0);
-          const pack = isPack(d.id);
-          let projected: number;
-          let score: number;
-          if (pack) {
-            const packSize = packSizeFromTitle(d.title) || 1;
-            const effPerBid = spent$ / packSize;
-            score = (storeBidPrice - effPerBid) / Math.max(1, d.bidders);
-            projected = (storeBidPrice - effPerBid) * packSize;
-          } else {
-            const v = getResaleValue(d, storeBidPrice);
-            projected = v ? v.value - spent$ : 0;
-            score = projected / Math.max(1, d.bidders);
-          }
-          return { d, projected, score, pack };
-        }).sort((a, b) => {
-          // In acquire mode, packs always win over non-packs (a pack
-          // refills our bid pool, a non-pack only sells for cash). Within
-          // each group we sort by score.
-          if (a.pack !== b.pack) return a.pack ? -1 : 1;
-          return b.score - a.score;
-        });
-        const keep = scored[0].d;
-        focusKeepId = keep.id;
-        if (scored.length > 1) {
-          console.log(`🪫 FOCUS (balance=${bidBalance}): keeping ${keep.id} (${keep.bidders}-way, ${scored[0].pack ? 'pack' : 'item'}, projected $${scored[0].projected.toFixed(2)})`);
-          for (const { d } of scored.slice(1)) {
-            // Skip ones already drained — cancelling an empty queue spams
-            // DealDash with "no bids left" notifications.
-            if (d.bidsBooked > 0) {
-              await cancelBidBuddy(d.id);
-              recordExit(d.id, `low-balance focus: keeping only ${keep.id} (balance=${bidBalance})`);
-            }
-          }
-        }
-      } else {
-        focusKeepId = null;
-      }
-    } else {
-      focusKeepId = null;
-    }
+    // Propagate focus + duplicates back to the TUI globals for rendering
+    focusKeepId = decisionResult.focusKeepId;
+    duplicateAuctionIds.clear();
+    for (const id of decisionResult.duplicates) duplicateAuctionIds.add(id);
+    inLowBalanceMode = decisionResult.nextMode.balance.inLow;
 
-    // Build per-product pick map: among auctions for the same productId,
-    // pick the one with the lowest total bids placed (`x`) — that's the
-    // cheapest target with the least competition.
-    // Force-exit any committed non-pack auction whose projected profit has
-    // dropped below the rebook floor. Sunk cost is real, but if marginal
-    // upside is below the floor we'd rather free the bids for better targets.
-    for (const d of allDisplay) {
-      if (d.bidsBooked <= 0) continue;
-      if (isPack(d.id)) continue;
-      const v = getResaleValue(d, storeBidPrice);
-      if (!v) continue;
-      const spent$ = d.bidsSpent * costPerBid + Number(d.ddPrice || 0);
-      const projected = v.value - spent$;
-      const floor = rebookFloor();
-      if (projected < floor) {
-        await cancelBidBuddy(d.id);
-        recordExit(d.id, `force-exit: projected $${projected.toFixed(2)} < $${floor}`);
-      }
-    }
-
-    // Count auctions we're already actively in (have a booked queue OR
-    // have placed bids and the auction is still live + still profitable)
-    const activeCount = allDisplay.filter(d => {
-      const ai = info.get(d.id);
-      const lifetimePlaced = bidsSpent.get(d.id) || 0;
-      return d.bidsBooked > 0 || (ai?.me ?? 0) > 0 || lifetimePlaced > 0;
-    }).length;
-    const concurrencyCapHit = activeCount >= MAX_CONCURRENT;
-    if (concurrencyCapHit) console.log(`concurrency cap: ${activeCount}/${MAX_CONCURRENT} active, blocking new entries`);
-
-    productPick = new Map<number, number>();
-    const byProduct = new Map<number, { id: number; x: number }[]>();
-    for (const d of allDisplay) {
-      const pid = productIdCache.get(d.id);
-      if (!pid) continue;
-      const x = info.get(d.id)?.x || 0;
-      if (!byProduct.has(pid)) byProduct.set(pid, []);
-      byProduct.get(pid)!.push({ id: d.id, x });
-    }
-    for (const [pid, list] of byProduct) {
-      list.sort((a, b) => a.x - b.x);
-      productPick.set(pid, list[0].id);
-    }
-    for (const d of allDisplay) {
-      const auctionInfo = info.get(d.id);
-      const lifetimePlaced = bidsSpent.get(d.id) || 0;
-      const inRecentHistory = (allDetails.find(x => x.auctionId === d.id)?.history || []).some(h => h[2] === USERNAME);
-      const iAmIn = d.bidsBooked > 0 || (auctionInfo?.me ?? 0) > 0 || lifetimePlaced > 0 || inRecentHistory;
-
-      // Profitability gate: cancel any booked queue on losers, never book new bids on them
-      const status = profitability(d, costPerBid, storeBidPrice);
-      if (status === 'loss') {
-        if (d.bidsBooked > 0) {
-          await cancelBidBuddy(d.id);
-          recordExit(d.id, `auto-cancel: profitability=loss (bidders=${d.bidders})`);
-        }
-        continue;
-      }
-
-      // No sunk-cost guard — when too many bidders join, always bail to avoid burning bids in a war.
-
-      // Initial entry only if we've never touched this auction (and not a known loser)
-      if (!iAmIn && d.bidders <= 2 && d.bidsBooked === 0 && bidBalance >= 1) {
-        if (stopLossTripped) continue;
-        if (concurrencyCapHit) continue;
-        // No re-entry: if we cancel BidBuddy we can't rejoin, so only enter
-        // these in snipe mode where we're going for the kill anyway.
-        if (noReEntryCache.get(d.id) === true && !snipeMode) continue;
-        if (lowBalance) {
-          // Survival mode: only enter bid packs, and only when there are
-          // exactly 2 bidders (us + one other). Anything else is too risky
-          // when our reserve is this low.
-          if (!isPack(d.id)) continue;
-          if (d.bidders !== 2) continue;
-        } else if (acquireMode) {
-          // Manual ExchangeOnly above 1k balance: packs always, plus
-          // exchangeables ONLY if we already know their bid exchange rate.
-          const isExch = exchangeableCache.get(d.id) === true;
-          const pidLow = productIdCache.get(d.id);
-          const knownRate = pidLow ? exchangeRatesByProductId.get(pidLow) : undefined;
-          if (!isPack(d.id) && !(isExch && knownRate != null)) continue;
-        }
-        // Bid balance floor — protect reserve when opening new fronts
-        const entryCount = d.bidders === 2 ? 2 : 1;
-        if (bidBalance - entryCount < BID_BALANCE_FLOOR) continue;
-        // Bidder skip list — bail if a known whale is the current winner
-        const wname = (auctionInfo?.w || '').toLowerCase();
-        if (SKIP_BIDDERS.has(wname)) { console.log(`skip ${d.id}: blocked bidder ${wname}`); continue; }
-        // Product cooldown — among parallel same-product auctions, only
-        // bid on the cheapest one this tick.
-        const pid = productIdCache.get(d.id);
-        if (pid && productPick.get(pid) !== d.id) {
-          console.log(`skip ${d.id}: product ${pid} cheaper on ${productPick.get(pid)}`);
-          continue;
-        }
-        // Snipe mode: only enter when the timer is about to expire AND new
-        // bidders are still allowed (otherwise we couldn't get in anyway).
-        if (snipeMode) {
-          const t = auctionInfo?.t ?? 9999;
-          const closed = auctionInfo?.noNewBidders === true;
-          if (closed || t <= 0 || t > SNIPE_MAX_T) continue;
-          console.log(`snipe entry ${d.id}: t=${t}s, bidders=${d.bidders}`);
-        }
-        await bookBid(d.id, entryCount);
-        continue;
-      }
-
-      const pack = isPack(d.id);
-      const cancelAt = pack ? PACK_CANCEL_THRESHOLD : 3;
-      const batch = pack ? PACK_REBID_BATCH : REBID_BATCH;
-      const packSize = pack ? packSizeFromTitle(d.title) : 0;
-      const cap = pack ? Math.max(PACK_REBID_CAP, Math.floor(packSize * 0.7)) : REBID_CAP;
-
-      if (iAmIn && d.othersBidding >= cancelAt) {
-        if (d.bidsBooked > 0) {
-          await cancelBidBuddy(d.id);
-          recordExit(d.id, `too many bidders (${d.othersBidding + 1})`);
-        }
-        continue;
-      }
-      // Low-balance focus: in this mode the focus pass picks ONE auction
-      // to defend. Skip every other auction's rebook so cancelled queues
-      // can't be re-filled within the same tick.
-      if (lowBalance && focusKeepId !== null && d.id !== focusKeepId) continue;
-
-      // Top up if we're in the auction and our queue is shallow — don't
-      // require an opponent to be currently bidding (they may have paused
-      // for a tick, and if our queue hits 0 in that gap we lose).
-      if (iAmIn && d.othersBidding < cancelAt && d.bidsBooked <= 4) {
-        const spent = bidsSpent.get(d.id) || 0;
-
-        // Bid-pack sanity check: if our effective $/bid acquired through
-        // this pack exceeds the store rate, we'd be better off just buying
-        // bids directly. Cancel and bail.
-        if (pack && packSize > 0) {
-          const totalCost = spent * costPerBid + Number(d.ddPrice || 0);
-          const effPerBid = totalCost / packSize;
-          const MAX_PACK_PER_BID = 0.05;
-          if (effPerBid > MAX_PACK_PER_BID) {
-            await cancelBidBuddy(d.id);
-            recordExit(d.id, `pack overpriced: $${effPerBid.toFixed(4)}/bid > $${MAX_PACK_PER_BID}/bid`);
-            continue;
-          }
-        }
-
-        // 1v1 fight: no fixed bid cap. Keep firing as long as projected
-        // profit is still ≥ $100 — losing here means burning all sunk bids,
-        // so we go until the math turns against us.
-        const oneVsOne = d.othersBidding === 1 && !pack;
-        if (oneVsOne) {
-          // #3 Per-opponent cap: if the opponent has placed substantially
-          // more bids in the visible history than we have, bail — they have
-          // a deeper queue and we'll keep losing the war.
-          const det = allDetails.find(x => x.auctionId === d.id);
-          if (det) {
-            const counts = new Map<string, number>();
-            for (const [, , user] of det.history) counts.set(user, (counts.get(user) || 0) + 1);
-            const mine = counts.get(USERNAME) || 0;
-            let theirs = 0;
-            for (const [u, n] of counts) if (u !== USERNAME && n > theirs) theirs = n;
-            if (mine > 0 && theirs > mine * 2) {
-              await cancelBidBuddy(d.id);
-              recordExit(d.id, `outpaced 1v1 (mine=${mine}, theirs=${theirs})`);
-              continue;
-            }
-          }
-          const v = getResaleValue(d, storeBidPrice);
-          const spent$ = spent * costPerBid + Number(d.ddPrice || 0);
-          const projected = v ? v.value - spent$ : Infinity;
-          if (v && projected < rebookFloor()) {
-            console.log(`${d.id}: 1v1 — projected $${projected.toFixed(2)} < $${rebookFloor()}, holding (spent ${spent})`);
-          } else if (bidBalance < batch) {
-            console.log(`${d.id}: 1v1 — low balance (${bidBalance}<${batch}), skipping`);
-          } else {
-            console.log(`${d.id}: 1v1 rebook batch=${batch} (spent ${spent}, projected $${v ? projected.toFixed(2) : '?'})`);
-            await bookBid(d.id, batch);
-          }
-        } else if (pack) {
-          // Packs: cost-per-bid based, no $500 floor
-          if (bidBalance < batch) {
-            console.log(`${d.id}: pack low balance (${bidBalance}<${batch}), skipping`);
-          } else {
-            console.log(`${d.id}: pack rebook batch=${batch} (spent ${spent})`);
-            await bookBid(d.id, batch);
-          }
-        } else {
-          // Non-pack non-1v1: use the rebook floor
-          if (status === 'profit') {
-            const v = getResaleValue(d, storeBidPrice);
-            const spent$ = spent * costPerBid + Number(d.ddPrice || 0);
-            const projected = v ? v.value - spent$ : 0;
-            if (v && projected < rebookFloor()) {
-              console.log(`${d.id}: ${d.bidders}-way — projected $${projected.toFixed(2)} < $${rebookFloor()}, holding`);
-            } else if (bidBalance < batch) {
-              console.log(`${d.id}: low balance (${bidBalance}<${batch}), skipping`);
-            } else {
-              console.log(`${d.id}: ${d.bidders}-way rebook batch=${batch} (spent ${spent}, projected $${v ? projected.toFixed(2) : '?'})`);
-              await bookBid(d.id, batch);
-            }
-          } else {
-            // Unknown / loss status: stick with bid-count cap as a safety net
-            if (spent >= cap) {
-              console.log(`${d.id}: hit ${cap}-bid cap (status=${status}), holding`);
-            } else if (bidBalance < batch) {
-              console.log(`${d.id}: low balance (${bidBalance}<${batch}), skipping`);
-            } else {
-              await bookBid(d.id, batch);
-            }
-          }
-        }
-      }
-    }
-    for (const d of joinable) {
-      if (stopLossTripped) break;
-      if (concurrencyCapHit) break;
-      // Skip known losers in the joinable list too
-      if (profitability(d, costPerBid, storeBidPrice) === 'loss') continue;
-      if (noReEntryCache.get(d.id) === true && !snipeMode) continue;
-      if (acquireMode && !isPack(d.id) && exchangeableCache.get(d.id) !== true) continue;
-      const ji = info.get(d.id);
-      const wname = (ji?.w || '').toLowerCase();
-      if (SKIP_BIDDERS.has(wname)) continue;
-      const pid = productIdCache.get(d.id);
-      if (pid && productPick.get(pid) !== d.id) continue;
-      if (snipeMode) {
-        const t = ji?.t ?? 9999;
-        const closed = ji?.noNewBidders === true;
-        if (closed || t <= 0 || t > SNIPE_MAX_T) continue;
-      }
-      if (d.bidsBooked === 0) {
-        const count = d.bidders === 2 ? 2 : 1;
-        if (bidBalance - count < BID_BALANCE_FLOOR) continue;
-        await bookBid(d.id, count);
-      }
+    // Log alert-type decisions
+    for (const d of decisionResult.decisions) {
+      if (d.kind === 'alert') addAlert(d.level === 'info' ? 'warn' : d.level, d.text);
+      if (d.kind === 'cancel') recordExit(d.auctionId, d.reason);
     }
   }
 
@@ -1833,6 +1511,9 @@ function App() {
     </Box>
   );
 }
+
+// Initialize the typed bridge (builds fetcher + storage from env creds)
+try { initBridge(); } catch (e) { console.error(`bridge init failed: ${(e as Error).message}`); }
 
 // Hydrate every persisted cache from Supabase BEFORE the first tick fires,
 // then start the background flush. By this point both api.ts and this file
