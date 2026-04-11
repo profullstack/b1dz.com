@@ -46,11 +46,29 @@ export class KrakenFeed implements PriceFeed {
     const symbol = normalizePair(pair, this.exchange);
     try {
       const cache = await ensureBatchCache();
-      // Kraken keys can be the symbol or have X/Z prefixes
-      const entry = cache.get(symbol)
-        ?? cache.get(`X${symbol}`)
-        ?? cache.get(`${symbol}ZUSD`.replace('USDZUSD', 'ZUSD'))
-        ?? [...cache.entries()].find(([k]) => k.includes(symbol))?.[1];
+      // Kraken response keys are inconsistent: XBTUSD→XXBTZUSD, SOLUSD→SOLUSD, etc.
+      // Try exact match first, then common prefixed variants
+      const variants = [
+        symbol,                                    // FARTCOINUSD
+        `X${symbol.replace('USD', 'ZUSD')}`,       // XXBTZUSD
+        `XX${symbol.replace('USD', 'ZUSD')}`,      // fallback
+        symbol.replace('USD', 'ZUSD'),              // SOLZUSD? nope but try
+      ];
+      let entry: KrakenTickerEntry | undefined;
+      for (const v of variants) {
+        entry = cache.get(v);
+        if (entry) break;
+      }
+      // Last resort: find key that starts with the base symbol and ends with USD/ZUSD
+      if (!entry) {
+        const base = symbol.replace(/U?S?D$/, '');
+        for (const [k, v] of cache) {
+          if ((k.endsWith('USD') || k.endsWith('ZUSD')) && k.includes(base) && k.length <= base.length + 5) {
+            entry = v;
+            break;
+          }
+        }
+      }
       if (!entry) return null;
       return {
         exchange: this.exchange,
