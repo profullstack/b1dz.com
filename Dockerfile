@@ -61,5 +61,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app /app
 EXPOSE 3000
-# Default to the web server. Override CMD with `pnpm daemon` for the daemon.
-CMD ["pnpm", "start"]
+# Start both web API and daemon in one container
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+CMD ["/app/docker-entrypoint.sh"]
