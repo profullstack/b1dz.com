@@ -51,8 +51,10 @@ RUN pnpm --filter @b1dz/core build && \
     pnpm --filter @b1dz/source-crypto-arb build && \
     pnpm --filter @b1dz/source-crypto-trade build && \
     pnpm --filter @b1dz/daemon build && \
-    NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co \
-    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=placeholder \
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+RUN NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-https://hnohaxemomzlpfnoidhp.supabase.co} \
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-sb_publishable_8WgKipIZGdvBaz-5s9nqyQ_JK7Ynjy4} \
     pnpm --filter @b1dz/web build
 
 # ---- runtime ----
