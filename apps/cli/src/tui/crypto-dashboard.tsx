@@ -5,24 +5,45 @@ import { B1dzClient } from '@b1dz/sdk';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
-function createApiClient(): B1dzClient | null {
-  const creds = loadCredentials();
+import { writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+const CRED_PATH = join(homedir(), '.config', 'b1dz', 'credentials.json');
+
+function saveCreds(update: { accessToken: string; refreshToken: string }) {
+  const current = loadCredentials();
+  if (current) {
+    writeFileSync(CRED_PATH, JSON.stringify({ ...current, ...update, savedAt: new Date().toISOString() }, null, 2));
+  }
+}
+
+async function createApiClient(): Promise<B1dzClient | null> {
   const baseUrl = process.env.B1DZ_API_URL;
+  const creds = loadCredentials();
   if (!creds || !baseUrl) return null;
+
+  // Refresh token on startup so we always have a valid session
+  try {
+    const res = await fetch(`${baseUrl}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh_token: creds.refreshToken }),
+    });
+    if (res.ok) {
+      const { session } = (await res.json()) as { session?: { access_token: string; refresh_token: string } };
+      if (session) {
+        creds.accessToken = session.access_token;
+        creds.refreshToken = session.refresh_token;
+        saveCreds({ accessToken: session.access_token, refreshToken: session.refresh_token });
+      }
+    }
+  } catch {}
+
   return new B1dzClient({
     baseUrl,
     tokens: { accessToken: creds.accessToken, refreshToken: creds.refreshToken },
-    onRefresh: (tokens) => {
-      // Persist refreshed tokens so they survive restarts
-      const { writeFileSync } = require('node:fs') as typeof import('node:fs');
-      const current = loadCredentials();
-      if (current) {
-        writeFileSync(
-          require('node:os').homedir() + '/.config/b1dz/credentials.json',
-          JSON.stringify({ ...current, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, savedAt: new Date().toISOString() }, null, 2),
-        );
-      }
-    },
+    onRefresh: (tokens) => saveCreds(tokens),
   });
 }
 
@@ -104,20 +125,25 @@ export function CryptoDashboard() {
 
   // Poll API for daemon state
   useEffect(() => {
-    const client = createApiClient();
-    if (!client) {
-      addLog('{red-fg}No API credentials — run b1dz login first{/red-fg}');
-      return;
-    }
     let active = true;
+    let client: B1dzClient | null = null;
+
+    const init = async () => {
+      client = await createApiClient();
+      if (!client) {
+        addLog('{red-fg}No API credentials — run b1dz login first{/red-fg}');
+        return;
+      }
+      addLog('{green-fg}Connected to API{/green-fg}');
+      poll();
+    };
 
     const poll = async () => {
+      if (!client || !active) return;
       try {
-        // Read both source states through the API
-        const [arb, trade] = await Promise.all([
-          client.storage.get<ArbState>('source-state', 'crypto-arb'),
-          client.storage.get<TradeState>('source-state', 'crypto-trade'),
-        ]);
+        // Sequential to avoid refresh token races
+        const arb = await client.storage.get<ArbState>('source-state', 'crypto-arb');
+        const trade = await client.storage.get<TradeState>('source-state', 'crypto-trade');
 
         if (!active) return;
         setApiError(null);
@@ -141,8 +167,8 @@ export function CryptoDashboard() {
       }
     };
 
-    poll();
-    const timer = setInterval(poll, 2000);
+    init();
+    const timer = setInterval(poll, 3000);
     return () => { active = false; clearInterval(timer); };
   }, []);
 
