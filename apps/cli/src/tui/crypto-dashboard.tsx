@@ -433,13 +433,25 @@ function DashboardInner() {
   );
 }
 
-export function CryptoDashboard() {
-  try {
-    return <DashboardInner />;
-  } catch (e) {
-    return (
-      <box top={0} left={0} width="100%" height="100%" tags={true}
-        content={`{red-fg}Dashboard render error: ${(e as Error).message}{/red-fg}\n\nPress q to quit.`} />
-    );
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(e: Error) { return { error: e.message }; }
+  componentDidCatch(e: Error) { console.error('Dashboard error:', e.message, e.stack); }
+  render() {
+    if (this.state.error) {
+      return React.createElement('box', {
+        top: 0, left: 0, width: '100%', height: '100%', tags: true,
+        content: `{red-fg}Dashboard error: ${this.state.error}{/red-fg}\n\nPress q to quit.`,
+      });
+    }
+    return this.props.children;
   }
+}
+
+export function CryptoDashboard() {
+  return (
+    <ErrorBoundary>
+      <DashboardInner />
+    </ErrorBoundary>
+  );
 }
