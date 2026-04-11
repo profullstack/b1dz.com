@@ -54,6 +54,12 @@ export class Runner {
         const opp = src.evaluate(item, ctx);
         if (!opp) continue;
         await this.opts.storage.put<Opportunity>(COLLECTIONS.opportunities, opp.id, opp);
+        if (src.act) {
+          const result = await src.act(opp, ctx);
+          if (result.ok) {
+            this.opts.alerts.push({ level: 'good', sourceId: src.id, text: result.message ?? 'action executed', opportunityId: opp.id });
+          }
+        }
       }
       await this.opts.storage.put<SourceState>(COLLECTIONS.sourceState, src.id, {
         sourceId: src.id,

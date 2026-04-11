@@ -138,5 +138,5 @@ export async function apiMe(baseUrl: string, accessToken: string): Promise<{ use
     headers: { authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`me failed: ${res.status}`);
-  return res.json();
+  return (await res.json()) as { userId: string; email: string | null };
 }

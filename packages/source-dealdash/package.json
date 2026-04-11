@@ -15,7 +15,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@b1dz/core": "workspace:*"
+    "@b1dz/core": "workspace:*",
+    "got-scraping": "^4.2.1",
+    "puppeteer": "latest",
+    "puppeteer-extra": "latest",
+    "puppeteer-extra-plugin-stealth": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",

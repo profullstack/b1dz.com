@@ -11,9 +11,16 @@
  * implementations from ./feeds — one feed, many strategies.
  */
 
-import type { Source, MarketSnapshot, Opportunity, PriceFeed } from '@b1dz/core';
+import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import { GeminiFeed, KrakenFeed, BinanceUsFeed } from './feeds/index.js';
 export { GeminiFeed, KrakenFeed, BinanceUsFeed } from './feeds/index.js';
+export { getBalance, placeOrder, getOpenOrders, getTradeHistory, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
+export { getBalance as getBinanceBalance, placeOrder as placeBinanceOrder, getOpenOrders as getBinanceOpenOrders, BINANCE_TAKER_FEE } from './feeds/binance-us-private.js';
+import { placeOrder as placeKrakenOrder } from './feeds/kraken-private.js';
+import { placeOrder as placeBinanceOrder } from './feeds/binance-us-private.js';
+import { normalizePair } from './feeds/pairs.js';
+
+const MAX_POSITION_USD = 100;
 
 // Configuration — pull from env / source state in real impl
 const PAIRS = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
@@ -77,13 +84,32 @@ export const cryptoArbSource: Source<ArbItem> = {
     for (const pair of PAIRS) {
       const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair))))
         .filter((s): s is MarketSnapshot => s != null);
-      if (snaps.length >= 2) items.push({ pair, snapshots: snaps });
+      if (snaps.length >= 2) {
+        items.push({ pair, snapshots: snaps });
+        const prices = snaps.map((s) => `${s.exchange}=$${s.bid.toFixed(2)}`).join(' ');
+        console.log(`[arb] ${pair} ${prices}`);
+      }
     }
     return items;
   },
   evaluate(item): Opportunity | null {
     const arb = bestArb(item.snapshots);
-    if (!arb) return null;
+    if (!arb) {
+      // Log best spread even when not profitable
+      const snaps = item.snapshots;
+      if (snaps.length >= 2) {
+        let bestSpread = 0;
+        for (const buyer of snaps) {
+          for (const seller of snaps) {
+            if (buyer.exchange === seller.exchange) continue;
+            const spread = ((seller.bid - buyer.ask) / buyer.ask) * 100;
+            if (spread > bestSpread) bestSpread = spread;
+          }
+        }
+        console.log(`[arb] ${item.pair} best spread: ${bestSpread.toFixed(4)}% (below fee threshold)`);
+      }
+      return null;
+    }
     // Sized at 1 unit for now — real impl computes max safe size from order book depth
     const size = 1;
     const costNow = arb.buyPrice * size;
@@ -106,6 +132,77 @@ export const cryptoArbSource: Source<ArbItem> = {
       updatedAt: Date.now(),
     };
   },
-  // act(): TODO — place atomic buy on buyExchange + sell on sellExchange,
-  // with rollback if either leg fails. Requires authenticated API clients.
+  async act(opp): Promise<ActionResult> {
+    const arb = opp.metadata as unknown as ArbResult & { size: number };
+    const supported = ['kraken', 'binance-us'];
+
+    if (!supported.includes(arb.buyExchange) || !supported.includes(arb.sellExchange)) {
+      return { ok: false, message: `unsupported exchange (${arb.buyExchange}/${arb.sellExchange})`, permanent: true };
+    }
+
+    // Size to stay within $100
+    const maxVolume = MAX_POSITION_USD / arb.buyPrice;
+    const volume = Math.min(arb.size, maxVolume);
+    const cost = volume * arb.buyPrice;
+    const revenue = volume * arb.sellPrice;
+    const buyFee = cost * (TAKER_FEES[arb.buyExchange] ?? 0.005);
+    const sellFee = revenue * (TAKER_FEES[arb.sellExchange] ?? 0.005);
+    const netProfit = revenue - cost - buyFee - sellFee;
+
+    if (netProfit <= 0) {
+      console.log(`[arb] SKIP ${opp.title}: net profit $${netProfit.toFixed(4)} <= 0`);
+      return { ok: false, message: `not profitable after fees ($${netProfit.toFixed(4)})` };
+    }
+
+    console.log(`[arb] EXECUTE ${opp.title}: vol=${volume.toFixed(8)} cost=$${cost.toFixed(2)} net=$${netProfit.toFixed(4)}`);
+
+    try {
+      // Place buy leg
+      if (arb.buyExchange === 'kraken') {
+        const result = await placeKrakenOrder({
+          pair: normalizePair(arb.pair, 'kraken'),
+          type: 'buy',
+          ordertype: 'limit',
+          volume: volume.toFixed(8),
+          price: arb.buyPrice.toFixed(2),
+        });
+        console.log(`[arb] BUY on kraken: ${result.descr.order} txid=${result.txid}`);
+      } else if (arb.buyExchange === 'binance-us') {
+        const result = await placeBinanceOrder({
+          symbol: normalizePair(arb.pair, 'binance-us'),
+          side: 'BUY',
+          type: 'LIMIT',
+          quantity: volume.toFixed(8),
+          price: arb.buyPrice.toFixed(2),
+        });
+        console.log(`[arb] BUY on binance-us: orderId=${result.orderId} status=${result.status}`);
+      }
+
+      // Place sell leg
+      if (arb.sellExchange === 'kraken') {
+        const result = await placeKrakenOrder({
+          pair: normalizePair(arb.pair, 'kraken'),
+          type: 'sell',
+          ordertype: 'limit',
+          volume: volume.toFixed(8),
+          price: arb.sellPrice.toFixed(2),
+        });
+        console.log(`[arb] SELL on kraken: ${result.descr.order} txid=${result.txid}`);
+      } else if (arb.sellExchange === 'binance-us') {
+        const result = await placeBinanceOrder({
+          symbol: normalizePair(arb.pair, 'binance-us'),
+          side: 'SELL',
+          type: 'LIMIT',
+          quantity: volume.toFixed(8),
+          price: arb.sellPrice.toFixed(2),
+        });
+        console.log(`[arb] SELL on binance-us: orderId=${result.orderId} status=${result.status}`);
+      }
+
+      return { ok: true, message: `arb executed, net ~$${netProfit.toFixed(4)}` };
+    } catch (e) {
+      console.error(`[arb] ORDER FAILED: ${(e as Error).message}`);
+      return { ok: false, message: (e as Error).message };
+    }
+  },
 };

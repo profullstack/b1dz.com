@@ -8,8 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "postinstall": "pnpm exec puppeteer browsers install chrome",
-    "build": "pnpm exec puppeteer browsers install chrome && tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
@@ -18,24 +17,22 @@
     "@b1dz/core": "workspace:*",
     "@b1dz/storage-json": "workspace:*",
     "@b1dz/storage-supabase": "workspace:*",
-    "@b1dz/source-dealdash": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/storage-b1dz-api": "workspace:*",
     "@b1dz/sdk": "workspace:*",
     "@supabase/supabase-js": "latest",
-    "@ink-tools/ink-mouse": "latest",
     "chalk": "latest",
     "cli-table3": "latest",
-    "dotenv": "latest",
-    "ink": "latest",
-    "ink-text-input": "latest",
-    "puppeteer": "latest",
-    "react": "latest"
+    "blessed": "^0.1.81",
+    "react-blessed": "^0.7.2",
+    "blessed-contrib": "^4.11.0",
+    "react": "^17.0.2",
+    "dotenv": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
-    "@types/react": "latest",
+    "@types/react": "^17.0.0",
     "tsx": "latest",
     "typescript": "latest",
     "vitest": "latest"

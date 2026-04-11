@@ -5,3 +5,5 @@ export * from './auctions.js';
 export * from './wins.js';
 export * from './session.js';
 export * from './throttle.js';
+export * from './browser-fetcher.js';
+export * from './stealth-fetcher.js';

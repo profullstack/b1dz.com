@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # b1dzd launcher — runs the daemon entry via tsx (no build step required).
-# Used by: terminal, systemd, Docker. The launcher resolves the package
-# directory from its own location so symlinks / pnpm link --global all work.
+# Auto-wraps with xvfb-run on headless servers for Cloudflare bypass.
 set -e
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 PKG_DIR="$(cd "$HERE/.." && pwd)"
@@ -11,4 +10,9 @@ if [ ! -x "$TSX" ]; then
   exit 1
 fi
 cd "$PKG_DIR"
-exec "$TSX" "$PKG_DIR/src/index.ts" "$@"
+
+if [ -z "$DISPLAY" ] && command -v xvfb-run &>/dev/null && [ -z "$B1DZ_NO_XVFB" ]; then
+  exec xvfb-run --auto-servernum "$TSX" "$PKG_DIR/src/index.ts" "$@"
+else
+  exec "$TSX" "$PKG_DIR/src/index.ts" "$@"
+fi

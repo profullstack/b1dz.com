@@ -12,6 +12,7 @@
 export interface DealDashCreds {
   phpsessid: string;
   rememberme: string;
+  cfClearance?: string;
 }
 
 export interface DealDashFetcher {
@@ -28,7 +29,9 @@ const DEFAULT_HEADERS: Record<string, string> = {
 };
 
 export function buildCookie(c: DealDashCreds): string {
-  return `PHPSESSID=${c.phpsessid}; REMEMBERME=${c.rememberme}`;
+  let cookie = `PHPSESSID=${c.phpsessid}; REMEMBERME=${c.rememberme}`;
+  if (c.cfClearance) cookie += `; cf_clearance=${c.cfClearance}`;
+  return cookie;
 }
 
 /** Construct a fetcher that automatically appends DealDash cookies + UA. */

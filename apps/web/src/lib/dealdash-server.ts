@@ -7,7 +7,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export interface DealDashCreds { phpsessid: string; rememberme: string; }
+export interface DealDashCreds { phpsessid: string; rememberme: string; cfClearance?: string; }
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
@@ -26,7 +26,9 @@ export async function loadCreds(client: SupabaseClient): Promise<DealDashCreds |
 }
 
 export function buildCookie(c: DealDashCreds): string {
-  return `PHPSESSID=${c.phpsessid}; REMEMBERME=${c.rememberme}`;
+  let cookie = `PHPSESSID=${c.phpsessid}; REMEMBERME=${c.rememberme}`;
+  if (c.cfClearance) cookie += `; cf_clearance=${c.cfClearance}`;
+  return cookie;
 }
 
 export interface DealDashFetch {

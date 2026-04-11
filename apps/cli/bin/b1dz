@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # b1dz launcher — runs the CLI entry via tsx so no build step is needed.
-# Resolves the package directory from this script's location and uses the
-# package-local tsx binary, so it works no matter where the user invokes it.
+# On headless servers (no DISPLAY), auto-wraps with xvfb-run so the
+# browser-based Cloudflare bypass works without manual setup.
 set -e
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 PKG_DIR="$(cd "$HERE/.." && pwd)"
@@ -11,4 +11,11 @@ if [ ! -x "$TSX" ]; then
   exit 1
 fi
 cd "$PKG_DIR"
-exec "$TSX" "$PKG_DIR/src/index.ts" "$@"
+
+# If no display and xvfb-run is available, auto-wrap so headful Chrome
+# can launch for Cloudflare bypass. Completely transparent to the user.
+if [ -z "$DISPLAY" ] && command -v xvfb-run &>/dev/null && [ -z "$B1DZ_NO_XVFB" ]; then
+  exec xvfb-run --auto-servernum "$TSX" "$PKG_DIR/src/index.ts" "$@"
+else
+  exec "$TSX" "$PKG_DIR/src/index.ts" "$@"
+fi
