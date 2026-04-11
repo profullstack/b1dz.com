@@ -62,8 +62,7 @@ FROM base AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app /app
-EXPOSE 3000
+EXPOSE 8080
 # Start both web API and daemon in one container
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-CMD ["/app/docker-entrypoint.sh"]
+# Railway sets PORT=8080, next start reads PORT automatically
+CMD ["bash", "-c", "echo 'b1dz: starting daemon...' && pnpm daemon & echo 'b1dz: starting web on port ${PORT:-8080}...' && pnpm start"]
