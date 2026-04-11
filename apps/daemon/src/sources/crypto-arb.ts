@@ -19,7 +19,7 @@ let cachedCoinbaseBalance: Record<string, string> = {};
 let cachedRecentTrades: unknown[] = [];
 let cachedOpenOrders: unknown[] = [];
 let lastPrivateFetch = 0;
-const PRIVATE_FETCH_INTERVAL = 15_000; // 15 seconds
+const PRIVATE_FETCH_INTERVAL = 15_000; // 15s — balances/trades/orders
 
 const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);

@@ -61,6 +61,7 @@ RUN NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
 FROM base AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# bust cache v2
 COPY --from=build /app /app
 EXPOSE 8080
 # Start both web API and daemon in one container
