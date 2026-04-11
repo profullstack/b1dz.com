@@ -20,14 +20,13 @@ function getKeys() {
   const keyName = process.env.COINBASE_API_KEY_NAME;
   const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
   if (!keyName || !privateKey) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
-  // Handle both literal \n and real newlines, trim whitespace
-  let pem = privateKey.replace(/\\n/g, '\n').trim();
-  // Ensure PEM has proper newlines after header and before footer
-  if (!pem.includes('\n')) {
-    pem = pem
-      .replace('-----BEGIN EC PRIVATE KEY-----', '-----BEGIN EC PRIVATE KEY-----\n')
-      .replace('-----END EC PRIVATE KEY-----', '\n-----END EC PRIVATE KEY-----\n');
-  }
+  // Reconstruct PEM from potentially mangled env var (Railway breaks lines)
+  const raw = privateKey.replace(/\\n/g, '\n');
+  // Extract just the base64 content, stripping all whitespace and PEM headers
+  const b64 = raw.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '');
+  // Rebuild proper PEM with 64-char lines
+  const lines = b64.match(/.{1,64}/g) ?? [];
+  const pem = `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
   return { keyName, pem };
 }
 
