@@ -115,7 +115,7 @@ export async function signup(baseUrl: string, email: string, password: string): 
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  const json = await res.json();
+  const json = (await res.json()) as AuthResponse & { error?: string };
   if (!res.ok) throw new Error(json.error || `signup failed: ${res.status}`);
   return json as AuthResponse;
 }
@@ -125,7 +125,7 @@ export async function login(baseUrl: string, email: string, password: string): P
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
-  const json = await res.json();
+  const json = (await res.json()) as AuthResponse & { error?: string };
   if (!res.ok) throw new Error(json.error || `login failed: ${res.status}`);
   return json as AuthResponse;
 }

@@ -144,6 +144,11 @@ if (source === 'whoami') { whoami(); process.exit(0); }
 requireAuth();
 
 if (source === 'tui') {
+  console.log('b1dz tui starting...');
+  console.log(`  API:        ${process.env.B1DZ_API_URL || 'not set (run pnpm dev:web)'}`);
+  console.log(`  User:       ${currentUser()?.email ?? 'not logged in'}`);
+  console.log(`  Auto-trade: ON (daemon controls trading)`);
+  console.log('  Connecting to API...');
   const { startTui } = await import('./tui/index.js');
   startTui();
 } else if (source === 'alerts') {

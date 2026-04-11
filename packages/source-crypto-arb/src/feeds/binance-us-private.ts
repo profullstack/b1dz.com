@@ -9,6 +9,7 @@
  */
 
 import { createHmac } from 'node:crypto';
+import { proxyFetch } from './proxy.js';
 
 const BASE = 'https://api.binance.us';
 
@@ -35,8 +36,8 @@ async function binancePrivate<T>(
   params: Record<string, string> = {},
 ): Promise<T> {
   const { key, secret } = getKeys();
-  params.timestamp = Date.now().toString();
-  params.recvWindow = '5000';
+  params.timestamp = (Date.now() - 1000).toString(); // offset for proxy latency
+  params.recvWindow = '10000';
 
   const qs = new URLSearchParams(params).toString();
   const signature = sign(qs, secret);
@@ -46,7 +47,7 @@ async function binancePrivate<T>(
     ? `${BASE}${path}?${fullQs}`
     : `${BASE}${path}`;
 
-  const res = await fetch(url, {
+  const res = await proxyFetch(url, {
     method,
     headers: {
       'X-MBX-APIKEY': key,

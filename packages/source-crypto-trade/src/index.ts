@@ -14,7 +14,7 @@
  */
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
-import { KrakenFeed, placeOrder, MAX_POSITION_USD, KRAKEN_TAKER_FEE } from '@b1dz/source-crypto-arb';
+import { KrakenFeed, placeOrder, MAX_POSITION_USD, KRAKEN_TAKER_FEE, getActivePairs } from '@b1dz/source-crypto-arb';
 
 export interface Signal {
   side: 'buy' | 'sell';
@@ -49,31 +49,31 @@ interface TradeItem {
 // ─── Exit parameters ───────────────────────────────────────────
 
 /** Take-profit target. */
-const TAKE_PROFIT_PCT = 0.015;  // +1.5%
+const TAKE_PROFIT_PCT = 0.008;  // +0.8% (lowered from 1.5% — more achievable)
 
 /** Initial stop-loss. */
-const INITIAL_STOP_PCT = 0.005; // -0.5%
+const INITIAL_STOP_PCT = 0.004; // -0.4%
 
 /** Move stop to breakeven when position reaches this profit. */
 const BREAKEVEN_TRIGGER_PCT = 0.003; // +0.3%
 
 /** Lock in profit: move stop to this level when position reaches LOCK_TRIGGER. */
-const LOCK_TRIGGER_PCT = 0.008;  // +0.8%
-const LOCK_STOP_PCT = 0.005;     // stop at +0.5%
+const LOCK_TRIGGER_PCT = 0.005;  // +0.5%
+const LOCK_STOP_PCT = 0.002;     // stop at +0.2% (lock in small profit)
 
 /** Close at market if position has been open this long and is flat. */
-const TIME_EXIT_MS = 30 * 60 * 1000; // 30 minutes
+const TIME_EXIT_MS = 15 * 60 * 1000; // 15 minutes (was 30)
 const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%
 
 /** Cooldown after closing a position before opening another. */
-const COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes (was 10)
 
 /** Max daily loss before halting trades. */
 const DAILY_LOSS_LIMIT_USD = 5;
 
 // ─── State ─────────────────────────────────────────────────────
 
-const PAIRS = ['BTC-USD', 'ETH-USD'];
+// Pairs are discovered dynamically — top volume pairs across exchanges
 const feed: PriceFeed = new KrakenFeed();
 const histories = new Map<string, MarketSnapshot[]>();
 
@@ -86,12 +86,130 @@ interface Position {
 }
 const openPositions = new Map<string, Position>();
 
+/** Global lock — only ONE position at a time across all pairs. */
+function hasAnyOpenPosition(): boolean {
+  return openPositions.size > 0;
+}
+
 /** Timestamp of last trade close per pair. */
 const lastExitAt = new Map<string, number>();
 
 /** Cumulative realized P/L for today. */
 let dailyPnl = 0;
 let dailyPnlDate = new Date().toDateString();
+
+/** Whether we've hydrated from exchange APIs yet. */
+let hydrated = false;
+
+/**
+ * Reconstruct positions from EXCHANGE data (source of truth).
+ * Checks Kraken balance for non-USD holdings and recent trade history
+ * to figure out what we're holding and at what entry price.
+ */
+async function hydrateFromExchange() {
+  if (hydrated) return;
+  hydrated = true;
+
+  try {
+    const { getBalance, getTradeHistory } = await import('@b1dz/source-crypto-arb');
+    const balance = await getBalance();
+    const tradeHistory = await getTradeHistory();
+
+    // Find non-trivial crypto holdings (not USD/stablecoins)
+    const stables = new Set(['ZUSD', 'USDC', 'USDT', 'USD']);
+    const holdings: { asset: string; amount: number }[] = [];
+    for (const [asset, val] of Object.entries(balance)) {
+      const amount = parseFloat(val);
+      if (amount > 0.0001 && !stables.has(asset)) {
+        holdings.push({ asset, amount });
+      }
+    }
+
+    if (holdings.length === 0) {
+      console.log('[trade] no crypto holdings found — starting clean');
+      return;
+    }
+
+    // Map Kraken asset names to pair names
+    const assetToPair: Record<string, string> = { XXBT: 'BTC-USD', XETH: 'ETH-USD', XZEC: 'ZEC-USD', XXRP: 'XRP-USD', XXLM: 'XLM-USD', XXMR: 'XMR-USD', XXDG: 'DOGE-USD' };
+    // Also handle short names
+    for (const [asset] of Object.entries(balance)) {
+      if (!assetToPair[asset] && !stables.has(asset) && asset.length <= 5) {
+        assetToPair[asset] = `${asset}-USD`;
+      }
+    }
+
+    // Look through recent trades to find the entry price for each holding
+    const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
+
+    for (const h of holdings) {
+      const pair = assetToPair[h.asset];
+      if (!pair) {
+        console.log(`[trade] holding ${h.asset}=${h.amount} but no pair mapping — skipping`);
+        continue;
+      }
+
+      // Find the most recent BUY trade for this pair
+      const krakenPairVariants = [
+        pair.replace('-', ''),
+        pair.replace('-', '').replace('BTC', 'XBT'),
+        `X${pair.replace('-USD', '')}ZUSD`,
+        `XX${pair.replace('-USD', '')}ZUSD`,
+      ];
+      const buyTrade = trades.find((t) =>
+        t.type === 'buy' && krakenPairVariants.some((v) => t.pair.includes(v) || v.includes(t.pair))
+      );
+
+      const entryPrice = buyTrade ? parseFloat(buyTrade.price) : 0;
+      const entryTime = buyTrade ? buyTrade.time * 1000 : Date.now();
+
+      if (entryPrice > 0) {
+        openPositions.set(pair, {
+          pair,
+          entryPrice,
+          volume: h.amount,
+          entryTime,
+          highWaterMark: entryPrice,
+        });
+        console.log(`[trade] RESTORED from exchange: ${pair} ${h.amount} @ $${entryPrice.toFixed(2)} (${buyTrade ? 'from trade history' : 'unknown entry'})`);
+      } else {
+        console.log(`[trade] holding ${pair}=${h.amount} but no buy trade found in history — can't determine entry`);
+      }
+    }
+
+    // Calculate today's realized P/L from trade history
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayTs = todayStart.getTime() / 1000;
+    let todayPnl = 0;
+    for (const t of trades) {
+      if (t.time < todayTs) break;
+      const cost = parseFloat(t.cost);
+      const fee = parseFloat(t.fee);
+      if (t.type === 'sell') todayPnl += cost - fee;
+      else todayPnl -= cost + fee;
+    }
+    // Only set if there were sells (buys alone aren't losses)
+    const hasSells = trades.some((t) => t.time >= todayTs && t.type === 'sell');
+    if (hasSells) {
+      dailyPnl = todayPnl;
+      console.log(`[trade] today's realized P/L: $${dailyPnl.toFixed(2)}`);
+    }
+  } catch (e) {
+    console.error(`[trade] exchange hydration failed: ${(e as Error).message}`);
+    // Fall back — start clean, daemon will pick up on next trade
+  }
+}
+
+/** Serialize positions/cooldowns/dailyPnl for persistence. */
+export function serializeTradeState(): Record<string, unknown> {
+  return {
+    positions: [...openPositions.values()],
+    exits: [...lastExitAt.entries()].map(([pair, at]) => ({ pair, at })),
+    dailyPnl,
+    dailyPnlDate,
+  };
+}
 
 function resetDailyPnlIfNeeded() {
   const today = new Date().toDateString();
@@ -104,6 +222,46 @@ function resetDailyPnlIfNeeded() {
 function isDailyLossLimitHit(): boolean {
   resetDailyPnlIfNeeded();
   return dailyPnl <= -DAILY_LOSS_LIMIT_USD;
+}
+
+/** Live status snapshot for TUI display. */
+export interface TradeStatus {
+  position: { pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string } | null;
+  dailyPnl: number;
+  dailyLossLimitHit: boolean;
+  cooldowns: { pair: string; remainingSec: number }[];
+  pairsScanned: number;
+  ticksPerPair: Record<string, number>;
+  lastSignal: string | null;
+}
+
+export function getTradeStatus(): TradeStatus {
+  resetDailyPnlIfNeeded();
+  const pos = openPositions.size > 0 ? [...openPositions.values()][0] : null;
+  const cooldowns: { pair: string; remainingSec: number }[] = [];
+  for (const [pair, exitTime] of lastExitAt) {
+    const remaining = Math.max(0, COOLDOWN_MS - (Date.now() - exitTime));
+    if (remaining > 0) cooldowns.push({ pair, remainingSec: Math.ceil(remaining / 1000) });
+  }
+  const ticksPerPair: Record<string, number> = {};
+  for (const [pair, hist] of histories) ticksPerPair[pair] = hist.length;
+
+  return {
+    position: pos ? {
+      pair: pos.pair,
+      entryPrice: pos.entryPrice,
+      volume: pos.volume,
+      pnlPct: 0, // will be filled by caller with current price
+      stopPrice: trailingStopPrice(pos),
+      elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+    } : null,
+    dailyPnl,
+    dailyLossLimitHit: isDailyLossLimitHit(),
+    cooldowns,
+    pairsScanned: histories.size,
+    ticksPerPair,
+    lastSignal: null,
+  };
 }
 
 /** Compute the current trailing stop price for a position. */
@@ -124,12 +282,12 @@ function trailingStopPrice(pos: Position): number {
 
 // ─── Source ────────────────────────────────────────────────────
 
-// Import the multi-signal strategy dynamically to avoid circular deps
+// Import the composite strategy dynamically to avoid circular deps
 let defaultStrategy: Strategy | null = null;
 async function getDefaultStrategy(): Promise<Strategy> {
   if (!defaultStrategy) {
     const mod = await import('./strategies.js');
-    defaultStrategy = mod.multiSignalStrategy;
+    defaultStrategy = mod.compositeStrategy;
   }
   return defaultStrategy;
 }
@@ -141,7 +299,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     id: `crypto-trade:kraken:${strategyId}`,
     pollIntervalMs: 5000,
 
-    async poll() {
+    async poll(ctx) {
+      // Restore positions from exchange APIs on first tick (source of truth)
+      await hydrateFromExchange();
+
+      const PAIRS = await getActivePairs();
       const items: TradeItem[] = [];
       for (const pair of PAIRS) {
         const snap = await feed.snapshot(pair);
@@ -242,13 +404,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null; // silent — don't spam logs during cooldown
       }
 
+      // Only ONE position at a time — don't blow our resources
+      if (hasAnyOpenPosition()) return null;
+
       // Already have a position for this pair
       if (openPositions.has(item.pair)) return null;
 
       // Run strategy
       const sig = activeStrategy.evaluate(item.snap, item.history);
       if (!sig || sig.side !== 'buy') return null;
-      if (sig.strength < 0.75) return null;
+      if (sig.strength < 0.7) return null;
 
       // Check profitability: need to clear round-trip fees with take-profit
       const roundTripFee = 2 * KRAKEN_TAKER_FEE; // 0.52%

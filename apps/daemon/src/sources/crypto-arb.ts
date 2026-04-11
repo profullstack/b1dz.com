@@ -1,16 +1,25 @@
 import type { SourceWorker, UserContext } from '../types.js';
 import {
   cryptoArbSource,
-  GeminiFeed, KrakenFeed, BinanceUsFeed,
-  getBalance, getBinanceBalance,
+  KrakenFeed, BinanceUsFeed, CoinbaseFeed,
+  getBalance, getBinanceBalance, getCoinbaseBalance,
   getTradeHistory, getOpenOrders,
+  getActivePairs,
 } from '@b1dz/source-crypto-arb';
 import { AlertBus } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import type { MarketSnapshot } from '@b1dz/core';
 
-const PAIRS = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
-const FEEDS = [new KrakenFeed(), new BinanceUsFeed()];
+const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
+
+// Cache private API data — refresh every 60s
+let cachedKrakenBalance: Record<string, string> = {};
+let cachedBinanceBalance: Record<string, string> = {};
+let cachedCoinbaseBalance: Record<string, string> = {};
+let cachedRecentTrades: unknown[] = [];
+let cachedOpenOrders: unknown[] = [];
+let lastPrivateFetch = 0;
+const PRIVATE_FETCH_INTERVAL = 60_000;
 
 export const cryptoArbWorker: SourceWorker = {
   id: 'crypto-arb',
@@ -23,7 +32,59 @@ export const cryptoArbWorker: SourceWorker = {
     const alerts = new AlertBus();
     const sourceCtx = { storage, alerts, state: ctx.payload };
 
-    // Poll prices for all pairs across all feeds
+    // ── Fetch balances FIRST (before slow price polling) ──
+    if (Date.now() - lastPrivateFetch > PRIVATE_FETCH_INTERVAL) {
+      lastPrivateFetch = Date.now();
+      const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      try {
+        cachedKrakenBalance = await getBalance();
+        console.log('b1dzd: kraken balance:', Object.entries(cachedKrakenBalance).filter(([, v]) => parseFloat(v) > 0.0001).map(([k, v]) => `${k}=${v}`).join(' '));
+        await wait(2000);
+        const th = await getTradeHistory();
+        cachedRecentTrades = Object.values(th).sort((a, b) => b.time - a.time).slice(0, 20);
+        await wait(2000);
+        const oo = await getOpenOrders();
+        cachedOpenOrders = Object.entries(oo).map(([id, o]) => ({ id, ...o }));
+      } catch (e) {
+        const msg = (e as Error).message;
+        if (msg.includes('Rate limit')) {
+          console.error('b1dzd: kraken rate limited, backing off 60s');
+          lastPrivateFetch = Date.now() + 60_000;
+        } else {
+          console.error(`b1dzd: kraken private API error: ${msg}`);
+        }
+      }
+      try {
+        cachedBinanceBalance = await getBinanceBalance();
+        console.log('b1dzd: binance balance:', Object.entries(cachedBinanceBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
+      } catch (e) {
+        console.error(`b1dzd: binance balance error: ${(e as Error).message}`);
+      }
+      try {
+        cachedCoinbaseBalance = await getCoinbaseBalance();
+        console.log('b1dzd: coinbase balance:', Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
+      } catch (e) {
+        console.error(`b1dzd: coinbase balance error: ${(e as Error).message}`);
+      }
+
+      // Save balances immediately so TUI can show them even if price poll is slow
+      await ctx.savePayload({
+        enabled: ctx.payload?.enabled ?? true,
+        krakenBalance: cachedKrakenBalance,
+        binanceBalance: cachedBinanceBalance,
+        coinbaseBalance: cachedCoinbaseBalance,
+        recentTrades: cachedRecentTrades,
+        openOrders: cachedOpenOrders,
+        daemon: {
+          lastTickAt: new Date().toISOString(),
+          worker: 'crypto-arb',
+          status: 'running',
+        },
+      });
+    }
+
+    // ── Poll prices for top pairs ──
+    const PAIRS = await getActivePairs();
     const prices: { exchange: string; pair: string; bid: number; ask: number }[] = [];
     for (const pair of PAIRS) {
       const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair))))
@@ -74,35 +135,17 @@ export const cryptoArbWorker: SourceWorker = {
     }
     while (opps.length > 100) opps.shift();
 
-    // Fetch balances + trade history (Kraken private API)
-    let krakenBalance: Record<string, string> = {};
-    let binanceBalance: Record<string, string> = {};
-    let recentTrades: unknown[] = [];
-    let openOrders: unknown[] = [];
-    try {
-      krakenBalance = await getBalance();
-    } catch {}
-    try {
-      binanceBalance = await getBinanceBalance();
-    } catch {}
-    try {
-      const th = await getTradeHistory();
-      recentTrades = Object.values(th).sort((a, b) => b.time - a.time).slice(0, 20);
-    } catch {}
-    try {
-      const oo = await getOpenOrders();
-      openOrders = Object.entries(oo).map(([id, o]) => ({ id, ...o }));
-    } catch {}
-
-    // Persist everything for the TUI to read
+    // Save full state
     await ctx.savePayload({
+      enabled: ctx.payload?.enabled ?? true,
       opportunities: opps,
       prices,
       spreads,
-      krakenBalance,
-      binanceBalance,
-      recentTrades,
-      openOrders,
+      krakenBalance: cachedKrakenBalance,
+      binanceBalance: cachedBinanceBalance,
+      coinbaseBalance: cachedCoinbaseBalance,
+      recentTrades: cachedRecentTrades,
+      openOrders: cachedOpenOrders,
       daemon: {
         lastTickAt: new Date().toISOString(),
         worker: 'crypto-arb',

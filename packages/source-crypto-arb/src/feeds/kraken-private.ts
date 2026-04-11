@@ -43,28 +43,39 @@ function sign(path: string, postData: string, secret: string): string {
   return hmac;
 }
 
+// Mutex: serialize all Kraken private API calls so nonces never race.
+let lock: Promise<void> = Promise.resolve();
+function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = lock;
+  let resolve: () => void;
+  lock = new Promise((r) => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
+}
+
 async function krakenPrivate<T>(path: string, params: Record<string, string> = {}): Promise<T> {
-  const { key, secret } = getKeys();
-  const nonce = nextNonce();
-  params.nonce = nonce;
+  return withLock(async () => {
+    const { key, secret } = getKeys();
+    const nonce = nextNonce();
+    params.nonce = nonce;
 
-  const body = new URLSearchParams(params).toString();
-  const signature = sign(path, nonce + body, secret);
+    const body = new URLSearchParams(params).toString();
+    const signature = sign(path, nonce + body, secret);
 
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'API-Key': key,
-      'API-Sign': signature,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body,
+    const res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: {
+        'API-Key': key,
+        'API-Sign': signature,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    });
+
+    if (!res.ok) throw new Error(`Kraken ${path}: ${res.status} ${res.statusText}`);
+    const data = (await res.json()) as { error: string[]; result: T };
+    if (data.error?.length) throw new Error(`Kraken ${path}: ${data.error.join(', ')}`);
+    return data.result;
   });
-
-  if (!res.ok) throw new Error(`Kraken ${path}: ${res.status} ${res.statusText}`);
-  const data = (await res.json()) as { error: string[]; result: T };
-  if (data.error?.length) throw new Error(`Kraken ${path}: ${data.error.join(', ')}`);
-  return data.result;
 }
 
 // ─── Public API ───────────────────────────────────────────────
@@ -79,6 +90,7 @@ export interface OrderOpts {
   ordertype: 'market' | 'limit';
   volume: string;        // quantity in base currency
   price?: string;        // required for limit orders
+  leverage?: string;     // e.g. '2:1' — only if MARGIN_TRADING=true
 }
 
 export interface OrderResult {
@@ -94,6 +106,13 @@ export async function placeOrder(opts: OrderOpts): Promise<OrderResult> {
     throw new Error(`Order cost $${(vol * price).toFixed(2)} exceeds $${MAX_POSITION_USD} limit`);
   }
 
+  // Block margin trading unless explicitly enabled
+  if (opts.leverage) {
+    if (process.env.MARGIN_TRADING !== 'true') {
+      throw new Error('Margin trading is disabled. Set MARGIN_TRADING=true in .env to enable.');
+    }
+  }
+
   const params: Record<string, string> = {
     pair: opts.pair,
     type: opts.type,
@@ -101,6 +120,7 @@ export async function placeOrder(opts: OrderOpts): Promise<OrderResult> {
     volume: opts.volume,
   };
   if (opts.price) params.price = opts.price;
+  if (opts.leverage && process.env.MARGIN_TRADING === 'true') params.leverage = opts.leverage;
 
   return krakenPrivate<OrderResult>('/0/private/AddOrder', params);
 }

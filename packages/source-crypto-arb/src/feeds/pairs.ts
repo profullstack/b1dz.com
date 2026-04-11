@@ -25,6 +25,8 @@ export function normalizePair(canonical: string, exchange: string): string {
     }
     case 'binance-us':
       return `${b}${q}`;
+    case 'coinbase':
+      return `${b}-${q}`;
     default:
       return `${b}${q}`;
   }
