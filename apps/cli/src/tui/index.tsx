@@ -2,9 +2,8 @@ import React from 'react';
 import blessed from 'blessed';
 import { render } from 'react-blessed';
 import { CryptoDashboard } from './crypto-dashboard.js';
-import { EventEmitter } from 'node:events';
-
-export const tuiEvents = new EventEmitter();
+import { tuiEvents } from './events.js';
+export { tuiEvents } from './events.js';
 
 export function startTui() {
   const screen = (blessed as any).screen({

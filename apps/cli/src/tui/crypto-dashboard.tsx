@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { tuiEvents } from './index.js';
+import { tuiEvents } from './events.js';
 import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 
