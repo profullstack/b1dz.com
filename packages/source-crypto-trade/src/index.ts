@@ -132,9 +132,9 @@ async function hydrateFromExchange() {
 
     // Map Kraken asset names to pair names
     const assetToPair: Record<string, string> = { XXBT: 'BTC-USD', XETH: 'ETH-USD', XZEC: 'ZEC-USD', XXRP: 'XRP-USD', XXLM: 'XLM-USD', XXMR: 'XMR-USD', XXDG: 'DOGE-USD' };
-    // Also handle short names
+    // Any asset not in the map — use asset name directly
     for (const [asset] of Object.entries(balance)) {
-      if (!assetToPair[asset] && !stables.has(asset) && asset.length <= 5) {
+      if (!assetToPair[asset] && !stables.has(asset)) {
         assetToPair[asset] = `${asset}-USD`;
       }
     }
@@ -144,21 +144,15 @@ async function hydrateFromExchange() {
 
     for (const h of holdings) {
       const pair = assetToPair[h.asset];
-      if (!pair) {
-        console.log(`[trade] holding ${h.asset}=${h.amount} but no pair mapping — skipping`);
-        continue;
-      }
+      if (!pair) continue;
+      const base = pair.replace('-USD', '');
 
-      // Find the most recent BUY trade for this pair
-      const krakenPairVariants = [
-        pair.replace('-', ''),
-        pair.replace('-', '').replace('BTC', 'XBT'),
-        `X${pair.replace('-USD', '')}ZUSD`,
-        `XX${pair.replace('-USD', '')}ZUSD`,
-      ];
-      const buyTrade = trades.find((t) =>
-        t.type === 'buy' && krakenPairVariants.some((v) => t.pair.includes(v) || v.includes(t.pair))
-      );
+      // Find the most recent BUY trade for this pair — match flexibly
+      const buyTrade = trades.find((t) => {
+        if (t.type !== 'buy') return false;
+        const tp = t.pair.toUpperCase();
+        return tp.includes(base.toUpperCase()) && tp.includes('USD');
+      });
 
       const entryPrice = buyTrade ? parseFloat(buyTrade.price) : 0;
       const entryTime = buyTrade ? buyTrade.time * 1000 : Date.now();
@@ -177,23 +171,29 @@ async function hydrateFromExchange() {
       }
     }
 
-    // Calculate today's realized P/L from trade history
+    // Calculate today's realized P/L — only matched buy+sell round-trips
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayTs = todayStart.getTime() / 1000;
+    const todayTrades = trades.filter((t) => t.time >= todayTs);
+    const buysByPair = new Map<string, { cost: number; fee: number }>();
     let todayPnl = 0;
-    for (const t of trades) {
-      if (t.time < todayTs) break;
+    for (const t of [...todayTrades].reverse()) { // oldest first
       const cost = parseFloat(t.cost);
       const fee = parseFloat(t.fee);
-      if (t.type === 'sell') todayPnl += cost - fee;
-      else todayPnl -= cost + fee;
+      if (t.type === 'buy') {
+        buysByPair.set(t.pair, { cost, fee });
+      } else if (t.type === 'sell') {
+        const buy = buysByPair.get(t.pair);
+        if (buy) {
+          todayPnl += (cost - buy.cost) - fee - buy.fee;
+          buysByPair.delete(t.pair);
+        }
+      }
     }
-    // Only set if there were sells (buys alone aren't losses)
-    const hasSells = trades.some((t) => t.time >= todayTs && t.type === 'sell');
-    if (hasSells) {
-      dailyPnl = todayPnl;
-      console.log(`[trade] today's realized P/L: $${dailyPnl.toFixed(2)}`);
+    dailyPnl = todayPnl;
+    if (todayTrades.length > 0) {
+      console.log(`[trade] today: ${todayTrades.length} trades, realized P/L: $${dailyPnl.toFixed(2)}, ${openPositions.size} open positions`);
     }
   } catch (e) {
     console.error(`[trade] exchange hydration failed: ${(e as Error).message}`);
