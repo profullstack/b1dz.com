@@ -1,13 +1,35 @@
-# Railway uses the Dockerfile at the root.
-# Deploy this repo as TWO services from the same image:
-#   1. Web service     — startCommand defaults from CMD (`pnpm start`)
-#   2. Daemon service  — override startCommand with: `pnpm daemon`
+# b1dz.com Railway deployment
 #
-# Required env vars on BOTH services (set in the Railway dashboard):
+# Deploy as THREE services from the same Docker image:
+#
+#   1. Web/API  — serves Next.js app + REST API
+#   2. Daemon   — runs trading engine (arb scanner + trade strategies)
+#   3. (optional) CLI — not deployed, runs locally via `b1dz tui`
+#
+# Setup in Railway dashboard:
+#   - Create a new project
+#   - Add service "web"   → Source: this repo, Start: pnpm start
+#   - Add service "daemon" → Source: this repo, Start: pnpm daemon
+#   - Add shared variables (see below) to both services
+#
+# Required env vars (set on BOTH services):
 #   NEXT_PUBLIC_SUPABASE_URL
 #   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 #   SUPABASE_SECRET_KEY
-#   B1DZ_API_URL                  https://<your-railway-domain> (web service URL)
+#   B1DZ_API_URL              → set to the web service's Railway URL (e.g. https://b1dz-web.up.railway.app)
+#
+# Required env vars (daemon only):
+#   KRAKEN_API_KEY
+#   KRAKEN_API_SECRET
+#   COINBASE_API_KEY_NAME
+#   COINBASE_API_PRIVATE_KEY
+#   BINANCE_US_API_KEY
+#   BINANCE_US_API_SECRET
+#   ENABLE_PROXY              → true (for Binance.US)
+#   PROXY_URL
+#   PROXY_USERNAME
+#   PROXY_PASSWORD
+#   MARGIN_TRADING            → false (default)
 
 [build]
 builder = "DOCKERFILE"

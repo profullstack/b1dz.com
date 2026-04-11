@@ -19,11 +19,11 @@
     "@b1dz/storage-supabase": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
-    "@supabase/supabase-js": "latest"
+    "@supabase/supabase-js": "latest",
+    "tsx": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
-    "tsx": "latest",
     "typescript": "latest",
     "vitest": "latest"
   }

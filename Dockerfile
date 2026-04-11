@@ -1,19 +1,21 @@
 # Multi-stage Dockerfile for b1dz.com
 #
 # Builds the entire pnpm workspace once. The final image contains both
-# `apps/web` (Next.js) and `apps/daemon` (background runner). Choose which
-# one to start at runtime by overriding CMD:
+# `apps/web` (Next.js API + dashboard) and `apps/daemon` (trading engine).
 #
+# Choose which service to start at runtime:
 #   docker run b1dz pnpm start     # web/api server (default)
-#   docker run b1dz pnpm daemon    # background daemon
+#   docker run b1dz pnpm daemon    # trading daemon
 #
-# On Railway: deploy as TWO services from the same image (web + daemon),
-# each with its own CMD set in the Railway dashboard.
+# On Railway: deploy as TWO services from the same image, each with
+# its own CMD set in the Railway dashboard.
 
 FROM node:22-bookworm-slim AS base
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     NEXT_TELEMETRY_DISABLED=1
+# Install curl for the Binance.US proxy (uses curl via child_process)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
 
 # ---- deps ----
@@ -24,7 +26,6 @@ COPY tsconfig.base.json turbo.json ./
 COPY apps/web/package.json apps/web/
 COPY apps/cli/package.json apps/cli/
 COPY apps/daemon/package.json apps/daemon/
-COPY apps/extension/package.json apps/extension/ 2>/dev/null || true
 COPY packages/core/package.json packages/core/
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/storage-json/package.json packages/storage-json/
@@ -33,17 +34,24 @@ COPY packages/storage-b1dz-api/package.json packages/storage-b1dz-api/
 COPY packages/source-dealdash/package.json packages/source-dealdash/
 COPY packages/source-crypto-arb/package.json packages/source-crypto-arb/
 COPY packages/source-crypto-trade/package.json packages/source-crypto-trade/
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # ---- build ----
 FROM base AS build
 WORKDIR /app
 COPY --from=deps /app /app
 COPY . .
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile --ignore-scripts
-RUN pnpm --filter @b1dz/web build
+RUN pnpm install --frozen-lockfile --ignore-scripts
+# Build packages first (daemon depends on them), then web
+RUN pnpm --filter @b1dz/core build && \
+    pnpm --filter @b1dz/sdk build && \
+    pnpm --filter @b1dz/storage-json build && \
+    pnpm --filter @b1dz/storage-supabase build && \
+    pnpm --filter @b1dz/storage-b1dz-api build && \
+    pnpm --filter @b1dz/source-crypto-arb build && \
+    pnpm --filter @b1dz/source-crypto-trade build && \
+    pnpm --filter @b1dz/daemon build && \
+    pnpm --filter @b1dz/web build || echo "web build failed (non-blocking for daemon)"
 
 # ---- runtime ----
 FROM base AS runtime

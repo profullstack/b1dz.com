@@ -12,25 +12,29 @@
  */
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
-import { GeminiFeed, KrakenFeed, BinanceUsFeed } from './feeds/index.js';
-export { GeminiFeed, KrakenFeed, BinanceUsFeed } from './feeds/index.js';
+import { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed } from './feeds/index.js';
+export { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed } from './feeds/index.js';
 export { getBalance, placeOrder, getOpenOrders, getTradeHistory, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
 export { getBalance as getBinanceBalance, placeOrder as placeBinanceOrder, getOpenOrders as getBinanceOpenOrders, BINANCE_TAKER_FEE } from './feeds/binance-us-private.js';
+export { getBalance as getCoinbaseBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE } from './feeds/coinbase-private.js';
 import { placeOrder as placeKrakenOrder } from './feeds/kraken-private.js';
 import { placeOrder as placeBinanceOrder } from './feeds/binance-us-private.js';
+import { placeOrder as placeCoinbaseOrder } from './feeds/coinbase-private.js';
 import { normalizePair } from './feeds/pairs.js';
+import { getActivePairs } from './pair-discovery.js';
+export { getActivePairs } from './pair-discovery.js';
 
 const MAX_POSITION_USD = 100;
 
-// Configuration — pull from env / source state in real impl
-const PAIRS = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
-const FEEDS: PriceFeed[] = [new GeminiFeed(), new KrakenFeed(), new BinanceUsFeed()];
+// Feeds — Gemini and Binance.US included for price comparison even if we can't trade on them
+const FEEDS: PriceFeed[] = [new GeminiFeed(), new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
 
-// Per-exchange taker fee (%) — placeholder values, refine with real schedules
+// Per-exchange taker fee (%)
 const TAKER_FEES: Record<string, number> = {
   gemini: 0.004,        // 0.40%
   kraken: 0.0026,       // 0.26%
   'binance-us': 0.001,  // 0.10%
+  coinbase: 0.006,      // 0.60%
 };
 
 interface ArbItem {
@@ -80,6 +84,7 @@ export const cryptoArbSource: Source<ArbItem> = {
   id: 'crypto-arb',
   pollIntervalMs: 1000, // arb windows close fast
   async poll() {
+    const PAIRS = await getActivePairs();
     const items: ArbItem[] = [];
     for (const pair of PAIRS) {
       const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair))))
@@ -134,7 +139,7 @@ export const cryptoArbSource: Source<ArbItem> = {
   },
   async act(opp): Promise<ActionResult> {
     const arb = opp.metadata as unknown as ArbResult & { size: number };
-    const supported = ['kraken', 'binance-us'];
+    const supported = ['kraken', 'binance-us', 'coinbase'];
 
     if (!supported.includes(arb.buyExchange) || !supported.includes(arb.sellExchange)) {
       return { ok: false, message: `unsupported exchange (${arb.buyExchange}/${arb.sellExchange})`, permanent: true };
@@ -176,6 +181,14 @@ export const cryptoArbSource: Source<ArbItem> = {
           price: arb.buyPrice.toFixed(2),
         });
         console.log(`[arb] BUY on binance-us: orderId=${result.orderId} status=${result.status}`);
+      } else if (arb.buyExchange === 'coinbase') {
+        const result = await placeCoinbaseOrder({
+          productId: arb.pair,
+          side: 'BUY',
+          size: volume.toFixed(8),
+          limitPrice: arb.buyPrice.toFixed(2),
+        });
+        console.log(`[arb] BUY on coinbase: orderId=${result.order_id}`);
       }
 
       // Place sell leg
@@ -197,6 +210,14 @@ export const cryptoArbSource: Source<ArbItem> = {
           price: arb.sellPrice.toFixed(2),
         });
         console.log(`[arb] SELL on binance-us: orderId=${result.orderId} status=${result.status}`);
+      } else if (arb.sellExchange === 'coinbase') {
+        const result = await placeCoinbaseOrder({
+          productId: arb.pair,
+          side: 'SELL',
+          size: volume.toFixed(8),
+          limitPrice: arb.sellPrice.toFixed(2),
+        });
+        console.log(`[arb] SELL on coinbase: orderId=${result.order_id}`);
       }
 
       return { ok: true, message: `arb executed, net ~$${netProfit.toFixed(4)}` };

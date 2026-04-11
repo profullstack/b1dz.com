@@ -1,0 +1,147 @@
+/**
+ * Dynamic pair discovery — finds the best tradeable pairs across exchanges.
+ *
+ * 1. Fetch all USD pairs + volumes from Kraken and Coinbase
+ * 2. Find pairs that exist on BOTH exchanges
+ * 3. Rank by 24h volume (must exceed minimum threshold)
+ * 4. Return top N pairs for the arb scanner to poll
+ *
+ * Refreshes every 5 minutes.
+ */
+
+import { createSign, randomBytes } from 'node:crypto';
+
+const MIN_VOLUME_USD = 100_000;
+const MAX_PAIRS = 15;
+const REFRESH_INTERVAL = 5 * 60 * 1000;
+
+const EXCLUDED = new Set(['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USDP', 'GUSD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY']);
+
+let cachedPairs: string[] = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
+let lastRefresh = 0;
+
+// ─── Kraken ───────────────────────────────────────────────────
+
+function normalizeKrakenBase(krakenName: string): string | null {
+  let base = krakenName.replace(/ZUSD$/, '').replace(/USD$/, '');
+  if (base.startsWith('XX')) base = base.slice(2);
+  else if (base.startsWith('X') && base.length > 3) base = base.slice(1);
+  else if (base.startsWith('Z')) base = base.slice(1);
+  if (base === 'XBT') base = 'BTC';
+  if (base === 'XDG') base = 'DOGE';
+  if (EXCLUDED.has(base)) return null;
+  if (base.length === 0) return null;
+  return base;
+}
+
+async function getKrakenVolumes(): Promise<Map<string, number>> {
+  const res = await fetch('https://api.kraken.com/0/public/Ticker');
+  if (!res.ok) throw new Error(`Kraken ticker: ${res.status}`);
+  const data = (await res.json()) as { error: string[]; result: Record<string, { v: [string, string]; c: [string, string] }> };
+  if (data.error?.length) throw new Error(data.error.join(', '));
+
+  const volumes = new Map<string, number>();
+  for (const [name, ticker] of Object.entries(data.result)) {
+    if (!name.endsWith('USD') && !name.endsWith('ZUSD')) continue;
+    const base = normalizeKrakenBase(name);
+    if (!base) continue;
+    const pair = `${base}-USD`;
+    const vol24h = parseFloat(ticker.v[1]);
+    const lastPrice = parseFloat(ticker.c[0]);
+    const volUsd = vol24h * lastPrice;
+    if (volUsd < MIN_VOLUME_USD) continue;
+    const existing = volumes.get(pair) ?? 0;
+    if (volUsd > existing) volumes.set(pair, volUsd);
+  }
+  return volumes;
+}
+
+// ─── Coinbase ─────────────────────────────────────────────────
+
+function base64url(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; change24h: number }>> {
+  const keyName = process.env.COINBASE_API_KEY_NAME;
+  const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
+  if (!keyName || !privateKey) return new Map();
+
+  const pem = privateKey.replace(/\\n/g, '\n');
+  const path = '/api/v3/brokerage/products';
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = randomBytes(16).toString('hex');
+  const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
+  const payload = { sub: keyName, iss: 'cdp', aud: ['cdp_service'], nbf: now, exp: now + 120, uris: [`GET api.coinbase.com${path}`] };
+  const segs = [base64url(Buffer.from(JSON.stringify(header))), base64url(Buffer.from(JSON.stringify(payload)))];
+  const input = segs.join('.');
+  const sign = createSign('SHA256');
+  sign.update(input);
+  const jwt = input + '.' + base64url(sign.sign({ key: pem, dsaEncoding: 'ieee-p1363' }));
+
+  const res = await fetch(`https://api.coinbase.com${path}?product_type=SPOT&limit=250`, {
+    headers: { Authorization: `Bearer ${jwt}` },
+  });
+  if (!res.ok) return new Map();
+  const data = (await res.json()) as { products: { product_id: string; quote_currency_id: string; base_currency_id: string; volume_24h: string; price: string; price_percentage_change_24h: string }[] };
+
+  const result = new Map<string, { volUsd: number; change24h: number }>();
+  for (const p of data.products) {
+    if (p.quote_currency_id !== 'USD') continue;
+    if (EXCLUDED.has(p.base_currency_id)) continue;
+    const vol = parseFloat(p.volume_24h);
+    const price = parseFloat(p.price);
+    const volUsd = vol * price;
+    if (volUsd < MIN_VOLUME_USD) continue;
+    result.set(p.product_id, { volUsd, change24h: parseFloat(p.price_percentage_change_24h || '0') });
+  }
+  return result;
+}
+
+// ─── Discovery ────────────────────────────────────────────────
+
+async function discoverPairs(): Promise<string[]> {
+  const [krakenVols, coinbaseData] = await Promise.all([
+    getKrakenVolumes(),
+    getCoinbaseVolumes(),
+  ]);
+
+  // Find pairs on BOTH exchanges
+  const common: { pair: string; totalVol: number; change: number }[] = [];
+  for (const [pair, krakenVol] of krakenVols) {
+    const cb = coinbaseData.get(pair);
+    if (!cb) continue;
+    common.push({ pair, totalVol: krakenVol + cb.volUsd, change: cb.change24h });
+  }
+
+  // Sort by volume, take top N
+  common.sort((a, b) => b.totalVol - a.totalVol);
+  const top = common.slice(0, MAX_PAIRS);
+
+  if (top.length > 0) {
+    console.log(`[discovery] ${common.length} common pairs, scanning top ${top.length}:`);
+    for (const p of top.slice(0, 8)) {
+      const chg = p.change >= 0 ? `+${p.change.toFixed(1)}%` : `${p.change.toFixed(1)}%`;
+      console.log(`  ${p.pair.padEnd(12)} vol=$${(p.totalVol / 1e6).toFixed(1)}M  24h=${chg}`);
+    }
+    if (top.length > 8) console.log(`  ... +${top.length - 8} more`);
+  }
+
+  return top.map((p) => p.pair);
+}
+
+/**
+ * Get the current list of pairs to scan. Refreshes every 5 minutes.
+ */
+export async function getActivePairs(): Promise<string[]> {
+  if (Date.now() - lastRefresh > REFRESH_INTERVAL) {
+    lastRefresh = Date.now();
+    try {
+      const pairs = await discoverPairs();
+      if (pairs.length > 0) cachedPairs = pairs;
+    } catch (e) {
+      console.error(`[discovery] error: ${(e as Error).message}`);
+    }
+  }
+  return cachedPairs;
+}

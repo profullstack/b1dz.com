@@ -108,13 +108,13 @@ importers:
       '@supabase/supabase-js':
         specifier: latest
         version: 2.103.0
+      tsx:
+        specifier: latest
+        version: 4.21.0
     devDependencies:
       '@types/node':
         specifier: latest
         version: 25.6.0
-      tsx:
-        specifier: latest
-        version: 4.21.0
       typescript:
         specifier: latest
         version: 6.0.2
@@ -197,6 +197,9 @@ importers:
       '@b1dz/core':
         specifier: workspace:*
         version: link:../core
+      undici:
+        specifier: ^8.0.2
+        version: 8.0.2
     devDependencies:
       '@types/node':
         specifier: latest
@@ -2513,6 +2516,10 @@ packages:
   undici-types@7.19.2:
     resolution: {integrity: sha512-qYVnV5OEm2AW8cJMCpdV20CDyaN3g0AjDlOGf1OW4iaDEx8MwdtChUp4zu4H0VP3nDRF/8RKWH+IPp9uW0YGZg==}
 
+  undici@8.0.2:
+    resolution: {integrity: sha512-B9MeU5wuFhkFAuNeA19K2GDFcQXZxq33fL0nRy2Aq30wdufZbyyvxW3/ChaeipXVfy/wUweZyzovQGk39+9k2w==}
+    engines: {node: '>=22.19.0'}
+
   universalify@2.0.1:
     resolution: {integrity: sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw==}
     engines: {node: '>= 10.0.0'}
@@ -4786,6 +4793,8 @@ snapshots:
   typescript@6.0.2: {}
 
   undici-types@7.19.2: {}
+
+  undici@8.0.2: {}
 
   universalify@2.0.1: {}
 

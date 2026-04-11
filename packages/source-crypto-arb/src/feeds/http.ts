@@ -1,8 +1,11 @@
 /**
- * Shared fetch wrapper with retry, backoff, and per-host rate limiting.
+ * Shared fetch wrapper with retry, backoff, per-host rate limiting,
+ * and proxy support for blocked hosts (e.g. Binance.US).
  */
 
-const MIN_INTERVAL_MS = 350; // ~3 req/s per host — safe for Gemini/Kraken
+import { proxyFetch } from './proxy.js';
+
+const MIN_INTERVAL_MS = 350;
 const lastRequestAt = new Map<string, number>();
 
 async function throttle(host: string): Promise<void> {
@@ -19,7 +22,7 @@ export async function fetchJson<T>(url: string, retries = 3): Promise<T> {
   for (let attempt = 0; attempt < retries; attempt++) {
     await throttle(host);
     try {
-      const res = await fetch(url);
+      const res = await proxyFetch(url);
       if (res.ok) return (await res.json()) as T;
       if (res.status === 429 || res.status >= 500) {
         lastErr = new Error(`${res.status} ${res.statusText}`);
