@@ -35,7 +35,6 @@ const config: NextConfig = {
   reactStrictMode: true,
   output: 'standalone',
   typescript: { ignoreBuildErrors: true },
-  eslint: { ignoreDuringBuilds: true },
   transpilePackages: [
     '@b1dz/core',
     '@b1dz/sdk',
