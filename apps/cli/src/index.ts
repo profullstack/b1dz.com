@@ -90,7 +90,8 @@ Auth:
   b1dz whoami           show current user
 
 Dashboard:
-  b1dz tui                 live crypto dashboard
+  b1dz tui                 live crypto dashboard (production API)
+  b1dz tui --dev           live crypto dashboard (local API)
 
 Sources:
   b1dz <source> run        start headless
@@ -129,6 +130,12 @@ async function tailAlerts() {
 
 const [, , source, sub] = process.argv;
 
+// --prod flag or `b1dz tui` (without dev) uses production API
+const isProd = process.argv.includes('--prod') || !process.argv.includes('--dev');
+if (source === 'tui' && isProd && process.env.B1DZ_API_URL_PROD) {
+  process.env.B1DZ_API_URL = process.env.B1DZ_API_URL_PROD;
+}
+
 if (!source || source === 'help' || source === '--help' || source === '-h') {
   help();
   process.exit(0);
@@ -144,8 +151,10 @@ if (source === 'whoami') { whoami(); process.exit(0); }
 requireAuth();
 
 if (source === 'tui') {
+  const env = isProd ? 'production' : 'development';
   console.log('b1dz tui starting...');
-  console.log(`  API:        ${process.env.B1DZ_API_URL || 'not set (run pnpm dev:web)'}`);
+  console.log(`  Env:        ${env}`);
+  console.log(`  API:        ${process.env.B1DZ_API_URL || 'not set'}`);
   console.log(`  User:       ${currentUser()?.email ?? 'not logged in'}`);
   console.log(`  Auto-trade: ON (daemon controls trading)`);
   console.log('  Connecting to API...');
