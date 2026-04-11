@@ -230,7 +230,7 @@ export function CryptoDashboard() {
     const fmt = (v?: number) => v ? `$${v.toFixed(2)}`.padStart(14) : '           -  ';
     priceLines.push(` ${pair.padEnd(16)} ${fmt(kr?.bid)}  ${fmt(cb?.bid)}  ${fmt(bn?.bid)}`);
   }
-  if (!daemonOnline) priceLines.push('', ' {red-fg}Daemon offline — run: pnpm dev:daemon{/red-fg}');
+  if (!daemonOnline) priceLines.push('', ' {red-fg}Daemon offline — waiting for data...{/red-fg}');
   if (apiError) priceLines.push(` {red-fg}API: ${apiError.slice(0, 60)}{/red-fg}`);
 
   // Arb spreads — show top 5
