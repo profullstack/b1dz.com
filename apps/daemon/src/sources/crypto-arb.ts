@@ -19,7 +19,10 @@ let cachedCoinbaseBalance: Record<string, string> = {};
 let cachedRecentTrades: unknown[] = [];
 let cachedOpenOrders: unknown[] = [];
 let lastPrivateFetch = 0;
-const PRIVATE_FETCH_INTERVAL = 60_000;
+const PRIVATE_FETCH_INTERVAL = 15_000; // 15 seconds
+
+const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
+const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
 
 export const cryptoArbWorker: SourceWorker = {
   id: 'crypto-arb',
@@ -32,7 +35,7 @@ export const cryptoArbWorker: SourceWorker = {
     const alerts = new AlertBus();
     const sourceCtx = { storage, alerts, state: ctx.payload };
 
-    // ── Fetch balances FIRST (before slow price polling) ──
+    // ── Fetch balances + trade history every 60s (private API, rate limited) ──
     if (Date.now() - lastPrivateFetch > PRIVATE_FETCH_INTERVAL) {
       lastPrivateFetch = Date.now();
       const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -66,89 +69,33 @@ export const cryptoArbWorker: SourceWorker = {
       } catch (e) {
         console.error(`b1dzd: coinbase balance error: ${(e as Error).message}`);
       }
-
-      // Fetch prices for holdings + majors from ALL exchanges
-      const quickPrices: { exchange: string; pair: string; bid: number; ask: number }[] = [];
-      const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
-      const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
-      const pairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);
-      for (const [k, v] of Object.entries(cachedKrakenBalance)) {
-        if (parseFloat(v) > 0.0001 && !stableSet.has(k)) {
-          pairsToFetch.add(`${krakenNameMap[k] ?? k}-USD`);
-        }
-      }
-      for (const [k, v] of Object.entries(cachedCoinbaseBalance)) {
-        if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${k}-USD`);
-      }
-      for (const [k, v] of Object.entries(cachedBinanceBalance)) {
-        if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${k}-USD`);
-      }
-      // Fetch from every feed for each pair
-      for (const pair of pairsToFetch) {
-        const snaps = await Promise.all(FEEDS.map((f) => f.snapshot(pair).catch(() => null)));
-        for (const snap of snaps) {
-          if (snap) quickPrices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
-        }
-      }
-
-      // Compute arb spreads from quick prices
-      const quickSpreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean }[] = [];
-      for (const pair of pairsToFetch) {
-        const pairPrices = quickPrices.filter((p) => p.pair === pair);
-        if (pairPrices.length < 2) continue;
-        let bestSpread = -Infinity;
-        let buyEx = '';
-        let sellEx = '';
-        for (const buyer of pairPrices) {
-          for (const seller of pairPrices) {
-            if (buyer.exchange === seller.exchange) continue;
-            const gross = ((seller.bid - buyer.ask) / buyer.ask) * 100;
-            if (gross > bestSpread) {
-              bestSpread = gross;
-              buyEx = buyer.exchange;
-              sellEx = seller.exchange;
-            }
-          }
-        }
-        if (bestSpread > -Infinity) {
-          quickSpreads.push({ pair, spread: bestSpread, buyExchange: buyEx, sellExchange: sellEx, profitable: bestSpread > 0.36 });
-        }
-      }
-      quickSpreads.sort((a, b) => b.spread - a.spread);
-
-      // Save balances + prices + spreads immediately so TUI has data
-      await ctx.savePayload({
-        enabled: ctx.payload?.enabled ?? true,
-        prices: quickPrices,
-        spreads: quickSpreads,
-        krakenBalance: cachedKrakenBalance,
-        binanceBalance: cachedBinanceBalance,
-        coinbaseBalance: cachedCoinbaseBalance,
-        recentTrades: cachedRecentTrades,
-        openOrders: cachedOpenOrders,
-        daemon: {
-          lastTickAt: new Date().toISOString(),
-          worker: 'crypto-arb',
-          status: 'running',
-        },
-      });
     }
 
-    // ── Poll prices for top pairs ──
-    const PAIRS = await getActivePairs();
+    // ── Fetch prices every tick (public API, no rate limit issues) ──
+    const pairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);
+    for (const [k, v] of Object.entries(cachedKrakenBalance)) {
+      if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${krakenNameMap[k] ?? k}-USD`);
+    }
+    for (const [k, v] of Object.entries(cachedCoinbaseBalance)) {
+      if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${k}-USD`);
+    }
+    for (const [k, v] of Object.entries(cachedBinanceBalance)) {
+      if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${k}-USD`);
+    }
+
     const prices: { exchange: string; pair: string; bid: number; ask: number }[] = [];
-    for (const pair of PAIRS) {
-      const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair))))
-        .filter((s): s is MarketSnapshot => s != null);
-      for (const s of snaps) {
-        prices.push({ exchange: s.exchange, pair: s.pair, bid: s.bid, ask: s.ask });
+    for (const pair of pairsToFetch) {
+      const snaps = await Promise.all(FEEDS.map((f) => f.snapshot(pair).catch(() => null)));
+      for (const snap of snaps) {
+        if (snap) prices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
       }
     }
 
-    // Compute arb spreads
+    // ── Compute arb spreads every tick ──
     const spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean }[] = [];
-    for (const pair of PAIRS) {
+    for (const pair of pairsToFetch) {
       const pairPrices = prices.filter((p) => p.pair === pair);
+      if (pairPrices.length < 2) continue;
       let bestSpread = -Infinity;
       let buyEx = '';
       let sellEx = '';
@@ -156,23 +103,16 @@ export const cryptoArbWorker: SourceWorker = {
         for (const seller of pairPrices) {
           if (buyer.exchange === seller.exchange) continue;
           const gross = ((seller.bid - buyer.ask) / buyer.ask) * 100;
-          if (gross > bestSpread) {
-            bestSpread = gross;
-            buyEx = buyer.exchange;
-            sellEx = seller.exchange;
-          }
+          if (gross > bestSpread) { bestSpread = gross; buyEx = buyer.exchange; sellEx = seller.exchange; }
         }
       }
-      spreads.push({
-        pair,
-        spread: bestSpread === -Infinity ? 0 : bestSpread,
-        buyExchange: buyEx,
-        sellExchange: sellEx,
-        profitable: bestSpread > 0.36,
-      });
+      if (bestSpread > -Infinity) {
+        spreads.push({ pair, spread: bestSpread, buyExchange: buyEx, sellExchange: sellEx, profitable: bestSpread > 0.36 });
+      }
     }
+    spreads.sort((a, b) => b.spread - a.spread);
 
-    // Run arb evaluation + execution
+    // ── Run arb evaluation + execution ──
     const items = await cryptoArbSource.poll(sourceCtx);
     const opps: unknown[] = (ctx.payload?.opportunities as unknown[]) ?? [];
     for (const item of items) {
@@ -186,7 +126,7 @@ export const cryptoArbWorker: SourceWorker = {
     }
     while (opps.length > 100) opps.shift();
 
-    // Save full state
+    // ── Save everything every tick ──
     await ctx.savePayload({
       enabled: ctx.payload?.enabled ?? true,
       opportunities: opps,
