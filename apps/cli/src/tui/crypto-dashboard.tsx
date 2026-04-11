@@ -303,63 +303,54 @@ export function CryptoDashboard() {
     if (p.exchange === 'kraken' && p.bid > 0) priceOf[p.pair.split('-')[0]] = p.bid;
   }
 
-  // Kraken: sum cash + value crypto
-  let krakenCash = 0;
-  const krakenCrypto: { asset: string; amount: number; value: number }[] = [];
-  for (const [k, v] of Object.entries(krakenBal)) {
-    const name = krakenNameMap[k] ?? k;
-    const val = parseFloat(v);
-    if (val < 0.0001) continue;
-    if (['USD', 'USDC', 'USDT'].includes(name)) { krakenCash += val; }
-    else {
-      const usdVal = val * (priceOf[name] ?? 0);
-      if (usdVal > 0.01) krakenCrypto.push({ asset: name, amount: val, value: usdVal });
+  // Helper: extract cash + crypto from a balance map
+  const stablecoins = new Set(['USD', 'USDC', 'USDT']);
+  function parseBal(bal: Record<string, string>, nameMap?: Record<string, string>) {
+    let cash = 0;
+    const crypto: { asset: string; amount: number; value: number }[] = [];
+    for (const [k, v] of Object.entries(bal)) {
+      const name = nameMap?.[k] ?? k;
+      const val = parseFloat(v);
+      if (val < 0.0001) continue;
+      if (stablecoins.has(name)) { cash += val; }
+      else {
+        const usdVal = val * (priceOf[name] ?? 0);
+        crypto.push({ asset: name, amount: val, value: usdVal });
+      }
     }
+    return { cash, crypto };
   }
 
-  // Binance: sum stablecoins
-  let binanceCash = 0;
-  const binanceCrypto: { asset: string; amount: number; value: number }[] = [];
-  for (const [k, v] of Object.entries(binanceBal)) {
-    const val = parseFloat(v);
-    if (val < 0.0001) continue;
-    if (['USD', 'USDC', 'USDT'].includes(k)) { binanceCash += val; }
-    else {
-      const usdVal = val * (priceOf[k] ?? 0);
-      if (usdVal > 0.01) binanceCrypto.push({ asset: k, amount: val, value: usdVal });
-    }
-  }
-
-  // Coinbase
-  let coinbaseCash = 0;
-  const coinbaseCrypto: { asset: string; amount: number; value: number }[] = [];
-  for (const [k, v] of Object.entries(coinbaseBal)) {
-    const val = parseFloat(v);
-    if (val < 0.0001) continue;
-    if (['USD', 'USDC', 'USDT'].includes(k)) { coinbaseCash += val; }
-    else {
-      const usdVal = val * (priceOf[k] ?? 0);
-      if (usdVal > 0.01) coinbaseCrypto.push({ asset: k, amount: val, value: usdVal });
-    }
-  }
+  const kraken = parseBal(krakenBal, krakenNameMap);
+  const binance = parseBal(binanceBal);
+  const coinbase = parseBal(coinbaseBal);
+  const krakenCash = kraken.cash;
+  const krakenCrypto = kraken.crypto;
+  const binanceCash = binance.cash;
+  const binanceCrypto = binance.crypto;
+  const coinbaseCash = coinbase.cash;
+  const coinbaseCrypto = coinbase.crypto;
 
   const krakenTotal = krakenCash + krakenCrypto.reduce((s, c) => s + c.value, 0);
   const binanceTotal = binanceCash + binanceCrypto.reduce((s, c) => s + c.value, 0);
   const coinbaseTotal = coinbaseCash + coinbaseCrypto.reduce((s, c) => s + c.value, 0);
   const totalValue = krakenTotal + binanceTotal + coinbaseTotal;
 
+  const fmtCrypto = (c: { asset: string; amount: number; value: number }) =>
+    c.value > 0.01 ? `${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})` : `${c.amount.toFixed(4)} ${c.asset}`;
+
   const balLines: string[] = [];
   // Kraken
   let krakenStr = ` {cyan-fg}Kraken{/}    $${krakenCash.toFixed(2)} USD`;
-  for (const c of krakenCrypto) krakenStr += ` + ${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})`;
+  for (const c of krakenCrypto) krakenStr += ` + ${fmtCrypto(c)}`;
   balLines.push(krakenStr);
   // Binance
   let binanceStr = ` {yellow-fg}Binance{/}   $${binanceCash.toFixed(2)} USDC`;
-  for (const c of binanceCrypto) binanceStr += ` + ${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})`;
+  for (const c of binanceCrypto) binanceStr += ` + ${fmtCrypto(c)}`;
   balLines.push(binanceStr);
   // Coinbase
   let coinbaseStr = ` {magenta-fg}Coinbase{/}  $${coinbaseCash.toFixed(2)} USD`;
-  for (const c of coinbaseCrypto) coinbaseStr += ` + ${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})`;
+  for (const c of coinbaseCrypto) coinbaseStr += ` + ${fmtCrypto(c)}`;
   balLines.push(coinbaseStr);
   // Total
   balLines.push(' ─────────────────────────');
