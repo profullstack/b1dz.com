@@ -129,13 +129,17 @@ export function CryptoDashboard() {
     let client: B1dzClient | null = null;
 
     const init = async () => {
-      client = await createApiClient();
-      if (!client) {
-        addLog('{red-fg}No API credentials — run b1dz login first{/red-fg}');
-        return;
+      try {
+        client = await createApiClient();
+        if (!client) {
+          addLog('{red-fg}No API credentials — run b1dz login first{/red-fg}');
+          return;
+        }
+        addLog('{green-fg}Connected to API{/green-fg}');
+        poll();
+      } catch (e) {
+        addLog(`{red-fg}API init error: ${(e as Error).message?.slice(0, 60)}{/red-fg}`);
       }
-      addLog('{green-fg}Connected to API{/green-fg}');
-      poll();
     };
 
     const poll = async () => {
