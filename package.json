@@ -28,7 +28,10 @@
       "puppeteer",
       "esbuild",
       "sharp"
-    ]
+    ],
+    "overrides": {
+      "@types/react": "^19.0.0"
+    }
   },
   "devDependencies": {
     "@eslint/js": "latest",

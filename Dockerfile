@@ -51,7 +51,9 @@ RUN pnpm --filter @b1dz/core build && \
     pnpm --filter @b1dz/source-crypto-arb build && \
     pnpm --filter @b1dz/source-crypto-trade build && \
     pnpm --filter @b1dz/daemon build && \
-    pnpm --filter @b1dz/web build || echo "web build failed (non-blocking for daemon)"
+    NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co \
+    NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=placeholder \
+    pnpm --filter @b1dz/web build
 
 # ---- runtime ----
 FROM base AS runtime

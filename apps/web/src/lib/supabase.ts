@@ -2,14 +2,12 @@
  * Supabase clients for the Next.js app.
  *
  * - browser client: uses publishable key (RLS enforced)
- * - server client:  uses publishable key by default; can be swapped to the
- *                   secret key in trusted server contexts (cron, admin routes)
- *                   via createServerClient({ admin: true })
+ * - server client:  uses publishable key + cookies (server components only)
+ * - admin client:   uses secret key, bypasses RLS (API routes only)
  */
 
 import { createBrowserClient, createServerClient as createSsrServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
-import { cookies } from 'next/headers';
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const PUBLISHABLE = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
@@ -20,6 +18,8 @@ export function createBrowserSupabase() {
 }
 
 export async function createServerSupabase() {
+  // Dynamic import to avoid pulling next/headers into client bundles
+  const { cookies } = await import('next/headers');
   const cookieStore = await cookies();
   return createSsrServerClient(URL, PUBLISHABLE, {
     cookies: {

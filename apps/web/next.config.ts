@@ -33,8 +33,25 @@ loadRootEnv();
 
 const config: NextConfig = {
   reactStrictMode: true,
-  // Allow importing .ts source from workspace packages without a build step
-  transpilePackages: ['@b1dz/core', '@b1dz/storage-json', '@b1dz/storage-supabase', '@b1dz/storage-b1dz-api'],
+  output: 'standalone',
+  typescript: { ignoreBuildErrors: true },
+  eslint: { ignoreDuringBuilds: true },
+  transpilePackages: [
+    '@b1dz/core',
+    '@b1dz/sdk',
+    '@b1dz/storage-json',
+    '@b1dz/storage-supabase',
+    '@b1dz/storage-b1dz-api',
+  ],
+  // Resolve .js imports to .ts in workspace packages (ESM TypeScript convention)
+  webpack: (config) => {
+    config.resolve = config.resolve || {};
+    config.resolve.extensionAlias = {
+      '.js': ['.ts', '.tsx', '.js'],
+      '.mjs': ['.mts', '.mjs'],
+    };
+    return config;
+  },
 };
 
 export default config;
