@@ -12,6 +12,7 @@
 import { createSign, randomBytes } from 'node:crypto';
 
 const MIN_VOLUME_USD = 100_000;
+const MIN_MARKET_CAP_USD = 50_000_000; // $50M minimum market cap
 const MAX_PAIRS = 15;
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 
@@ -106,12 +107,37 @@ async function discoverPairs(): Promise<string[]> {
     getCoinbaseVolumes(),
   ]);
 
-  // Find pairs on BOTH exchanges
-  const common: { pair: string; totalVol: number; change: number }[] = [];
+  // Fetch market caps from CoinGecko (top 250 coins)
+  const marketCaps = new Map<string, number>();
+  try {
+    for (let page = 1; page <= 2; page++) {
+      const res = await fetch(
+        `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`,
+      );
+      if (!res.ok) break;
+      const coins = (await res.json()) as { symbol: string; market_cap: number }[];
+      for (const c of coins) {
+        marketCaps.set(`${c.symbol.toUpperCase()}-USD`, c.market_cap ?? 0);
+      }
+    }
+    console.log(`[discovery] fetched market caps for ${marketCaps.size} coins`);
+  } catch (e) {
+    console.error(`[discovery] coingecko error (skipping mcap filter): ${(e as Error).message}`);
+  }
+
+  // Find pairs on BOTH exchanges, filter by market cap
+  const common: { pair: string; totalVol: number; change: number; mcap: number }[] = [];
+  let filtered = 0;
   for (const [pair, krakenVol] of krakenVols) {
     const cb = coinbaseData.get(pair);
     if (!cb) continue;
-    common.push({ pair, totalVol: krakenVol + cb.volUsd, change: cb.change24h });
+    const mcap = marketCaps.get(pair) ?? 0;
+    // Skip if we have market cap data and it's below minimum
+    if (marketCaps.size > 0 && mcap > 0 && mcap < MIN_MARKET_CAP_USD) {
+      filtered++;
+      continue;
+    }
+    common.push({ pair, totalVol: krakenVol + cb.volUsd, change: cb.change24h, mcap });
   }
 
   // Sort by volume, take top N
@@ -119,10 +145,11 @@ async function discoverPairs(): Promise<string[]> {
   const top = common.slice(0, MAX_PAIRS);
 
   if (top.length > 0) {
-    console.log(`[discovery] ${common.length} common pairs, scanning top ${top.length}:`);
+    console.log(`[discovery] ${common.length} pairs (${filtered} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap), scanning top ${top.length}:`);
     for (const p of top.slice(0, 8)) {
       const chg = p.change >= 0 ? `+${p.change.toFixed(1)}%` : `${p.change.toFixed(1)}%`;
-      console.log(`  ${p.pair.padEnd(12)} vol=$${(p.totalVol / 1e6).toFixed(1)}M  24h=${chg}`);
+      const mcapStr = p.mcap > 0 ? `mcap=$${(p.mcap / 1e9).toFixed(1)}B` : 'mcap=?';
+      console.log(`  ${p.pair.padEnd(12)} vol=$${(p.totalVol / 1e6).toFixed(1)}M  24h=${chg}  ${mcapStr}`);
     }
     if (top.length > 8) console.log(`  ... +${top.length - 8} more`);
   }
