@@ -3,6 +3,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "cd /app && pnpm daemon & cd /app && pnpm --filter @b1dz/web start"
+startCommand = "bash -c 'pnpm daemon & pnpm --filter @b1dz/web start'"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
