@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(fav --help)",
+      "Bash(mkdir -p /home/ettinger/src/b1dz.com/apps/extension/icons)",
+      "Bash(cp /home/ettinger/src/b1dz.com/apps/web/public/favicon.svg /home/ettinger/src/b1dz.com/apps/extension/favicon.svg)",
+      "Bash(cp /home/ettinger/src/b1dz.com/apps/web/public/logo.svg /home/ettinger/src/b1dz.com/apps/extension/logo.svg)",
+      "Bash(magick -background none /home/ettinger/src/b1dz.com/apps/extension/favicon.svg -resize 16x16 /home/ettinger/src/b1dz.com/apps/extension/icons/icon-16.png)",
+      "Bash(magick -background none /home/ettinger/src/b1dz.com/apps/extension/favicon.svg -resize 48x48 /home/ettinger/src/b1dz.com/apps/extension/icons/icon-48.png)",
+      "Bash(file /home/ettinger/src/b1dz.com/apps/extension/icons/*.png)",
+      "Bash(magick -background none ../favicon.svg -resize 48x48 icon-48.png)",
+      "Bash(magick -background none ../favicon.svg -resize 128x128 icon-128.png)",
+      "Bash(cp favicon-16.png icon-16.png)",
+      "Bash(rm -rf /home/ettinger/src/b1dz.com/apps/extension/icons /home/ettinger/src/b1dz.com/apps/extension/favicon.svg /home/ettinger/src/b1dz.com/apps/extension/logo.svg)",
+      "Bash(ln -s ../web/public/icons icons)",
+      "Bash(ln -s ../web/public/favicon.svg favicon.svg)",
+      "Bash(ln -s ../web/public/logo.svg logo.svg)"
+    ]
+  }
+}
