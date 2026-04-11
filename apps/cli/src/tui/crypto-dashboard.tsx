@@ -189,32 +189,36 @@ export function CryptoDashboard() {
   // Trade status from daemon
   const ts = tradeState?.tradeStatus;
 
-  // P/L — only realized (matched buy+sell pairs), not open positions
+  // P/L — only count REALIZED round-trips (matched buy then sell on same pair)
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayTs = todayStart.getTime() / 1000;
   const todayTrades = trades.filter((t) => t.time >= todayTs);
+
+  // Match sells with their preceding buys to compute realized P/L
+  let realizedPnl = 0;
   let totalFees = 0;
-  for (const t of todayTrades) totalFees += parseFloat(t.fee);
-
-  // Realized P/L from daemon's tradeStatus (tracks actual closed trades)
-  const realizedPnl = ts?.dailyPnl ?? 0;
-
-  // Open position unrealized P/L
-  const pos = ts?.position;
-  let unrealizedPnl = 0;
-  if (pos) {
-    const currentPrice = prices.find((p) => p.pair === pos.pair)?.bid ?? 0;
-    if (currentPrice > 0) {
-      unrealizedPnl = (currentPrice - pos.entryPrice) * pos.volume;
+  const buysByPair = new Map<string, { cost: number; fee: number }>();
+  for (const t of [...todayTrades].reverse()) { // oldest first
+    const cost = parseFloat(t.cost);
+    const fee = parseFloat(t.fee);
+    totalFees += fee;
+    if (t.type === 'buy') {
+      buysByPair.set(t.pair, { cost, fee });
+    } else if (t.type === 'sell') {
+      const buy = buysByPair.get(t.pair);
+      if (buy) {
+        realizedPnl += (cost - buy.cost) - fee - buy.fee;
+        buysByPair.delete(t.pair);
+      }
     }
   }
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
+  const pos = ts?.position;
   const posStr = pos ? `{cyan-fg}${pos.pair}{/}` : '{gray-fg}no position{/}';
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
-  const unrealStr = pos ? (unrealizedPnl >= 0 ? ` unreal:{green-fg}+$${unrealizedPnl.toFixed(2)}{/}` : ` unreal:{red-fg}$${unrealizedPnl.toFixed(2)}{/}`) : '';
-  const statusText = ` b1dz crypto ${daemonStatus}  ${posStr}  P/L:${pnlStr}${unrealStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
+  const statusText = ` b1dz crypto ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
 
   // Prices — show top 5 pairs by volume (first in the list)
   const DISPLAY_PAIRS = [...new Set(prices.map((p) => p.pair))].slice(0, 5);
