@@ -91,10 +91,36 @@ export const cryptoArbWorker: SourceWorker = {
         }
       }
 
-      // Save balances + quick prices immediately so TUI has data
+      // Compute arb spreads from quick prices
+      const quickSpreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean }[] = [];
+      for (const pair of pairsToFetch) {
+        const pairPrices = quickPrices.filter((p) => p.pair === pair);
+        if (pairPrices.length < 2) continue;
+        let bestSpread = -Infinity;
+        let buyEx = '';
+        let sellEx = '';
+        for (const buyer of pairPrices) {
+          for (const seller of pairPrices) {
+            if (buyer.exchange === seller.exchange) continue;
+            const gross = ((seller.bid - buyer.ask) / buyer.ask) * 100;
+            if (gross > bestSpread) {
+              bestSpread = gross;
+              buyEx = buyer.exchange;
+              sellEx = seller.exchange;
+            }
+          }
+        }
+        if (bestSpread > -Infinity) {
+          quickSpreads.push({ pair, spread: bestSpread, buyExchange: buyEx, sellExchange: sellEx, profitable: bestSpread > 0.36 });
+        }
+      }
+      quickSpreads.sort((a, b) => b.spread - a.spread);
+
+      // Save balances + prices + spreads immediately so TUI has data
       await ctx.savePayload({
         enabled: ctx.payload?.enabled ?? true,
         prices: quickPrices,
+        spreads: quickSpreads,
         krakenBalance: cachedKrakenBalance,
         binanceBalance: cachedBinanceBalance,
         coinbaseBalance: cachedCoinbaseBalance,
