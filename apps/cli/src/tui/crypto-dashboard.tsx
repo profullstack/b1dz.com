@@ -365,11 +365,15 @@ export function CryptoDashboard() {
   balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
 
   // Activity log — merge arb + trade daemon logs + local events
-  const arbLog = (arbState as unknown as Record<string, unknown>)?.activityLog as { at: string; text: string }[] ?? [];
+  const arbLog = ((arbState as unknown as Record<string, unknown>)?.activityLog ?? []) as { at: string; text: string }[];
   const tradeLog = tradeState?.activityLog ?? [];
-  const daemonLog = [...arbLog, ...tradeLog].sort((a, b) => a.at.localeCompare(b.at));
+  const daemonLog = [...arbLog, ...tradeLog].filter((l) => l?.at && l?.text);
+  daemonLog.sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
   const allLogs = [
-    ...daemonLog.map((l) => ({ time: new Date(l.at).toLocaleTimeString('en-US', { hour12: false }), text: l.text })),
+    ...daemonLog.map((l) => {
+      try { return { time: new Date(l.at).toLocaleTimeString('en-US', { hour12: false }), text: l.text }; }
+      catch { return { time: '??:??:??', text: l.text ?? '' }; }
+    }),
     ...logs,
   ].sort((a, b) => a.time.localeCompare(b.time)).slice(-50);
   const logLines = allLogs.map((l) => {
