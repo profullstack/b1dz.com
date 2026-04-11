@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
-    "start": "node .next/standalone/server.js",
+    "start": "node .next/standalone/apps/web/server.js",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },
