@@ -11,7 +11,7 @@ echo "b1dz: daemon started (PID $DAEMON_PID)"
 # Start web API — standalone server uses PORT env var (Railway sets this)
 export PORT=${PORT:-3000}
 echo "b1dz: starting web API on port $PORT..."
-node /app/apps/web/.next/standalone/apps/web/server.js &
+pnpm start &
 WEB_PID=$!
 echo "b1dz: web started (PID $WEB_PID)"
 

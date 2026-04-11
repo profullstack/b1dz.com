@@ -33,7 +33,6 @@ loadRootEnv();
 
 const config: NextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
   typescript: { ignoreBuildErrors: true },
   transpilePackages: [
     '@b1dz/core',
