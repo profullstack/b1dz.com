@@ -360,8 +360,10 @@ export function CryptoDashboard() {
   balLines.push(' ─────────────────────────');
   balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
 
-  // Activity log — daemon activity from API + local events
-  const daemonLog = tradeState?.activityLog ?? [];
+  // Activity log — merge arb + trade daemon logs + local events
+  const arbLog = (arbState as unknown as Record<string, unknown>)?.activityLog as { at: string; text: string }[] ?? [];
+  const tradeLog = tradeState?.activityLog ?? [];
+  const daemonLog = [...arbLog, ...tradeLog].sort((a, b) => a.at.localeCompare(b.at));
   const allLogs = [
     ...daemonLog.map((l) => ({ time: new Date(l.at).toLocaleTimeString('en-US', { hour12: false }), text: l.text })),
     ...logs,

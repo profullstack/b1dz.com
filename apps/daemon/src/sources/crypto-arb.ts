@@ -8,6 +8,7 @@ import {
 } from '@b1dz/source-crypto-arb';
 import { AlertBus } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
+import { logActivity, getActivityLog } from './activity-log.js';
 import type { MarketSnapshot } from '@b1dz/core';
 
 const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
@@ -23,6 +24,7 @@ const PRIVATE_FETCH_INTERVAL = 15_000; // 15s — balances/trades/orders
 
 const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
+let tickCount = 0;
 
 export const cryptoArbWorker: SourceWorker = {
   id: 'crypto-arb',
@@ -112,6 +114,21 @@ export const cryptoArbWorker: SourceWorker = {
     }
     spreads.sort((a, b) => b.spread - a.spread);
 
+    // Log top spread every 5 ticks (~10s)
+    tickCount++;
+    if (spreads.length > 0 && tickCount % 5 === 0) {
+      const top = spreads[0];
+      const feeThreshold = 0.36;
+      const gap = (feeThreshold - top.spread).toFixed(3);
+      logActivity(`[arb] scanning ${prices.length} prices across ${pairsToFetch.size} pairs — best: ${top.pair} ${top.spread.toFixed(4)}% (${top.buyExchange}→${top.sellExchange}) need ${gap}% more to profit`);
+    }
+    if (spreads.some((s) => s.profitable)) {
+      const profitable = spreads.filter((s) => s.profitable);
+      for (const s of profitable) {
+        logActivity(`[arb] ★ PROFITABLE: ${s.pair} ${s.spread.toFixed(4)}% ${s.buyExchange}→${s.sellExchange}`);
+      }
+    }
+
     // ── Run arb evaluation + execution ──
     const items = await cryptoArbSource.poll(sourceCtx);
     const opps: unknown[] = (ctx.payload?.opportunities as unknown[]) ?? [];
@@ -119,9 +136,11 @@ export const cryptoArbWorker: SourceWorker = {
       const opp = cryptoArbSource.evaluate(item, sourceCtx);
       if (!opp) continue;
       opps.push(opp);
+      logActivity(`[arb] ⚡ opportunity: ${opp.title} profit=$${opp.projectedProfit.toFixed(4)}`);
       if (cryptoArbSource.act) {
         const result = await cryptoArbSource.act(opp, sourceCtx);
-        if (result.ok) console.log(`b1dzd: arb executed: ${result.message}`);
+        if (result.ok) logActivity(`[arb] ✓ EXECUTED: ${result.message}`);
+        else logActivity(`[arb] ✗ skipped: ${result.message}`);
       }
     }
     while (opps.length > 100) opps.shift();
@@ -137,6 +156,7 @@ export const cryptoArbWorker: SourceWorker = {
       coinbaseBalance: cachedCoinbaseBalance,
       recentTrades: cachedRecentTrades,
       openOrders: cachedOpenOrders,
+      activityLog: getActivityLog(),
       daemon: {
         lastTickAt: new Date().toISOString(),
         worker: 'crypto-arb',
