@@ -14,7 +14,11 @@
       "Bash(rm -rf /home/ettinger/src/b1dz.com/apps/extension/icons /home/ettinger/src/b1dz.com/apps/extension/favicon.svg /home/ettinger/src/b1dz.com/apps/extension/logo.svg)",
       "Bash(ln -s ../web/public/icons icons)",
       "Bash(ln -s ../web/public/favicon.svg favicon.svg)",
-      "Bash(ln -s ../web/public/logo.svg logo.svg)"
+      "Bash(ln -s ../web/public/logo.svg logo.svg)",
+      "Bash(rm icons:*)",
+      "Bash(cp -r ../web/public/icons icons)",
+      "Bash(cp ../web/public/favicon.svg favicon.svg)",
+      "Bash(cp ../web/public/logo.svg logo.svg)"
     ]
   }
 }
