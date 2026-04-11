@@ -20,8 +20,14 @@ function getKeys() {
   const keyName = process.env.COINBASE_API_KEY_NAME;
   const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
   if (!keyName || !privateKey) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
-  // The private key may have literal \n — convert to real newlines
-  const pem = privateKey.replace(/\\n/g, '\n');
+  // Handle both literal \n and real newlines, trim whitespace
+  let pem = privateKey.replace(/\\n/g, '\n').trim();
+  // Ensure PEM has proper newlines after header and before footer
+  if (!pem.includes('\n')) {
+    pem = pem
+      .replace('-----BEGIN EC PRIVATE KEY-----', '-----BEGIN EC PRIVATE KEY-----\n')
+      .replace('-----END EC PRIVATE KEY-----', '\n-----END EC PRIVATE KEY-----\n');
+  }
   return { keyName, pem };
 }
 

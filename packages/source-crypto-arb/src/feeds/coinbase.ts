@@ -11,7 +11,10 @@ function buildJwt(method: string, path: string): string | null {
   const keyName = process.env.COINBASE_API_KEY_NAME;
   const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
   if (!keyName || !privateKey) return null;
-  const pem = privateKey.replace(/\\n/g, '\n');
+  let pem = privateKey.replace(/\\n/g, '\n').trim();
+  if (!pem.includes('\n')) {
+    pem = pem.replace('-----BEGIN EC PRIVATE KEY-----', '-----BEGIN EC PRIVATE KEY-----\n').replace('-----END EC PRIVATE KEY-----', '\n-----END EC PRIVATE KEY-----\n');
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = randomBytes(16).toString('hex');
