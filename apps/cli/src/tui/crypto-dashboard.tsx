@@ -270,46 +270,74 @@ export function CryptoDashboard() {
     }
   }
 
-  // Balances
+  // Balances — simple per-exchange summary
   const krakenNameMap: Record<string, string> = { ZUSD: 'USD', XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE' };
-  const normKraken: Record<string, number> = {};
-  for (const [k, v] of Object.entries(krakenBal)) {
-    const name = krakenNameMap[k] ?? k;
-    const val = parseFloat(v);
-    if (val > 0.000000001) normKraken[name] = val;
-  }
-  const normBinance: Record<string, number> = {};
-  for (const [k, v] of Object.entries(binanceBal)) {
-    const val = parseFloat(v);
-    if (val > 0.000000001) normBinance[k] = val;
-  }
-  const normCoinbase: Record<string, number> = {};
-  for (const [k, v] of Object.entries(coinbaseBal)) {
-    const val = parseFloat(v);
-    if (val > 0.000000001) normCoinbase[k] = val;
-  }
-  const allAssets = [...new Set([...Object.keys(normKraken), ...Object.keys(normBinance), ...Object.keys(normCoinbase)])].sort();
-
   const priceOf: Record<string, number> = {};
   for (const p of prices) {
     if (p.exchange === 'kraken' && p.bid > 0) priceOf[p.pair.split('-')[0]] = p.bid;
   }
 
-  const balLines: string[] = ['{bold} Asset    Kraken        Binance       Coinbase      Value{/bold}'];
-  let totalValue = 0;
-  for (const asset of allAssets) {
-    const kVal = normKraken[asset] ?? 0;
-    const bVal = normBinance[asset] ?? 0;
-    const cVal = normCoinbase[asset] ?? 0;
-    const total = kVal + bVal + cVal;
-    const isCash = ['USD', 'USDC', 'USDT'].includes(asset);
-    const usdValue = isCash ? total : total * (priceOf[asset] ?? 0);
-    totalValue += usdValue;
-    const fmt = (v: number) => v > 0 ? (isCash ? `$${v.toFixed(2)}` : v.toFixed(6)) : '-';
-    const valStr = usdValue > 0.01 ? `$${usdValue.toFixed(2)}` : '';
-    balLines.push(` ${asset.padEnd(8)} ${fmt(kVal).padStart(12)}  ${fmt(bVal).padStart(12)}  ${fmt(cVal).padStart(12)}  ${valStr}`);
+  // Kraken: sum cash + value crypto
+  let krakenCash = 0;
+  const krakenCrypto: { asset: string; amount: number; value: number }[] = [];
+  for (const [k, v] of Object.entries(krakenBal)) {
+    const name = krakenNameMap[k] ?? k;
+    const val = parseFloat(v);
+    if (val < 0.0001) continue;
+    if (['USD', 'USDC', 'USDT'].includes(name)) { krakenCash += val; }
+    else {
+      const usdVal = val * (priceOf[name] ?? 0);
+      if (usdVal > 0.01) krakenCrypto.push({ asset: name, amount: val, value: usdVal });
+    }
   }
-  balLines.push(`{bold} Total: $${totalValue.toFixed(2)}{/bold}`);
+
+  // Binance: sum stablecoins
+  let binanceCash = 0;
+  const binanceCrypto: { asset: string; amount: number; value: number }[] = [];
+  for (const [k, v] of Object.entries(binanceBal)) {
+    const val = parseFloat(v);
+    if (val < 0.0001) continue;
+    if (['USD', 'USDC', 'USDT'].includes(k)) { binanceCash += val; }
+    else {
+      const usdVal = val * (priceOf[k] ?? 0);
+      if (usdVal > 0.01) binanceCrypto.push({ asset: k, amount: val, value: usdVal });
+    }
+  }
+
+  // Coinbase
+  let coinbaseCash = 0;
+  const coinbaseCrypto: { asset: string; amount: number; value: number }[] = [];
+  for (const [k, v] of Object.entries(coinbaseBal)) {
+    const val = parseFloat(v);
+    if (val < 0.0001) continue;
+    if (['USD', 'USDC', 'USDT'].includes(k)) { coinbaseCash += val; }
+    else {
+      const usdVal = val * (priceOf[k] ?? 0);
+      if (usdVal > 0.01) coinbaseCrypto.push({ asset: k, amount: val, value: usdVal });
+    }
+  }
+
+  const krakenTotal = krakenCash + krakenCrypto.reduce((s, c) => s + c.value, 0);
+  const binanceTotal = binanceCash + binanceCrypto.reduce((s, c) => s + c.value, 0);
+  const coinbaseTotal = coinbaseCash + coinbaseCrypto.reduce((s, c) => s + c.value, 0);
+  const totalValue = krakenTotal + binanceTotal + coinbaseTotal;
+
+  const balLines: string[] = [];
+  // Kraken
+  let krakenStr = ` {cyan-fg}Kraken{/}    $${krakenCash.toFixed(2)} USD`;
+  for (const c of krakenCrypto) krakenStr += ` + ${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})`;
+  balLines.push(krakenStr);
+  // Binance
+  let binanceStr = ` {yellow-fg}Binance{/}   $${binanceCash.toFixed(2)} USDC`;
+  for (const c of binanceCrypto) binanceStr += ` + ${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})`;
+  balLines.push(binanceStr);
+  // Coinbase
+  let coinbaseStr = ` {magenta-fg}Coinbase{/}  $${coinbaseCash.toFixed(2)} USD`;
+  for (const c of coinbaseCrypto) coinbaseStr += ` + ${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})`;
+  balLines.push(coinbaseStr);
+  // Total
+  balLines.push(' ─────────────────────────');
+  balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
 
   // Activity log — daemon activity from API + local events
   const daemonLog = tradeState?.activityLog ?? [];
@@ -329,7 +357,7 @@ export function CryptoDashboard() {
 
   const row1H = DISPLAY_PAIRS.length + (daemonOnline ? 3 : 5) + (apiError ? 1 : 0);
   const row2H = Math.max(displaySpreads.length + 3, 5);
-  const row3H = Math.max(trades.length + 2, allAssets.length + 3, 6);
+  const row3H = Math.max(trades.length + 2, balLines.length + 2, 8);
 
   return (
     <>
