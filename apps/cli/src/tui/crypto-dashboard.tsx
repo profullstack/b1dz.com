@@ -222,13 +222,13 @@ export function CryptoDashboard() {
 
   // Prices — show top 5 pairs by volume (first in the list)
   const DISPLAY_PAIRS = [...new Set(prices.map((p) => p.pair))].slice(0, 5);
-  const priceLines: string[] = ['{bold} Pair       Kraken Bid      Coinbase Bid   Binance Bid{/bold}'];
+  const priceLines: string[] = ['{bold} Pair             Kraken          Coinbase        Binance{/bold}'];
   for (const pair of DISPLAY_PAIRS) {
     const kr = prices.find((p) => p.pair === pair && p.exchange === 'kraken');
     const cb = prices.find((p) => p.pair === pair && p.exchange === 'coinbase');
     const bn = prices.find((p) => p.pair === pair && p.exchange === 'binance-us');
-    const fmt = (v?: number) => v ? `$${v.toFixed(2)}`.padStart(12) : '         -  ';
-    priceLines.push(` ${pair.padEnd(10)} ${fmt(kr?.bid)}  ${fmt(cb?.bid)}  ${fmt(bn?.bid)}`);
+    const fmt = (v?: number) => v ? `$${v.toFixed(2)}`.padStart(14) : '           -  ';
+    priceLines.push(` ${pair.padEnd(16)} ${fmt(kr?.bid)}  ${fmt(cb?.bid)}  ${fmt(bn?.bid)}`);
   }
   if (!daemonOnline) priceLines.push('', ' {red-fg}Daemon offline — run: pnpm dev:daemon{/red-fg}');
   if (apiError) priceLines.push(` {red-fg}API: ${apiError.slice(0, 60)}{/red-fg}`);
