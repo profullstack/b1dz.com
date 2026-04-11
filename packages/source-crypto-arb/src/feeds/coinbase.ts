@@ -47,31 +47,52 @@ async function coinbaseFetch<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-interface CoinbaseBestBidAsk {
-  pricebooks: {
-    product_id: string;
-    bids: { price: string; size: string }[];
-    asks: { price: string; size: string }[];
-  }[];
+interface CoinbasePricebook {
+  product_id: string;
+  bids: { price: string; size: string }[];
+  asks: { price: string; size: string }[];
 }
 
-interface CoinbaseOrderBook {
-  pricebook: {
-    product_id: string;
-    bids: { price: string; size: string }[];
-    asks: { price: string; size: string }[];
-  };
+interface CoinbaseBestBidAsk {
+  pricebooks: CoinbasePricebook[];
+}
+
+// Batch cache — one request fetches all pairs we need
+let cbBatchCache = new Map<string, CoinbasePricebook>();
+let cbBatchTs = 0;
+const CB_BATCH_TTL = 1500;
+let cbPairsToFetch = new Set<string>();
+
+/** Register a pair so the next batch fetch includes it. */
+export function registerCoinbasePair(pair: string) {
+  cbPairsToFetch.add(pair);
+}
+
+async function ensureCoinbaseBatch(): Promise<Map<string, CoinbasePricebook>> {
+  if (Date.now() - cbBatchTs < CB_BATCH_TTL && cbBatchCache.size > 0) return cbBatchCache;
+  if (cbPairsToFetch.size === 0) cbPairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);
+  try {
+    const ids = [...cbPairsToFetch].join(',');
+    const data = await coinbaseFetch<CoinbaseBestBidAsk>(
+      `/api/v3/brokerage/best_bid_ask?product_ids=${ids}`,
+    );
+    cbBatchCache = new Map();
+    for (const book of data.pricebooks ?? []) {
+      cbBatchCache.set(book.product_id, book);
+    }
+    cbBatchTs = Date.now();
+  } catch {}
+  return cbBatchCache;
 }
 
 export class CoinbaseFeed implements PriceFeed {
   exchange = 'coinbase';
 
   async snapshot(pair: string): Promise<MarketSnapshot | null> {
+    registerCoinbasePair(pair);
     try {
-      const data = await coinbaseFetch<CoinbaseBestBidAsk>(
-        `/api/v3/brokerage/best_bid_ask?product_ids=${pair}`,
-      );
-      const book = data.pricebooks?.[0];
+      const cache = await ensureCoinbaseBatch();
+      const book = cache.get(pair);
       if (!book || !book.bids.length || !book.asks.length) return null;
       return {
         exchange: this.exchange,
@@ -89,7 +110,7 @@ export class CoinbaseFeed implements PriceFeed {
 
   async orderBook(pair: string, depth = 10): Promise<OrderBook | null> {
     try {
-      const data = await coinbaseFetch<CoinbaseOrderBook>(
+      const data = await coinbaseFetch<{ pricebook: CoinbasePricebook }>(
         `/api/v3/brokerage/product_book?product_id=${pair}&limit=${depth}`,
       );
       const book = data.pricebook;

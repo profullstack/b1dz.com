@@ -5,7 +5,7 @@
 
 import { proxyFetch } from './proxy.js';
 
-const MIN_INTERVAL_MS = 350;
+const MIN_INTERVAL_MS = 100; // batch calls = fewer requests, can throttle less
 const lastRequestAt = new Map<string, number>();
 
 async function throttle(host: string): Promise<void> {
