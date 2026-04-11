@@ -65,6 +65,4 @@ COPY --from=build /app /app
 EXPOSE 8080
 # Start both web API and daemon in one container
 # Railway sets PORT=8080, next start reads PORT automatically
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["pnpm", "start"]

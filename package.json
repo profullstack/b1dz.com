@@ -16,7 +16,7 @@
     "typecheck": "turbo run typecheck",
     "dev:web": "pnpm --filter @b1dz/web dev",
     "dev:daemon": "pnpm --filter @b1dz/daemon dev",
-    "start": "pnpm --filter @b1dz/web start",
+    "start": "pnpm --filter @b1dz/daemon start & pnpm --filter @b1dz/web start",
     "daemon": "pnpm --filter @b1dz/daemon start",
     "b1dz": "pnpm --filter @b1dz/cli dev --",
     "dev:tui": "pnpm --filter @b1dz/cli dev -- tui --dev",
