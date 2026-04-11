@@ -1,27 +1,32 @@
 #!/bin/bash
 set -e
 
-echo "b1dz: starting web API + daemon..."
+echo "=== b1dz entrypoint ==="
+echo "NODE_ENV=$NODE_ENV"
+echo "PORT=$PORT"
+echo "SUPABASE_SECRET_KEY set: $([ -n "$SUPABASE_SECRET_KEY" ] && echo yes || echo NO)"
+echo "KRAKEN_API_KEY set: $([ -n "$KRAKEN_API_KEY" ] && echo yes || echo NO)"
 
-# Start daemon in background
-pnpm daemon &
+# Test if tsx works
+echo "Testing tsx..."
+pnpm --filter @b1dz/daemon exec tsx --version 2>&1 || echo "tsx not found!"
+
+# Start daemon
+echo "Starting daemon..."
+pnpm daemon 2>&1 &
 DAEMON_PID=$!
-echo "b1dz: daemon started (PID $DAEMON_PID)"
 
-# Start web API — standalone server uses PORT env var (Railway sets this)
-export PORT=${PORT:-3000}
-echo "b1dz: starting web API on port $PORT..."
-pnpm start &
-WEB_PID=$!
-echo "b1dz: web started (PID $WEB_PID)"
+# Give daemon a moment to start (or crash)
+sleep 3
 
-# Trap signals for graceful shutdown
-trap "echo 'b1dz: shutting down...'; kill $DAEMON_PID $WEB_PID 2>/dev/null; wait; exit 0" SIGTERM SIGINT
+# Check if daemon is alive
+if kill -0 $DAEMON_PID 2>/dev/null; then
+  echo "Daemon running (PID $DAEMON_PID)"
+else
+  echo "WARNING: Daemon failed to start!"
+  wait $DAEMON_PID 2>/dev/null || true
+fi
 
-# Wait for either to exit
-wait -n $DAEMON_PID $WEB_PID 2>/dev/null || true
-EXIT_CODE=$?
-echo "b1dz: process exited ($EXIT_CODE), stopping..."
-kill $DAEMON_PID $WEB_PID 2>/dev/null
-wait 2>/dev/null
-exit $EXIT_CODE
+# Start web (foreground)
+echo "Starting web on port ${PORT:-8080}..."
+exec pnpm start
