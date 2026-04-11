@@ -67,9 +67,22 @@ export const cryptoArbWorker: SourceWorker = {
         console.error(`b1dzd: coinbase balance error: ${(e as Error).message}`);
       }
 
-      // Save balances immediately so TUI can show them even if price poll is slow
+      // Quick price fetch for major coins so TUI can value crypto holdings
+      const quickPrices: { exchange: string; pair: string; bid: number; ask: number }[] = [];
+      const krakenFeed = FEEDS.find((f) => f.exchange === 'kraken');
+      if (krakenFeed) {
+        for (const pair of ['BTC-USD', 'ETH-USD', 'SOL-USD']) {
+          try {
+            const snap = await krakenFeed.snapshot(pair);
+            if (snap) quickPrices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
+          } catch {}
+        }
+      }
+
+      // Save balances + quick prices immediately so TUI has data
       await ctx.savePayload({
         enabled: ctx.payload?.enabled ?? true,
+        prices: quickPrices,
         krakenBalance: cachedKrakenBalance,
         binanceBalance: cachedBinanceBalance,
         coinbaseBalance: cachedCoinbaseBalance,
