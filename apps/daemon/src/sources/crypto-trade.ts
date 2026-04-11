@@ -19,11 +19,12 @@ export const cryptoTradeWorker: SourceWorker = {
     const origLog = console.log;
     console.log = (...args: unknown[]) => {
       const text = args.map(String).join(' ');
-      // Capture all strategy/trade output
+      // Capture strategy/trade output into activity log (logActivity also prints)
       if (text.startsWith('[') || text.includes('SIGNAL') || text.includes('EXECUTE') || text.includes('SOLD')) {
         logActivity(text);
+      } else {
+        origLog.apply(console, args);
       }
-      origLog.apply(console, args);
     };
 
     try {

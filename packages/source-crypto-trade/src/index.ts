@@ -86,10 +86,14 @@ interface Position {
 }
 const openPositions = new Map<string, Position>();
 
-/** Global lock — only ONE position at a time across all pairs. */
+/** Global lock — only ONE position at a time across all pairs.
+ *  Also checks if we're holding any crypto (exchange is source of truth). */
 function hasAnyOpenPosition(): boolean {
-  return openPositions.size > 0;
+  return openPositions.size > 0 || holdingCryptoOnExchange;
 }
+
+/** Set by hydration — true if exchange balance has non-trivial crypto. */
+let holdingCryptoOnExchange = false;
 
 /** Timestamp of last trade close per pair. */
 const lastExitAt = new Map<string, number>();
@@ -127,8 +131,12 @@ async function hydrateFromExchange() {
 
     if (holdings.length === 0) {
       console.log('[trade] no crypto holdings found — starting clean');
+      holdingCryptoOnExchange = false;
       return;
     }
+    // We're holding crypto — block new trades until position is restored or sold
+    holdingCryptoOnExchange = true;
+    console.log(`[trade] found ${holdings.length} crypto holdings — blocking new trades until resolved`);
 
     // Map Kraken asset names to pair names
     const assetToPair: Record<string, string> = { XXBT: 'BTC-USD', XETH: 'ETH-USD', XZEC: 'ZEC-USD', XXRP: 'XRP-USD', XXLM: 'XLM-USD', XXMR: 'XMR-USD', XXDG: 'DOGE-USD' };
@@ -465,6 +473,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           dailyPnl += netPnl;
 
           openPositions.delete(pair);
+          holdingCryptoOnExchange = openPositions.size > 0;
           lastExitAt.set(pair, Date.now());
           console.log(`[trade] SOLD ${pair}: ${result.descr.order} txid=${result.txid} net=$${netPnl.toFixed(4)} dayPnL=$${dailyPnl.toFixed(2)}`);
           return { ok: true, message: `sold ${pos.volume.toFixed(8)} net=$${netPnl.toFixed(4)}` };

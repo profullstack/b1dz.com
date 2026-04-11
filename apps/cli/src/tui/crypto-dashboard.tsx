@@ -378,9 +378,9 @@ export function CryptoDashboard() {
     return `{gray-fg}${l.time}{/} ${color}${l.text}{/}`;
   });
 
-  const row1H = DISPLAY_PAIRS.length + (daemonOnline ? 3 : 5) + (apiError ? 1 : 0);
-  const row2H = Math.max(displaySpreads.length + 3, 5);
-  const row3H = Math.max(trades.length + 2, balLines.length + 2, 8);
+  const row1H = Math.min(DISPLAY_PAIRS.length + (daemonOnline ? 3 : 5) + (apiError ? 1 : 0), 9);
+  const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 8);
+  const row3H = Math.min(Math.max(recentTrades.length + 2, balLines.length + 2, 6), 10);
 
   return (
     <>

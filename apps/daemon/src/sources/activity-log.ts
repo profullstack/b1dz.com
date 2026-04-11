@@ -10,11 +10,15 @@ interface LogEntry {
 
 const MAX_ENTRIES = 100;
 const buffer: LogEntry[] = [];
+let lastText = '';
 
 // Store original console.log to avoid recursion when console.log is overridden
 const _origLog = console.log.bind(console);
 
 export function logActivity(text: string) {
+  // Deduplicate consecutive identical messages
+  if (text === lastText) return;
+  lastText = text;
   buffer.push({ at: new Date().toISOString(), text });
   while (buffer.length > MAX_ENTRIES) buffer.shift();
   _origLog(text);
