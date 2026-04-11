@@ -67,31 +67,27 @@ export const cryptoArbWorker: SourceWorker = {
         console.error(`b1dzd: coinbase balance error: ${(e as Error).message}`);
       }
 
-      // Fetch prices for all crypto we're holding + majors
+      // Fetch prices for holdings + majors from ALL exchanges
       const quickPrices: { exchange: string; pair: string; bid: number; ask: number }[] = [];
-      const krakenFeed = FEEDS.find((f) => f.exchange === 'kraken');
       const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
-      const stables = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
+      const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
       const pairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);
-      // Add pairs for any crypto holdings across all exchanges
       for (const [k, v] of Object.entries(cachedKrakenBalance)) {
-        if (parseFloat(v) > 0.0001 && !stables.has(k)) {
-          const name = krakenNameMap[k] ?? k;
-          pairsToFetch.add(`${name}-USD`);
+        if (parseFloat(v) > 0.0001 && !stableSet.has(k)) {
+          pairsToFetch.add(`${krakenNameMap[k] ?? k}-USD`);
         }
       }
       for (const [k, v] of Object.entries(cachedCoinbaseBalance)) {
-        if (parseFloat(v) > 0.0001 && !stables.has(k)) pairsToFetch.add(`${k}-USD`);
+        if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${k}-USD`);
       }
       for (const [k, v] of Object.entries(cachedBinanceBalance)) {
-        if (parseFloat(v) > 0.0001 && !stables.has(k)) pairsToFetch.add(`${k}-USD`);
+        if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${k}-USD`);
       }
-      if (krakenFeed) {
-        for (const pair of pairsToFetch) {
-          try {
-            const snap = await krakenFeed.snapshot(pair);
-            if (snap) quickPrices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
-          } catch {}
+      // Fetch from every feed for each pair
+      for (const pair of pairsToFetch) {
+        const snaps = await Promise.all(FEEDS.map((f) => f.snapshot(pair).catch(() => null)));
+        for (const snap of snaps) {
+          if (snap) quickPrices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
         }
       }
 
