@@ -79,6 +79,7 @@ const histories = new Map<string, MarketSnapshot[]>();
 
 interface Position {
   pair: string;
+  exchange: string;
   entryPrice: number;
   volume: number;
   entryTime: number;
@@ -86,14 +87,16 @@ interface Position {
 }
 const openPositions = new Map<string, Position>();
 
-/** Global lock — only ONE position at a time across all pairs.
- *  Also checks if we're holding any crypto (exchange is source of truth). */
-function hasAnyOpenPosition(): boolean {
-  return openPositions.size > 0 || holdingCryptoOnExchange;
+/** One position per exchange — check if THIS exchange already has a position. */
+function hasPositionOnExchange(exchange: string): boolean {
+  for (const pos of openPositions.values()) {
+    if (pos.exchange === exchange) return true;
+  }
+  return exchangesHoldingCrypto.has(exchange);
 }
 
-/** Set by hydration — true if exchange balance has non-trivial crypto. */
-let holdingCryptoOnExchange = false;
+/** Set by hydration — exchanges that have non-trivial crypto holdings. */
+const exchangesHoldingCrypto = new Set<string>();
 
 /** Timestamp of last trade close per pair. */
 const lastExitAt = new Map<string, number>();
@@ -131,12 +134,12 @@ async function hydrateFromExchange() {
 
     if (holdings.length === 0) {
       console.log('[trade] no crypto holdings found — starting clean');
-      holdingCryptoOnExchange = false;
+      exchangesHoldingCrypto.clear();
       return;
     }
-    // We're holding crypto — block new trades until position is restored or sold
-    holdingCryptoOnExchange = true;
-    console.log(`[trade] found ${holdings.length} crypto holdings — blocking new trades until resolved`);
+    // We're holding crypto on Kraken — block new trades on Kraken until resolved
+    exchangesHoldingCrypto.add('kraken');
+    console.log(`[trade] found ${holdings.length} crypto holdings on kraken — blocking new kraken trades until resolved`);
 
     // Map Kraken asset names to pair names
     const assetToPair: Record<string, string> = { XXBT: 'BTC-USD', XETH: 'ETH-USD', XZEC: 'ZEC-USD', XXRP: 'XRP-USD', XXLM: 'XLM-USD', XXMR: 'XMR-USD', XXDG: 'DOGE-USD' };
@@ -168,6 +171,7 @@ async function hydrateFromExchange() {
       if (entryPrice > 0) {
         openPositions.set(pair, {
           pair,
+          exchange: 'kraken',
           entryPrice,
           volume: h.amount,
           entryTime,
@@ -413,7 +417,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       }
 
       // Only ONE position at a time — don't blow our resources
-      if (hasAnyOpenPosition()) return null;
+      // One position per exchange — check the exchange this pair trades on
+      const tradeExchange = 'kraken'; // TODO: support multiple exchanges for trading
+      if (hasPositionOnExchange(tradeExchange)) return null;
 
       // Already have a position for this pair
       if (openPositions.has(item.pair)) return null;
@@ -472,8 +478,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           resetDailyPnlIfNeeded();
           dailyPnl += netPnl;
 
+          const closedExchange = openPositions.get(pair)?.exchange ?? 'kraken';
           openPositions.delete(pair);
-          holdingCryptoOnExchange = openPositions.size > 0;
+          // Clear exchange lock if no more positions on that exchange
+          const stillHolding = [...openPositions.values()].some((p) => p.exchange === closedExchange);
+          if (!stillHolding) exchangesHoldingCrypto.delete(closedExchange);
           lastExitAt.set(pair, Date.now());
           console.log(`[trade] SOLD ${pair}: ${result.descr.order} txid=${result.txid} net=$${netPnl.toFixed(4)} dayPnL=$${dailyPnl.toFixed(2)}`);
           return { ok: true, message: `sold ${pos.volume.toFixed(8)} net=$${netPnl.toFixed(4)}` };
@@ -498,6 +507,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         });
         openPositions.set(pair, {
           pair,
+          exchange: 'kraken',
           entryPrice: price,
           volume,
           entryTime: Date.now(),
