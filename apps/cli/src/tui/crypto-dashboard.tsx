@@ -239,13 +239,14 @@ function DashboardInner() {
   if (apiError) priceLines.push(` {red-fg}API: ${apiError.slice(0, 60)}{/red-fg}`);
 
   // Arb spreads — show top 5
-  const displaySpreads = spreads.slice(0, 5);
+  const displaySpreads = spreads.filter((s) => s?.pair && s?.spread != null).slice(0, 5);
   const arbLines: string[] = ['{bold} Pair       Spread    Route                 Status{/bold}'];
   for (const s of displaySpreads) {
+    const spread = s.spread ?? 0;
     const color = s.profitable ? '{green-fg}' : '{white-fg}';
     const status = s.profitable ? '{green-fg}✓ PROFIT{/green-fg}' : '{gray-fg}below fees{/gray-fg}';
     const route = s.buyExchange ? `${s.buyExchange}→${s.sellExchange}` : '---';
-    arbLines.push(` ${s.pair.padEnd(10)} ${color}${s.spread.toFixed(4)}%{/}  ${route.padEnd(22)} ${status}`);
+    arbLines.push(` ${(s.pair ?? '').padEnd(10)} ${color}${spread.toFixed(4)}%{/}  ${route.padEnd(22)} ${status}`);
   }
 
   // Open orders
