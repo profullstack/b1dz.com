@@ -93,7 +93,8 @@ function timeSince(ts: number): string {
   return `${Math.floor(sec / 3600)}h ago`;
 }
 
-export function CryptoDashboard() {
+// Wrap the whole component in error handling so bad data doesn't crash React
+function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
   const [tradeState, setTradeState] = useState<TradeState | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -430,4 +431,15 @@ export function CryptoDashboard() {
         content={logLines.join('\n') || ' Waiting for daemon data...'} />
     </>
   );
+}
+
+export function CryptoDashboard() {
+  try {
+    return <DashboardInner />;
+  } catch (e) {
+    return (
+      <box top={0} left={0} width="100%" height="100%" tags={true}
+        content={`{red-fg}Dashboard render error: ${(e as Error).message}{/red-fg}\n\nPress q to quit.`} />
+    );
+  }
 }
