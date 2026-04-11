@@ -1,5 +1,6 @@
 import type { PriceFeed, MarketSnapshot, OrderBook } from '@b1dz/core';
 import { createSign, randomBytes } from 'node:crypto';
+import { getSnapshot } from './ws-price-cache.js';
 
 const BASE = 'https://api.coinbase.com';
 
@@ -92,6 +93,11 @@ export class CoinbaseFeed implements PriceFeed {
   exchange = 'coinbase';
 
   async snapshot(pair: string): Promise<MarketSnapshot | null> {
+    // Try WebSocket cache first
+    const wsSnap = getSnapshot('coinbase', pair);
+    if (wsSnap) return wsSnap;
+
+    // Fallback to REST
     registerCoinbasePair(pair);
     try {
       const cache = await ensureCoinbaseBatch();

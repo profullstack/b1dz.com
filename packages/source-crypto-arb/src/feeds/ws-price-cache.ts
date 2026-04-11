@@ -1,0 +1,258 @@
+/**
+ * WebSocket-based price cache — maintains persistent connections to all exchanges.
+ *
+ * Usage:
+ *   wsCache.subscribe(['BTC-USD', 'ETH-USD', 'SOL-USD']);
+ *   const snap = wsCache.get('kraken', 'BTC-USD');
+ *
+ * Each exchange pushes real-time ticker updates into a shared Map.
+ * The PriceFeed.snapshot() methods read from this cache instead of
+ * making HTTP requests.
+ */
+
+import { WebSocket } from 'ws';
+import type { MarketSnapshot } from '@b1dz/core';
+import { normalizePair } from './pairs.js';
+import { createSign, randomBytes } from 'node:crypto';
+
+interface CacheEntry extends MarketSnapshot {
+  stale: boolean;
+}
+
+const cache = new Map<string, CacheEntry>(); // key: "exchange:pair"
+const subscribedPairs = new Set<string>();
+let initialized = false;
+
+function cacheKey(exchange: string, pair: string): string {
+  return `${exchange}:${pair}`;
+}
+
+export function getSnapshot(exchange: string, pair: string): MarketSnapshot | null {
+  const entry = cache.get(cacheKey(exchange, pair));
+  if (!entry || entry.stale) return null;
+  // Consider stale after 10s without update
+  if (Date.now() - entry.ts > 10_000) {
+    entry.stale = true;
+    return null;
+  }
+  return entry;
+}
+
+function setPrice(exchange: string, pair: string, bid: number, ask: number, bidSize = 0, askSize = 0) {
+  cache.set(cacheKey(exchange, pair), {
+    exchange, pair, bid, ask, bidSize, askSize,
+    ts: Date.now(),
+    stale: false,
+  });
+}
+
+// ─── Kraken WebSocket ──────────────────────────────────────────
+
+let krakenWs: WebSocket | null = null;
+
+function connectKraken(pairs: string[]) {
+  if (krakenWs) return;
+  const krakenPairs = pairs.map((p) => normalizePair(p, 'kraken'));
+
+  krakenWs = new WebSocket('wss://ws.kraken.com/v2');
+
+  krakenWs.on('open', () => {
+    console.log('[ws] kraken connected');
+    krakenWs!.send(JSON.stringify({
+      method: 'subscribe',
+      params: {
+        channel: 'ticker',
+        symbol: krakenPairs,
+      },
+    }));
+  });
+
+  krakenWs.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg.channel === 'ticker' && msg.type === 'update' && msg.data) {
+        for (const tick of msg.data) {
+          // Find canonical pair from kraken symbol
+          const pair = pairs.find((p) => {
+            const norm = normalizePair(p, 'kraken');
+            return tick.symbol === norm || tick.symbol?.includes(norm);
+          });
+          if (pair && tick.bid !== undefined && tick.ask !== undefined) {
+            setPrice('kraken', pair,
+              parseFloat(tick.bid), parseFloat(tick.ask),
+              parseFloat(tick.bid_qty || '0'), parseFloat(tick.ask_qty || '0'),
+            );
+          }
+        }
+      }
+    } catch {}
+  });
+
+  krakenWs.on('close', () => {
+    console.log('[ws] kraken disconnected, reconnecting in 5s...');
+    krakenWs = null;
+    setTimeout(() => connectKraken(pairs), 5000);
+  });
+
+  krakenWs.on('error', (e) => {
+    console.error('[ws] kraken error:', e.message);
+  });
+}
+
+// ─── Coinbase WebSocket ────────────────────────────────────────
+
+let coinbaseWs: WebSocket | null = null;
+
+function buildCoinbaseWsJwt(): string | null {
+  const keyName = process.env.COINBASE_API_KEY_NAME;
+  const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
+  if (!keyName || !privateKey) return null;
+  let pem = privateKey.replace(/\\n/g, '\n').trim();
+  if (!pem.includes('\n')) {
+    pem = pem.replace('-----BEGIN EC PRIVATE KEY-----', '-----BEGIN EC PRIVATE KEY-----\n')
+      .replace('-----END EC PRIVATE KEY-----', '\n-----END EC PRIVATE KEY-----\n');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = randomBytes(16).toString('hex');
+  const b64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
+  const payload = { sub: keyName, iss: 'cdp', aud: ['cdp_service'], nbf: now, exp: now + 120 };
+  const segs = [b64url(Buffer.from(JSON.stringify(header))), b64url(Buffer.from(JSON.stringify(payload)))];
+  const input = segs.join('.');
+  const sign = createSign('SHA256');
+  sign.update(input);
+  return input + '.' + b64url(sign.sign({ key: pem, dsaEncoding: 'ieee-p1363' }));
+}
+
+function connectCoinbase(pairs: string[]) {
+  if (coinbaseWs) return;
+
+  coinbaseWs = new WebSocket('wss://advanced-trade-ws.coinbase.com');
+
+  coinbaseWs.on('open', () => {
+    console.log('[ws] coinbase connected');
+    const jwt = buildCoinbaseWsJwt();
+    coinbaseWs!.send(JSON.stringify({
+      type: 'subscribe',
+      product_ids: pairs,
+      channel: 'ticker',
+      ...(jwt ? { jwt } : {}),
+    }));
+  });
+
+  coinbaseWs.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg.channel === 'ticker' && msg.events) {
+        for (const event of msg.events) {
+          if (event.type === 'update' && event.tickers) {
+            for (const tick of event.tickers) {
+              const pair = tick.product_id;
+              if (pair && tick.best_bid !== undefined && tick.best_ask !== undefined) {
+                setPrice('coinbase', pair,
+                  parseFloat(tick.best_bid), parseFloat(tick.best_ask),
+                  parseFloat(tick.best_bid_quantity || '0'), parseFloat(tick.best_ask_quantity || '0'),
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  });
+
+  coinbaseWs.on('close', () => {
+    console.log('[ws] coinbase disconnected, reconnecting in 5s...');
+    coinbaseWs = null;
+    setTimeout(() => connectCoinbase(pairs), 5000);
+  });
+
+  coinbaseWs.on('error', (e) => {
+    console.error('[ws] coinbase error:', e.message);
+  });
+}
+
+// ─── Binance.US WebSocket ──────────────────────────────────────
+
+let binanceWs: WebSocket | null = null;
+
+function connectBinance(pairs: string[]) {
+  if (binanceWs) return;
+  const streams = pairs.map((p) => `${normalizePair(p, 'binance-us').toLowerCase()}@bookTicker`);
+  const url = `wss://stream.binance.us:9443/stream?streams=${streams.join('/')}`;
+
+  binanceWs = new WebSocket(url);
+
+  binanceWs.on('open', () => {
+    console.log('[ws] binance.us connected');
+  });
+
+  binanceWs.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      const data = msg.data;
+      if (data?.s && data?.b && data?.a) {
+        // Find canonical pair from binance symbol
+        const pair = pairs.find((p) => normalizePair(p, 'binance-us') === data.s);
+        if (pair) {
+          setPrice('binance-us', pair,
+            parseFloat(data.b), parseFloat(data.a),
+            parseFloat(data.B || '0'), parseFloat(data.A || '0'),
+          );
+        }
+      }
+    } catch {}
+  });
+
+  binanceWs.on('close', () => {
+    console.log('[ws] binance.us disconnected, reconnecting in 5s...');
+    binanceWs = null;
+    setTimeout(() => connectBinance(pairs), 5000);
+  });
+
+  binanceWs.on('error', (e) => {
+    console.error('[ws] binance.us error:', e.message);
+  });
+}
+
+// ─── Public API ────────────────────────────────────────────────
+
+/**
+ * Subscribe to price updates for the given pairs.
+ * Safe to call multiple times — new pairs are added, existing ones kept.
+ */
+export function subscribe(pairs: string[]) {
+  const newPairs = pairs.filter((p) => !subscribedPairs.has(p));
+  if (newPairs.length === 0 && initialized) return;
+
+  for (const p of newPairs) subscribedPairs.add(p);
+  const allPairs = [...subscribedPairs];
+
+  // Reconnect with updated pair list
+  if (krakenWs) { krakenWs.close(); krakenWs = null; }
+  if (coinbaseWs) { coinbaseWs.close(); coinbaseWs = null; }
+  if (binanceWs) { binanceWs.close(); binanceWs = null; }
+
+  console.log(`[ws] subscribing to ${allPairs.length} pairs across 3 exchanges`);
+  connectKraken(allPairs);
+  connectCoinbase(allPairs);
+  connectBinance(allPairs);
+  initialized = true;
+}
+
+/** Get all cached snapshots for a pair across all exchanges. */
+export function getAllSnapshots(pair: string): MarketSnapshot[] {
+  const result: MarketSnapshot[] = [];
+  for (const exchange of ['kraken', 'coinbase', 'binance-us']) {
+    const snap = getSnapshot(exchange, pair);
+    if (snap) result.push(snap);
+  }
+  return result;
+}
+
+/** How many prices are in the cache. */
+export function cacheSize(): number {
+  return cache.size;
+}

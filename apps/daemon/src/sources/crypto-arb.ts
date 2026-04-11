@@ -5,6 +5,7 @@ import {
   getBalance, getBinanceBalance, getCoinbaseBalance,
   getTradeHistory, getOpenOrders,
   getActivePairs,
+  subscribeWs, wsCacheSize,
 } from '@b1dz/source-crypto-arb';
 import { AlertBus } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
@@ -25,6 +26,7 @@ const PRIVATE_FETCH_INTERVAL = 15_000; // 15s — balances/trades/orders
 const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
 let tickCount = 0;
+let wsInitialized = false;
 
 export const cryptoArbWorker: SourceWorker = {
   id: 'crypto-arb',
@@ -73,7 +75,15 @@ export const cryptoArbWorker: SourceWorker = {
       }
     }
 
-    // ── Fetch prices every tick (public API, no rate limit issues) ──
+    // ── Initialize WebSocket feeds on first tick ──
+    if (!wsInitialized) {
+      wsInitialized = true;
+      const discoveredPairs = await getActivePairs();
+      subscribeWs(discoveredPairs);
+      logActivity(`[ws] subscribed to ${discoveredPairs.length} pairs across 3 exchanges`);
+    }
+
+    // ── Fetch prices every tick (WS cache → instant, REST fallback) ──
     const pairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);
     for (const [k, v] of Object.entries(cachedKrakenBalance)) {
       if (parseFloat(v) > 0.0001 && !stableSet.has(k)) pairsToFetch.add(`${krakenNameMap[k] ?? k}-USD`);
@@ -120,7 +130,7 @@ export const cryptoArbWorker: SourceWorker = {
       const top = spreads[0];
       const feeThreshold = 0.36;
       const gap = (feeThreshold - top.spread).toFixed(3);
-      logActivity(`[arb] scanning ${prices.length} prices across ${pairsToFetch.size} pairs — best: ${top.pair} ${top.spread.toFixed(4)}% (${top.buyExchange}→${top.sellExchange}) need ${gap}% more to profit`);
+      logActivity(`[arb] ${wsCacheSize()} ws prices | ${prices.length} total | best: ${top.pair} ${top.spread.toFixed(4)}% (${top.buyExchange}→${top.sellExchange}) need ${gap}% more`);
     }
     if (spreads.some((s) => s.profitable)) {
       const profitable = spreads.filter((s) => s.profitable);

@@ -1,6 +1,7 @@
 import type { PriceFeed, MarketSnapshot, OrderBook } from '@b1dz/core';
 import { normalizePair } from './pairs.js';
 import { fetchJson } from './http.js';
+import { getSnapshot } from './ws-price-cache.js';
 
 const BASE = 'https://api.binance.us';
 
@@ -20,6 +21,11 @@ export class BinanceUsFeed implements PriceFeed {
   exchange = 'binance-us';
 
   async snapshot(pair: string): Promise<MarketSnapshot | null> {
+    // Try WebSocket cache first
+    const wsSnap = getSnapshot('binance-us', pair);
+    if (wsSnap) return wsSnap;
+
+    // Fallback to REST (through proxy)
     const symbol = normalizePair(pair, this.exchange);
     try {
       const t = await fetchJson<BinanceBookTicker>(

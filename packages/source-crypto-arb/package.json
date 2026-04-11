@@ -16,10 +16,12 @@
   },
   "dependencies": {
     "@b1dz/core": "workspace:*",
-    "undici": "^8.0.2"
+    "undici": "^8.0.2",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "latest",
+    "@types/ws": "^8.18.1",
     "typescript": "latest",
     "vitest": "latest"
   }
