@@ -481,14 +481,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             pos.highWaterMark = snap.bid;
           }
 
-          // Verbose raw logs should reflect every tick and warmup state.
+          // Keep raw logs useful: positions every tick, warmup checkpoints,
+          // and occasional readiness markers. Strategy-specific [multi]/[scalp]
+          // logs carry the actual assessment feed.
           if (pos) {
             const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
             const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
             console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
-          } else if (hist.length < WARMUP_TICKS) {
+          } else if (hist.length < WARMUP_TICKS && [1, 5, 10, 15, WARMUP_TICKS - 1].includes(hist.length)) {
             console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} warming ${hist.length}/${WARMUP_TICKS}`);
-          } else {
+          } else if (hist.length === WARMUP_TICKS || hist.length % 20 === 0) {
             console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ready ticks=${hist.length}`);
           }
         }
