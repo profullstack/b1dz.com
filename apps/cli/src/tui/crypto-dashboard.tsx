@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { tuiEvents } from './events.js';
 import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
+import { getB1dzVersion } from '@b1dz/core';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
@@ -57,7 +58,7 @@ interface ArbState {
   coinbaseBalance: Record<string, string>;
   recentTrades: { pair: string; type: string; price: string; vol: string; cost: string; fee: string; time: number }[];
   openOrders: { id: string; descr: { type: string; pair: string; price: string; order: string }; vol: string; vol_exec: string; status: string }[];
-  daemon: { lastTickAt: string; worker: string; status: string };
+  daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
 interface TradeStatusData {
@@ -74,7 +75,7 @@ interface TradeState {
   signals: { title: string; confidence: number; createdAt: number }[];
   activityLog: { at: string; text: string }[];
   tradeStatus: TradeStatusData;
-  daemon: { lastTickAt: string; worker: string; status: string };
+  daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
 interface LogEntry {
@@ -128,6 +129,8 @@ function DashboardInner() {
   useEffect(() => {
     let active = true;
     let client: B1dzClient | null = null;
+    let seenVersionLog = false;
+    let seenDaemonVersion: string | null = null;
 
     const init = async () => {
       try {
@@ -136,7 +139,7 @@ function DashboardInner() {
           addLog('{red-fg}No API credentials — run b1dz login first{/red-fg}');
           return;
         }
-        addLog('{green-fg}Connected to API{/green-fg}');
+        addLog(`{green-fg}Connected to API{/green-fg} cli=v${getB1dzVersion()}`);
         poll();
       } catch (e) {
         addLog(`{red-fg}API init error: ${(e as Error).message?.slice(0, 60)}{/red-fg}`);
@@ -155,13 +158,26 @@ function DashboardInner() {
 
         if (arb) {
           setArbState(arb);
+          const apiVersion = client.getApiVersion();
+          if (!seenVersionLog && apiVersion) {
+            addLog(`{cyan-fg}Version{/cyan-fg} cli=v${getB1dzVersion()} api=v${apiVersion}`);
+            seenVersionLog = true;
+          }
           if (arb.daemon?.lastTickAt) {
             const age = Date.now() - new Date(arb.daemon.lastTickAt).getTime();
             setDaemonOnline(age < 10000);
           }
+          if (arb.daemon?.version && arb.daemon.version !== seenDaemonVersion) {
+            addLog(`{cyan-fg}Daemon version{/cyan-fg} ${arb.daemon.worker}=v${arb.daemon.version}`);
+            seenDaemonVersion = arb.daemon.version;
+          }
         }
         if (trade) {
           setTradeState(trade);
+          if (trade.daemon?.version && trade.daemon.version !== seenDaemonVersion) {
+            addLog(`{cyan-fg}Daemon version{/cyan-fg} ${trade.daemon.worker}=v${trade.daemon.version}`);
+            seenDaemonVersion = trade.daemon.version;
+          }
         }
 
         setTickCount((c) => c + 1);
@@ -223,7 +239,8 @@ function DashboardInner() {
   const pos = ts?.position;
   const posStr = pos ? `{cyan-fg}${pos.pair}{/}` : '{gray-fg}no position{/}';
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
-  const statusText = ` b1dz crypto ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
+  const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const krakenPairMap: Record<string, string> = {

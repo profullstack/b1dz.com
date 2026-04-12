@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 
-export default async function DashboardPage() {
+export default async function DashboardPage(): Promise<JSX.Element> {
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect('/login?next=/dashboard');

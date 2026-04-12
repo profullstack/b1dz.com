@@ -1,16 +1,21 @@
 'use client';
-import { Suspense, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 
-function LoginForm() {
+export default function LoginPage(): JSX.Element {
   const router = useRouter();
-  const next = useSearchParams().get('next') || '/dashboard';
+  const [next, setNext] = useState('/dashboard');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const nextParam = new URLSearchParams(window.location.search).get('next');
+    if (nextParam) setNext(nextParam);
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,8 +65,4 @@ function LoginForm() {
       </div>
     </main>
   );
-}
-
-export default function LoginPage() {
-  return <Suspense><LoginForm /></Suspense>;
 }

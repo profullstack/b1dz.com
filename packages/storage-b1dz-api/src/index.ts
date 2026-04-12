@@ -32,11 +32,21 @@ export class B1dzApiStorage implements Storage {
   private baseUrl: string;
   private tokens: Tokens;
   private onRefresh?: (tokens: Tokens) => void | Promise<void>;
+  private apiVersion: string | null = null;
 
   constructor(opts: B1dzApiStorageOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
     this.tokens = opts.tokens;
     this.onRefresh = opts.onRefresh;
+  }
+
+  private captureVersion(res: Response) {
+    const version = res.headers.get('x-b1dz-version');
+    if (version) this.apiVersion = version;
+  }
+
+  getApiVersion(): string | null {
+    return this.apiVersion;
   }
 
   private async refresh(): Promise<boolean> {
@@ -45,6 +55,7 @@ export class B1dzApiStorage implements Storage {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ refresh_token: this.tokens.refreshToken }),
     });
+    this.captureVersion(res);
     if (!res.ok) return false;
     const { session } = await res.json() as { session?: { access_token: string; refresh_token: string } };
     if (!session) return false;
@@ -63,9 +74,13 @@ export class B1dzApiStorage implements Storage {
       body: body == null ? undefined : JSON.stringify(body),
     });
     let res = await exec();
+    this.captureVersion(res);
     if (res.status === 401) {
       const refreshed = await this.refresh();
-      if (refreshed) res = await exec();
+      if (refreshed) {
+        res = await exec();
+        this.captureVersion(res);
+      }
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');

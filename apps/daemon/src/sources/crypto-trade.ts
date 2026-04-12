@@ -1,6 +1,6 @@
 import type { SourceWorker, UserContext } from '../types.js';
 import { cryptoTradeSource, getTradeStatus, serializeTradeState } from '@b1dz/source-crypto-trade';
-import { AlertBus } from '@b1dz/core';
+import { AlertBus, getB1dzVersion } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, getActivityLog } from './activity-log.js';
 
@@ -61,6 +61,7 @@ export const cryptoTradeWorker: SourceWorker = {
           lastTickAt: new Date().toISOString(),
           worker: 'crypto-trade',
           status: 'running',
+          version: getB1dzVersion(),
         },
       });
     } finally {

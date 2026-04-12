@@ -14,6 +14,7 @@
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { getB1dzVersion } from '@b1dz/core';
 import type { SourceWorker, UserContext } from './types.js';
 import { SOURCES } from './registry.js';
 
@@ -36,6 +37,7 @@ export class DaemonRuntime {
   }
 
   async start(discoverIntervalMs = 60_000) {
+    console.log(`b1dzd: version ${getB1dzVersion()}`);
     console.log(`b1dzd: starting with ${SOURCES.length} source(s) registered`);
     await this.discover();
     this.discoverTimer = setInterval(() => { void this.discover(); }, discoverIntervalMs);

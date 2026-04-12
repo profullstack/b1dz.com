@@ -7,7 +7,7 @@ import {
   getActivePairs,
   subscribeWs, wsCacheSize, setWsLogger,
 } from '@b1dz/source-crypto-arb';
-import { AlertBus } from '@b1dz/core';
+import { AlertBus, getB1dzVersion } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, getActivityLog } from './activity-log.js';
 import type { MarketSnapshot } from '@b1dz/core';
@@ -172,6 +172,7 @@ export const cryptoArbWorker: SourceWorker = {
         lastTickAt: new Date().toISOString(),
         worker: 'crypto-arb',
         status: 'running',
+        version: getB1dzVersion(),
       },
     };
     if (Object.keys(cachedKrakenBalance).length > 0) payload.krakenBalance = cachedKrakenBalance;

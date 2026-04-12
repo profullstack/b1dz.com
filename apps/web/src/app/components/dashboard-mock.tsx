@@ -1,4 +1,4 @@
-export function DashboardMock() {
+export function DashboardMock(): JSX.Element {
   return (
     <div className="bg-zinc-950 rounded-xl border border-zinc-800 overflow-hidden shadow-2xl">
       {/* Nav */}
@@ -65,7 +65,7 @@ export function DashboardMock() {
   );
 }
 
-function StatCard({ label, value, change, positive }: { label: string; value: string; change: string; positive?: boolean }) {
+function StatCard({ label, value, change, positive }: { label: string; value: string; change: string; positive?: boolean }): JSX.Element {
   return (
     <div className="bg-zinc-900 rounded-lg border border-zinc-800 p-3">
       <div className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</div>
@@ -75,7 +75,7 @@ function StatCard({ label, value, change, positive }: { label: string; value: st
   );
 }
 
-function BalanceRow({ exchange, amount, pct, color }: { exchange: string; amount: string; pct: number; color: string }) {
+function BalanceRow({ exchange, amount, pct, color }: { exchange: string; amount: string; pct: number; color: string }): JSX.Element {
   return (
     <div>
       <div className="flex justify-between text-[11px] mb-0.5">
@@ -89,7 +89,7 @@ function BalanceRow({ exchange, amount, pct, color }: { exchange: string; amount
   );
 }
 
-function PriceRow({ pair, kraken, coinbase, binance, spread }: { pair: string; kraken: string; coinbase: string; binance: string; spread: string }) {
+function PriceRow({ pair, kraken, coinbase, binance, spread }: { pair: string; kraken: string; coinbase: string; binance: string; spread: string }): JSX.Element {
   return (
     <tr className="border-t border-zinc-800/50">
       <td className="py-1 font-medium">{pair}</td>
