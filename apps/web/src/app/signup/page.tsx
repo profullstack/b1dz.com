@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { createBrowserSupabase } from '@/lib/supabase';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -15,11 +14,18 @@ export default function SignupPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setError(null);
-    const supabase = createBrowserSupabase();
-    const { error } = await supabase.auth.signUp({ email, password });
-    setBusy(false);
-    if (error) { setError(error.message); return; }
-    router.replace('/dashboard');
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Signup failed'); setBusy(false); return; }
+      router.replace('/dashboard');
+    } catch {
+      setError('Network error'); setBusy(false);
+    }
   }
 
   return (

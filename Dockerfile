@@ -52,8 +52,10 @@ RUN pnpm --filter @b1dz/core build && \
     pnpm --filter @b1dz/source-crypto-trade build && \
     pnpm --filter @b1dz/daemon build
 ARG NEXT_PUBLIC_SUPABASE_URL=https://hnohaxemomzlpfnoidhp.supabase.co
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhub2hheGVtb216bHBmbm9pZGhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NTE1NDEsImV4cCI6MjA5MTIyNzU0MX0.AWBlZtFytM5vNzUH7NyWgBLFzpNWN7UhsBIjwyC44KI
 ARG NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_8WgKipIZGdvBaz-5s9nqyQ_JK7Ynjy4
 RUN NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY \
     pnpm --filter @b1dz/web build
 

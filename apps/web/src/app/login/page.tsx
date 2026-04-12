@@ -3,7 +3,6 @@ import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { createBrowserSupabase } from '@/lib/supabase';
 
 function LoginForm() {
   const router = useRouter();
@@ -16,11 +15,18 @@ function LoginForm() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setError(null);
-    const supabase = createBrowserSupabase();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setBusy(false);
-    if (error) { setError(error.message); return; }
-    router.replace(next);
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Login failed'); setBusy(false); return; }
+      router.replace(next);
+    } catch {
+      setError('Network error'); setBusy(false);
+    }
   }
 
   return (
