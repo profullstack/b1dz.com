@@ -22,6 +22,7 @@ interface ScheduledTick {
   userId: string;
   source: SourceWorker;
   timer: ReturnType<typeof setInterval>;
+  running: boolean;
 }
 
 export class DaemonRuntime {
@@ -84,6 +85,9 @@ export class DaemonRuntime {
     if (this.scheduled.has(key)) return;
     const tick = async () => {
       if (this.stopping) return;
+      const sched = this.scheduled.get(key);
+      if (!sched || sched.running) return;
+      sched.running = true;
       let ctx: UserContext | null = null;
       try {
         ctx = await this.makeContext(userId, source.id);
@@ -110,10 +114,13 @@ export class DaemonRuntime {
           }).catch(() => {});
         }
         console.error(`b1dzd: tick ${userId.slice(0, 8)}…/${source.id} failed: ${(e as Error).message}`);
+      } finally {
+        const current = this.scheduled.get(key);
+        if (current) current.running = false;
       }
     };
     const timer = setInterval(tick, source.pollIntervalMs);
-    this.scheduled.set(key, { userId, source, timer });
+    this.scheduled.set(key, { userId, source, timer, running: false });
     console.log(`b1dzd: scheduled ${userId.slice(0, 8)}…/${source.id} every ${source.pollIntervalMs}ms`);
     void tick(); // first tick now
   }
