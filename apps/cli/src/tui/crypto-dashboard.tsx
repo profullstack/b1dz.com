@@ -225,26 +225,26 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const statusText = ` b1dz crypto ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
 
-  // Positions — from recent trades (open buys without matching sells)
+  // Positions — from daemon tradeStatus (source of truth, not trade history)
+  const krakenPairMap: Record<string, string> = {
+    XXBTZUSD: 'BTC-USD', XETHZUSD: 'ETH-USD', XZECZUSD: 'ZEC-USD',
+    SOLUSD: 'SOL-USD', TAOUSD: 'TAO-USD', ADAUSD: 'ADA-USD',
+    FARTCOINUSD: 'FARTCOIN-USD', DOGEUSD: 'DOGE-USD', HYPEUSD: 'HYPE-USD',
+    DASHUSD: 'DASH-USD', RAVEUSD: 'RAVE-USD', LINKUSD: 'LINK-USD',
+  };
   const posLines: string[] = [];
-  const openBuys = new Map<string, { pair: string; price: number; vol: number; time: number }>();
-  for (const t of [...trades].reverse()) { // oldest first
-    if (t.type === 'buy') {
-      openBuys.set(t.pair, { pair: t.pair, price: parseFloat(t.price), vol: parseFloat(t.vol), time: t.time });
-    } else if (t.type === 'sell') {
-      openBuys.delete(t.pair);
-    }
+  if (pos) {
+    const currentPrice = prices.find((pr) => {
+      const base = pos.pair.split('-')[0];
+      return pr.pair.includes(base);
+    })?.bid ?? 0;
+    const pnlPct = currentPrice > 0 ? ((currentPrice - pos.entryPrice) / pos.entryPrice * 100) : 0;
+    const pnlUsd = currentPrice > 0 ? (currentPrice - pos.entryPrice) * pos.volume : 0;
+    const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
+    posLines.push(` {cyan-fg}kraken{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${pos.entryPrice.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}  stop:$${pos.stopPrice.toFixed(2)}  ${pos.elapsed}`);
   }
-  if (openBuys.size === 0 && !pos) {
+  if (posLines.length === 0) {
     posLines.push(' {gray-fg}No open positions{/gray-fg}');
-  } else {
-    for (const [, p] of openBuys) {
-      const currentPrice = prices.find((pr) => pr.pair.includes(p.pair.replace('ZUSD', '-USD').replace('USD', '-USD').split('-')[0]))?.bid ?? 0;
-      const pnlPct = currentPrice > 0 ? ((currentPrice - p.price) / p.price * 100) : 0;
-      const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
-      const pnlUsd = currentPrice > 0 ? (currentPrice - p.price) * p.vol : 0;
-      posLines.push(` ${p.pair.padEnd(14)} ${p.vol.toFixed(6)} @ $${p.price.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}`);
-    }
   }
 
   // Prices — show top 5 pairs by volume (first in the list)
