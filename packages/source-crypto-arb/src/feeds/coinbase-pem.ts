@@ -4,29 +4,19 @@
  * falls back to COINBASE_API_PRIVATE_KEY (raw PEM, works locally).
  */
 
-let cached: string | null | undefined;
-
 export function getCoinbasePem(): string | null {
-  if (cached !== undefined) return cached;
-
-  // Try base64-encoded key first (Railway-safe)
+  // Try base64-encoded key first (Railway-safe, no line-breaking issues)
   const b64Key = process.env.COINBASE_API_PRIVATE_KEY_B64;
-  console.log(`[coinbase-pem] B64 env set: ${!!b64Key} (${b64Key?.length ?? 0} chars)`);
-  if (b64Key) {
-    cached = Buffer.from(b64Key, 'base64').toString('utf8');
-    console.log(`[coinbase] PEM from B64 (${cached.length} chars)`);
-    return cached;
+  if (b64Key && b64Key.length > 10) {
+    return Buffer.from(b64Key, 'base64').toString('utf8');
   }
 
-  // Fall back to raw PEM
+  // Fall back to raw PEM (works locally)
   const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
-  if (!privateKey) { cached = null; return null; }
+  if (!privateKey) return null;
 
   const raw = privateKey.replace(/\\n/g, '\n');
   const b64 = raw.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '');
   const lines = b64.match(/.{1,64}/g) ?? [];
-  cached = `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
-  console.log(`[coinbase] PEM from raw (${cached.length} chars)`);
-  return cached;
+  return `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
 }
-// cache bust Sun Apr 12 01:16:20 AM UTC 2026
