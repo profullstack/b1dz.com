@@ -98,6 +98,9 @@ function hasPositionOnExchange(exchange: string): boolean {
 /** Set by hydration — exchanges that have non-trivial crypto holdings. */
 const exchangesHoldingCrypto = new Set<string>();
 
+/** Pending buy — set in evaluate(), cleared in act(). Prevents multiple buys in same tick. */
+let pendingBuyExchange: string | null = null;
+
 /** Timestamp of last trade close per pair. */
 const lastExitAt = new Map<string, number>();
 
@@ -416,10 +419,10 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null; // silent — don't spam logs during cooldown
       }
 
-      // Only ONE position at a time — don't blow our resources
       // One position per exchange — check the exchange this pair trades on
-      const tradeExchange = 'kraken'; // TODO: support multiple exchanges for trading
+      const tradeExchange = 'kraken';
       if (hasPositionOnExchange(tradeExchange)) return null;
+      if (pendingBuyExchange === tradeExchange) return null; // another pair already triggered this tick
 
       // Already have a position for this pair
       if (openPositions.has(item.pair)) return null;
@@ -438,6 +441,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       }
 
       const price = item.snap.ask;
+      // Lock immediately so no other pair triggers in this tick
+      pendingBuyExchange = tradeExchange;
       console.log(`[trade] ENTRY SIGNAL ${item.pair} @ $${price.toFixed(2)}: ${sig.reason} (str=${sig.strength.toFixed(2)})`);
       return {
         id: `crypto-trade:kraken:${item.pair}:buy:${Date.now()}`,
@@ -459,6 +464,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position };
       const pair = meta.snap.pair;
       const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      pendingBuyExchange = null; // clear pending lock
 
       if (meta.signal.side === 'sell') {
         const pos = openPositions.get(pair);
@@ -494,7 +500,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       // Buy
       const price = meta.snap.ask;
-      const volume = Math.min(MAX_POSITION_USD, 100) / price;
+      // Use 99.50 to avoid floating point rounding hitting the $100 limit
+      const volume = Math.min(MAX_POSITION_USD - 0.50, 99.50) / price;
 
       console.log(`[trade] EXECUTE BUY ${pair}: vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {
