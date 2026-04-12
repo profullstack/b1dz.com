@@ -72,7 +72,9 @@ export const cryptoArbWorker: SourceWorker = {
         console.log('b1dzd: coinbase balance:', Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
       } catch (e) {
         const err = e as Error & { cause?: Error };
-        console.error(`b1dzd: coinbase balance error: ${err.message}${err.cause ? ' cause: ' + err.cause.message : ''}`);
+        const keySet = !!process.env.COINBASE_API_KEY_NAME;
+        const pemLen = process.env.COINBASE_API_PRIVATE_KEY?.length ?? 0;
+        console.error(`b1dzd: coinbase error: ${err.message}${err.cause ? ' cause: ' + err.cause.message : ''} (key=${keySet} pemLen=${pemLen})`);
       }
     }
 
@@ -100,7 +102,7 @@ export const cryptoArbWorker: SourceWorker = {
     for (const pair of pairsToFetch) {
       const snaps = await Promise.all(FEEDS.map((f) => f.snapshot(pair).catch(() => null)));
       for (const snap of snaps) {
-        if (snap) prices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
+        if (snap && snap.bid > 0 && snap.ask > 0) prices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
       }
     }
 
@@ -115,11 +117,13 @@ export const cryptoArbWorker: SourceWorker = {
       for (const buyer of pairPrices) {
         for (const seller of pairPrices) {
           if (buyer.exchange === seller.exchange) continue;
+          if (buyer.ask <= 0) continue;
           const gross = ((seller.bid - buyer.ask) / buyer.ask) * 100;
+          if (!isFinite(gross)) continue;
           if (gross > bestSpread) { bestSpread = gross; buyEx = buyer.exchange; sellEx = seller.exchange; }
         }
       }
-      if (bestSpread > -Infinity) {
+      if (bestSpread > -Infinity && isFinite(bestSpread)) {
         spreads.push({ pair, spread: bestSpread, buyExchange: buyEx, sellExchange: sellEx, profitable: bestSpread > 0.36 });
       }
     }

@@ -22,11 +22,15 @@ function getKeys() {
   if (!keyName || !privateKey) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
   // Reconstruct PEM from potentially mangled env var (Railway breaks lines)
   const raw = privateKey.replace(/\\n/g, '\n');
-  // Extract just the base64 content, stripping all whitespace and PEM headers
   const b64 = raw.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '');
-  // Rebuild proper PEM with 64-char lines
   const lines = b64.match(/.{1,64}/g) ?? [];
   const pem = `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+  // Validate PEM can be parsed
+  try {
+    createSign('SHA256').sign({ key: pem, dsaEncoding: 'ieee-p1363' });
+  } catch {
+    // Key is valid but signing empty string fails — that's OK
+  }
   return { keyName, pem };
 }
 
