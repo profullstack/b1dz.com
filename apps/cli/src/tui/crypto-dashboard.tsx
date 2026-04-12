@@ -58,6 +58,7 @@ interface ArbState {
   coinbaseBalance: Record<string, string>;
   recentTrades: { pair: string; type: string; price: string; vol: string; cost: string; fee: string; time: number }[];
   openOrders: { id: string; descr: { type: string; pair: string; price: string; order: string }; vol: string; vol_exec: string; status: string }[];
+  rawLog?: { at: string; text: string }[];
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
@@ -74,6 +75,7 @@ interface TradeStatusData {
 interface TradeState {
   signals: { title: string; confidence: number; createdAt: number }[];
   activityLog: { at: string; text: string }[];
+  rawLog?: { at: string; text: string }[];
   tradeStatus: TradeStatusData;
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
@@ -113,6 +115,7 @@ function DashboardInner() {
   const [tickCount, setTickCount] = useState(0);
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [logTab, setLogTab] = useState<'activity' | 'logs'>('activity');
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -131,8 +134,13 @@ function DashboardInner() {
         return next;
       });
     };
+    const tabHandler = (tab: 'activity' | 'logs') => setLogTab(tab);
     tuiEvents.on('toggle-auto-trade', handler);
-    return () => { tuiEvents.off('toggle-auto-trade', handler); };
+    tuiEvents.on('set-log-tab', tabHandler);
+    return () => {
+      tuiEvents.off('toggle-auto-trade', handler);
+      tuiEvents.off('set-log-tab', tabHandler);
+    };
   }, []);
 
   // Poll API for daemon state
@@ -250,7 +258,10 @@ function DashboardInner() {
   const posStr = pos ? `{cyan-fg}${pos.pair}{/}` : '{white-fg}no position{/}';
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
+  const tabsText = logTab === 'activity'
+    ? ' {black-fg}{green-bg} Activity {/} {white-fg} Logs {/}'
+    : ' {white-fg} Activity {/} {black-fg}{cyan-bg} Logs {/}';
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const krakenPairMap: Record<string, string> = {
@@ -413,6 +424,8 @@ function DashboardInner() {
   // Activity log — merge arb + trade logs, deduplicate, filter blanks
   const arbLog = ((arbState as unknown as Record<string, unknown>)?.activityLog ?? []) as { at: string; text: string }[];
   const tradeLog = tradeState?.activityLog ?? [];
+  const arbRawLog = arbState?.rawLog ?? [];
+  const tradeRawLog = tradeState?.rawLog ?? [];
   const seen = new Set<string>();
   const daemonLog = [...arbLog, ...tradeLog]
     .filter((l) => {
@@ -425,8 +438,19 @@ function DashboardInner() {
     })
     .sort((a, b) => a.at.localeCompare(b.at))
     .slice(-30); // last 30 entries only
+  const rawSeen = new Set<string>();
+  const daemonRawLog = [...arbRawLog, ...tradeRawLog]
+    .filter((l) => {
+      if (!l?.at || !l?.text?.trim()) return false;
+      const key = `${l.at}:${l.text}`;
+      if (rawSeen.has(key)) return false;
+      rawSeen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(-60);
 
-  const logLines = [
+  const activityLines = [
     ...daemonLog.map((l) => {
       const time = formatLogTs(l.at);
       let color = '{white-fg}';
@@ -439,6 +463,17 @@ function DashboardInner() {
     }),
     ...logs.map((l) => `{white-fg}${formatLogTs(l.at)}{/} {white-fg}${l.text}{/}`),
   ];
+  const rawLogLines = daemonRawLog.map((l) => {
+    const time = formatLogTs(l.at);
+    let color = '{white-fg}';
+    if (l.text.includes('✗') || l.text.includes('error') || l.text.includes('FAILED')) color = '{red-fg}';
+    else if (l.text.includes('[ws]')) color = '{cyan-fg}';
+    else if (l.text.includes('[coinbase]') || l.text.includes('[binance]') || l.text.includes('[kraken]')) color = '{yellow-fg}';
+    else if (l.text.includes('[trade]')) color = '{green-fg}';
+    else if (l.text.includes('[arb]')) color = '{blue-fg}';
+    return `{white-fg}${time}{/} ${color}${l.text}{/}`;
+  });
+  const footerLines = logTab === 'activity' ? activityLines : rawLogLines;
 
   const posH = Math.min(posLines.length + 2, 5);
   const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
@@ -450,43 +485,46 @@ function DashboardInner() {
       <box top={0} left={0} width="100%" height={1} tags={true}
         style={{ bg: 'blue', fg: 'white' }} content={statusText} />
 
-      <box label=" Positions " top={1} left={0} width="100%" height={posH}
+      <box top={1} left={0} width="100%" height={1} tags={true}
+        style={{ bg: 'black', fg: 'white' }} content={tabsText} />
+
+      <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={posLines.join('\n')} />
 
-      <box label=" Prices " top={1 + posH} left={0} width="100%" height={row1H}
+      <box label=" Prices " top={2 + posH} left={0} width="100%" height={row1H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'cyan' } }}
         content={priceLines.join('\n')} />
 
-      <box label=" Arb Spreads " top={1 + posH + row1H} left={0} width="40%" height={row2H}
+      <box label=" Arb Spreads " top={2 + posH + row1H} left={0} width="40%" height={row2H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={arbLines.join('\n')} />
 
-      <box label=" Open Orders " top={1 + posH + row1H} left="40%" width="30%" height={row2H}
+      <box label=" Open Orders " top={2 + posH + row1H} left="40%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'magenta' } }}
         content={orderLines.join('\n')} />
 
-      <box label=" Trade Signals " top={1 + posH + row1H} left="70%" width="30%" height={row2H}
+      <box label=" Trade Signals " top={2 + posH + row1H} left="70%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 
-      <box label=" Recent Trades " top={1 + posH + row1H + row2H} left={0} width="55%" height={row3H}
+      <box label=" Recent Trades " top={2 + posH + row1H + row2H} left={0} width="55%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
 
-      <box label=" Balances " top={1 + posH + row1H + row2H} left="55%" width="45%" height={row3H}
+      <box label=" Balances " top={2 + posH + row1H + row2H} left="55%" width="45%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={balLines.join('\n')} />
 
-      <box label=" Activity Log " top={1 + posH + row1H + row2H + row3H} left={0} width="100%"
-        height={`100%-${2 + posH + row1H + row2H + row3H}`}
+      <box label={logTab === 'activity' ? ' Activity ' : ' Logs '} top={2 + posH + row1H + row2H + row3H} left={0} width="100%"
+        height={`100%-${3 + posH + row1H + row2H + row3H}`}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'gray' } }}
-        content={logLines.join('\n') || ' Waiting for daemon data...'} />
+        content={footerLines.join('\n') || (logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...')} />
     </>
   );
 }

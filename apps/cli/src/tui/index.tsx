@@ -20,5 +20,13 @@ export function startTui() {
     tuiEvents.emit('toggle-auto-trade');
   });
 
+  screen.key(['a'], () => {
+    tuiEvents.emit('set-log-tab', 'activity');
+  });
+
+  screen.key(['l'], () => {
+    tuiEvents.emit('set-log-tab', 'logs');
+  });
+
   render(<CryptoDashboard />, screen);
 }
