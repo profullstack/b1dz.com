@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createClient } from 'redis';
@@ -30,6 +31,12 @@ interface CacheEnvelope<T> {
 
 type RuntimeRedisClient = ReturnType<typeof createClient>;
 
+export interface RuntimeLease {
+  key: string;
+  token: string;
+  ttlMs: number;
+}
+
 let redisClientPromise: Promise<RuntimeRedisClient | null> | null = null;
 let redisDisabled = false;
 
@@ -39,6 +46,10 @@ function enc(value: string): string {
 
 function sourceStateRedisKey(userId: string, sourceId: string): string {
   return `${REDIS_PREFIX}:source-state:${enc(userId)}:${enc(sourceId)}`;
+}
+
+function runtimeLeaseRedisKey(scope: string, userId: string, sourceId: string): string {
+  return `${REDIS_PREFIX}:lease:${enc(scope)}:${enc(userId)}:${enc(sourceId)}`;
 }
 
 function sourceStateDir(userId: string): string {
@@ -168,4 +179,59 @@ export async function listRuntimeSourceStates<T>(userId: string): Promise<Array<
     }));
 
   return items.filter((item): item is { sourceId: string; value: T } => item != null);
+}
+
+export async function acquireRuntimeLease(scope: string, userId: string, sourceId: string, ttlMs: number): Promise<RuntimeLease | null> {
+  const redis = await getRedisClient();
+  if (!redis) return null;
+
+  const lease: RuntimeLease = {
+    key: runtimeLeaseRedisKey(scope, userId, sourceId),
+    token: randomUUID(),
+    ttlMs,
+  };
+
+  try {
+    const result = await redis.set(lease.key, lease.token, { PX: ttlMs, NX: true });
+    return result === 'OK' ? lease : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function refreshRuntimeLease(lease: RuntimeLease): Promise<boolean> {
+  const redis = await getRedisClient();
+  if (!redis) return false;
+  try {
+    const result = await redis.eval(
+      `if redis.call("GET", KEYS[1]) == ARGV[1] then
+         return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+       end
+       return 0`,
+      {
+        keys: [lease.key],
+        arguments: [lease.token, String(lease.ttlMs)],
+      },
+    );
+    return Number(result) === 1;
+  } catch {
+    return false;
+  }
+}
+
+export async function releaseRuntimeLease(lease: RuntimeLease): Promise<void> {
+  const redis = await getRedisClient();
+  if (!redis) return;
+  try {
+    await redis.eval(
+      `if redis.call("GET", KEYS[1]) == ARGV[1] then
+         return redis.call("DEL", KEYS[1])
+       end
+       return 0`,
+      {
+        keys: [lease.key],
+        arguments: [lease.token],
+      },
+    );
+  } catch {}
 }

@@ -14,7 +14,13 @@
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { getB1dzVersion, setRuntimeSourceState } from '@b1dz/core';
+import {
+  acquireRuntimeLease,
+  getB1dzVersion,
+  refreshRuntimeLease,
+  releaseRuntimeLease,
+  setRuntimeSourceState,
+} from '@b1dz/core';
 import type { SourceWorker, UserContext } from './types.js';
 import { SOURCES } from './registry.js';
 
@@ -88,6 +94,15 @@ export class DaemonRuntime {
       const sched = this.scheduled.get(key);
       if (!sched || sched.running) return;
       sched.running = true;
+      const leaseTtlMs = Math.max(source.pollIntervalMs * 4, 120_000);
+      const lease = await acquireRuntimeLease('daemon-tick', userId, source.id, leaseTtlMs);
+      if (!lease && process.env.REDIS_URL?.trim()) {
+        sched.running = false;
+        return;
+      }
+      const renewTimer = lease
+        ? setInterval(() => { void refreshRuntimeLease(lease); }, Math.max(5_000, Math.floor(leaseTtlMs / 3)))
+        : null;
       let ctx: UserContext | null = null;
       try {
         ctx = await this.makeContext(userId, source.id);
@@ -115,6 +130,8 @@ export class DaemonRuntime {
         }
         console.error(`b1dzd: tick ${userId.slice(0, 8)}…/${source.id} failed: ${(e as Error).message}`);
       } finally {
+        if (renewTimer) clearInterval(renewTimer);
+        if (lease) await releaseRuntimeLease(lease);
         const current = this.scheduled.get(key);
         if (current) current.running = false;
       }
