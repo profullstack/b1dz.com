@@ -9,7 +9,7 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="flex items-center justify-between max-w-6xl mx-auto px-6 py-4">
         <div className="flex items-center">
-          <Image src="/logo.svg" alt="b1dz" width={128} height={40} />
+          <Image src="/logo.svg" alt="b1dz" width={256} height={80} />
         </div>
         <div className="flex items-center gap-4">
           <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Sign in</Link>
