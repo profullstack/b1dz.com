@@ -242,29 +242,16 @@ function DashboardInner() {
   const ts = tradeState?.tradeStatus;
   const positions = ts?.positions ?? (ts?.position ? [{ exchange: 'kraken', ...ts.position }] : []);
 
-  // P/L — only count REALIZED round-trips (matched buy then sell on same pair)
+  const realizedPnl = ts?.dailyPnl ?? 0;
+
+  // Fees shown in the header are still based on the visible recent trade feed.
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayTs = todayStart.getTime() / 1000;
   const todayTrades = trades.filter((t) => t.time >= todayTs);
-
-  // Match sells with their preceding buys to compute realized P/L
-  let realizedPnl = 0;
   let totalFees = 0;
-  const buysByPair = new Map<string, { cost: number; fee: number }>();
-  for (const t of [...todayTrades].reverse()) { // oldest first
-    const cost = parseFloat(t.cost);
-    const fee = parseFloat(t.fee);
-    totalFees += fee;
-    if (t.type === 'buy') {
-      buysByPair.set(t.pair, { cost, fee });
-    } else if (t.type === 'sell') {
-      const buy = buysByPair.get(t.pair);
-      if (buy) {
-        realizedPnl += (cost - buy.cost) - fee - buy.fee;
-        buysByPair.delete(t.pair);
-      }
-    }
+  for (const t of todayTrades) {
+    totalFees += parseFloat(t.fee);
   }
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
