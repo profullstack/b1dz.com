@@ -75,6 +75,8 @@ interface ArbResult {
   netPerUnit: number;
 }
 
+export type ArbStrategyId = 'spread' | 'inventory-arb';
+
 function readBalanceMap(ctx: Parameters<Source<ArbItem>['evaluate']>[1], exchange: string): Record<string, string> {
   if (exchange === 'kraken') return (ctx.state.krakenBalance as Record<string, string> | undefined) ?? {};
   if (exchange === 'binance-us') return (ctx.state.binanceBalance as Record<string, string> | undefined) ?? {};
@@ -143,6 +145,55 @@ function bestArb(snaps: MarketSnapshot[]): ArbResult | null {
   return best;
 }
 
+function buildOpportunity(arb: ArbResult, strategy: ArbStrategyId, size: number): Opportunity | null {
+  if (!isFinite(size) || size <= 0) return null;
+  const costNow = arb.buyPrice * size;
+  if (!isFinite(costNow) || costNow < MIN_EXECUTABLE_USD) return null;
+  const projectedReturn = arb.sellPrice * size;
+  return {
+    id: `crypto-arb:${strategy}:${arb.pair}:${arb.buyExchange}-${arb.sellExchange}`,
+    sourceId: 'crypto-arb',
+    externalId: `${strategy}:${arb.pair}:${arb.buyExchange}-${arb.sellExchange}`,
+    title: `${arb.pair} ${strategy}: ${arb.buyExchange} → ${arb.sellExchange}`,
+    category: 'crypto-arbitrage',
+    costNow,
+    projectedReturn,
+    projectedProfit: arb.netPerUnit * size,
+    confidence: Math.min(1, arb.spreadPct / 0.5),
+    expiresAt: Date.now() + 5_000,
+    metadata: { ...arb, size, strategy, inventoryMode: strategy === 'inventory-arb' },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+export function evaluateSpreadArb(item: ArbItem): Opportunity | null {
+  const arb = bestArb(item.snapshots);
+  if (!arb) return null;
+  if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
+    return null;
+  }
+  const size = MAX_POSITION_USD / arb.buyPrice;
+  return buildOpportunity(arb, 'spread', size);
+}
+
+export function evaluateInventoryArb(item: ArbItem, ctx: Parameters<Source<ArbItem>['evaluate']>[1]): Opportunity | null {
+  const arb = bestArb(item.snapshots);
+  if (!arb) return null;
+  if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
+    return null;
+  }
+  const size = executableInventorySize(arb, ctx);
+  return buildOpportunity(arb, 'inventory-arb', size);
+}
+
+export function evaluateArbStrategies(item: ArbItem, ctx: Parameters<Source<ArbItem>['evaluate']>[1]): Opportunity[] {
+  return [
+    evaluateSpreadArb(item),
+    evaluateInventoryArb(item, ctx),
+  ].filter((opp): opp is Opportunity => opp != null);
+}
+
 export const cryptoArbSource: Source<ArbItem> = {
   id: 'crypto-arb',
   pollIntervalMs: 1000, // arb windows close fast
@@ -159,36 +210,13 @@ export const cryptoArbSource: Source<ArbItem> = {
     return items;
   },
   evaluate(item, ctx): Opportunity | null {
-    const arb = bestArb(item.snapshots);
-    if (!arb) return null;
-    if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
-      return null;
-    }
-    const size = executableInventorySize(arb, ctx);
-    if (!isFinite(size) || size <= 0) return null;
-    const costNow = arb.buyPrice * size;
-    if (!isFinite(costNow) || costNow < MIN_EXECUTABLE_USD) return null;
-    const projectedReturn = arb.sellPrice * size;
-    return {
-      id: `crypto-arb:${item.pair}:${arb.buyExchange}-${arb.sellExchange}`,
-      sourceId: 'crypto-arb',
-      externalId: `${item.pair}:${arb.buyExchange}-${arb.sellExchange}`,
-      title: `${item.pair} arb: ${arb.buyExchange} → ${arb.sellExchange}`,
-      category: 'crypto-arbitrage',
-      costNow,
-      projectedReturn,
-      projectedProfit: arb.netPerUnit * size,
-      // Confidence shrinks with thin spreads — anything under 0.1% is fragile
-      confidence: Math.min(1, arb.spreadPct / 0.5),
-      // Short window — arb closes fast
-      expiresAt: Date.now() + 5_000,
-      metadata: { ...arb, size, inventoryMode: true },
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+    return evaluateInventoryArb(item, ctx) ?? evaluateSpreadArb(item);
   },
   async act(opp): Promise<ActionResult> {
-    const arb = opp.metadata as unknown as ArbResult & { size: number };
+    const arb = opp.metadata as unknown as ArbResult & { size: number; strategy?: ArbStrategyId; inventoryMode?: boolean };
+    if (arb.strategy !== 'inventory-arb' && !arb.inventoryMode) {
+      return { ok: false, message: 'spread strategy is informational only', permanent: true };
+    }
     if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
       return { ok: false, message: `unsupported exchange (${arb.buyExchange}/${arb.sellExchange})`, permanent: true };
     }

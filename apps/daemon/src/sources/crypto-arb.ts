@@ -1,6 +1,7 @@
 import type { SourceWorker, UserContext } from '../types.js';
 import {
   cryptoArbSource,
+  evaluateArbStrategies,
   KrakenFeed, BinanceUsFeed, CoinbaseFeed,
   getBalance, getBinanceBalance, getCoinbaseBalance, getCoinbaseAuthDebug,
   getTradeHistory, getOpenOrders,
@@ -183,14 +184,17 @@ export const cryptoArbWorker: SourceWorker = {
       const items = await cryptoArbSource.poll(sourceCtx);
       const opps: unknown[] = (ctx.payload?.opportunities as unknown[]) ?? [];
       for (const item of items) {
-      const opp = cryptoArbSource.evaluate(item, sourceCtx);
-      if (!opp) continue;
-      opps.push(opp);
-      logActivity(`[arb] ⚡ opportunity: ${opp.title} profit=$${opp.projectedProfit.toFixed(4)}`, 'crypto-arb');
-      if (cryptoArbSource.act) {
-        const result = await cryptoArbSource.act(opp, sourceCtx);
-        if (result.ok) logActivity(`[arb] ✓ EXECUTED: ${result.message}`, 'crypto-arb');
-        else logActivity(`[arb] ✗ skipped: ${result.message}`, 'crypto-arb');
+      const strategies = evaluateArbStrategies(item, sourceCtx);
+      for (const opp of strategies) {
+        opps.push(opp);
+        logActivity(`[arb] ⚡ opportunity: ${opp.title} profit=$${opp.projectedProfit.toFixed(4)}`, 'crypto-arb');
+        const meta = (opp.metadata as { strategy?: string } | undefined) ?? {};
+        if (meta.strategy !== 'inventory-arb') continue;
+        if (cryptoArbSource.act) {
+          const result = await cryptoArbSource.act(opp, sourceCtx);
+          if (result.ok) logActivity(`[arb] ✓ EXECUTED: ${result.message}`, 'crypto-arb');
+          else logActivity(`[arb] ✗ skipped: ${result.message}`, 'crypto-arb');
+        }
       }
       }
       while (opps.length > 100) opps.shift();
