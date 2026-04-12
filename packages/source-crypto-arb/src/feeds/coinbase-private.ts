@@ -42,10 +42,9 @@ function buildJwt(method: string, path: string): string {
   const payload = {
     sub: keyName,
     iss: 'cdp',
-    aud: 'https://api.coinbase.com',
-    nbf: now - 60,
-    exp: now + 300,
-    uris: [uri],
+    nbf: now,
+    exp: now + 120,
+    uri,
   };
 
   const segments = [
@@ -92,7 +91,7 @@ async function coinbasePrivate<T>(
         }
         const parts = jwt.split('.');
         const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uris?.[0]}`);
+        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uri}`);
       }
       return (await res.json()) as T & { error?: string; message?: string };
     } catch (e) {
@@ -124,8 +123,10 @@ export async function getBalance(): Promise<Record<string, string>> {
   const data = await coinbasePrivate<AccountsResponse>('GET', '/api/v3/brokerage/accounts?limit=50');
   const result: Record<string, string> = {};
   for (const acct of data.accounts) {
-    const val = parseFloat(acct.available_balance.value);
-    if (val > 0) result[acct.currency] = acct.available_balance.value;
+    const available = parseFloat(acct.available_balance.value);
+    const hold = parseFloat(acct.hold.value);
+    const total = available + hold;
+    if (total > 0) result[acct.currency] = total.toFixed(8);
   }
   return result;
 }

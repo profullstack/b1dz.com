@@ -10,6 +10,7 @@
  */
 
 import { createSign, randomBytes } from 'node:crypto';
+import { getCoinbasePem } from './feeds/coinbase-pem.js';
 
 const MIN_VOLUME_USD = 100_000;
 const MIN_MARKET_CAP_USD = 50_000_000; // $50M minimum market cap
@@ -65,10 +66,8 @@ function base64url(buf: Buffer): string {
 
 async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; change24h: number }>> {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
-  if (!keyName || !privateKey) return new Map();
-
-  const pem = privateKey.replace(/\\n/g, '\n');
+  const pem = getCoinbasePem();
+  if (!keyName || !pem) return new Map();
   const path = '/api/v3/brokerage/products';
   const now = Math.floor(Date.now() / 1000);
   const nonce = randomBytes(16).toString('hex');

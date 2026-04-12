@@ -102,7 +102,9 @@ export async function getBalance(): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   for (const b of info.balances) {
     const free = parseFloat(b.free);
-    if (free > 0) result[b.asset] = b.free;
+    const locked = parseFloat(b.locked);
+    const total = free + locked;
+    if (total > 0) result[b.asset] = total.toFixed(8);
   }
   return result;
 }
