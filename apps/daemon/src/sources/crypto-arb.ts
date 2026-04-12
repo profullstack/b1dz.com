@@ -14,7 +14,8 @@ import type { MarketSnapshot } from '@b1dz/core';
 
 const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
 
-// Cache private API data — refresh every 60s
+// Private API state — refreshed periodically, but never allowed to linger
+// invisibly after a failed fetch.
 let cachedKrakenBalance: Record<string, string> = {};
 let cachedBinanceBalance: Record<string, string> = {};
 let cachedCoinbaseBalance: Record<string, string> = {};
@@ -53,6 +54,9 @@ export const cryptoArbWorker: SourceWorker = {
         const oo = await getOpenOrders();
         cachedOpenOrders = Object.entries(oo).map(([id, o]) => ({ id, ...o }));
       } catch (e) {
+        cachedKrakenBalance = {};
+        cachedRecentTrades = [];
+        cachedOpenOrders = [];
         const msg = (e as Error).message;
         if (msg.includes('Rate limit')) {
           logActivity('[kraken] ✗ Rate limited, backing off 60s');
@@ -65,6 +69,7 @@ export const cryptoArbWorker: SourceWorker = {
         cachedBinanceBalance = await getBinanceBalance();
         logActivity(`[binance] balance: ${Object.entries(cachedBinanceBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`);
       } catch (e) {
+        cachedBinanceBalance = {};
         logActivity(`[binance] ✗ Unable to connect: ${(e as Error).message.slice(0, 80)}`);
       }
       try {
@@ -75,6 +80,7 @@ export const cryptoArbWorker: SourceWorker = {
         cachedCoinbaseBalance = await getCoinbaseBalance();
         logActivity(`[coinbase] balance: ${Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`);
       } catch (e) {
+        cachedCoinbaseBalance = {};
         const err = e as Error & { cause?: Error };
         const detail = err.cause ? ` (${err.cause.message})` : '';
         logActivity(`[coinbase] ✗ Unable to connect: ${err.message.slice(0, 500)}${detail}`);
@@ -165,12 +171,18 @@ export const cryptoArbWorker: SourceWorker = {
     while (opps.length > 100) opps.shift();
 
     // ── Save everything every tick ──
-    // Only include balances if they've been fetched (avoid overwriting with {})
+    // Always overwrite private fields so stale balances/orders/trades do not
+    // survive a failed fetch or a partially-updated worker.
     const payload: Record<string, unknown> = {
       enabled: ctx.payload?.enabled ?? true,
       opportunities: opps,
       prices,
       spreads,
+      krakenBalance: cachedKrakenBalance,
+      binanceBalance: cachedBinanceBalance,
+      coinbaseBalance: cachedCoinbaseBalance,
+      recentTrades: cachedRecentTrades,
+      openOrders: cachedOpenOrders,
       activityLog: getActivityLog(),
       daemon: {
         lastTickAt: new Date().toISOString(),
@@ -179,11 +191,6 @@ export const cryptoArbWorker: SourceWorker = {
         version: getB1dzVersion(),
       },
     };
-    if (Object.keys(cachedKrakenBalance).length > 0) payload.krakenBalance = cachedKrakenBalance;
-    if (Object.keys(cachedBinanceBalance).length > 0) payload.binanceBalance = cachedBinanceBalance;
-    if (Object.keys(cachedCoinbaseBalance).length > 0) payload.coinbaseBalance = cachedCoinbaseBalance;
-    if (cachedRecentTrades.length > 0) payload.recentTrades = cachedRecentTrades;
-    if (cachedOpenOrders.length > 0) payload.openOrders = cachedOpenOrders;
     await ctx.savePayload(payload);
   },
 };
