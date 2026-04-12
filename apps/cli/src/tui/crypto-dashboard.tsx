@@ -380,6 +380,15 @@ function DashboardInner() {
       if (!priceOf[base]) priceOf[base] = p.bid;
     }
   }
+  for (const t of recentTrades) {
+    const base = t.pair.replace(/^X/, '').split('USD')[0];
+    const price = parseFloat(t.price);
+    if (base && price > 0 && !priceOf[base]) priceOf[base] = price;
+  }
+  if (ts?.position?.entryPrice && ts.position.entryPrice > 0) {
+    const base = ts.position.pair.split('-')[0];
+    if (base && !priceOf[base]) priceOf[base] = ts.position.entryPrice;
+  }
 
   // Helper: extract all non-zero holdings from a balance map
   const stablecoins = new Set(['USD', 'USDC', 'USDT']);
@@ -407,7 +416,7 @@ function DashboardInner() {
     if (holdings.length === 0) return '{white-fg}no data{/}';
     return holdings.map((h) => {
       if (h.isStable) return `$${h.amount.toFixed(2)} ${h.asset}`;
-      return h.usdValue > 0.01
+      return h.usdValue > 0
         ? `${h.amount.toFixed(4)} ${h.asset} ($${h.usdValue.toFixed(2)})`
         : `${h.amount.toFixed(4)} ${h.asset}`;
     }).join(' + ');
