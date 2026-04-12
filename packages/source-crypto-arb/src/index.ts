@@ -13,7 +13,7 @@
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed } from './feeds/index.js';
-export { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed, subscribeWs, wsCacheSize, setWsLogger } from './feeds/index.js';
+export { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed, subscribeWs, getAllSnapshots, wsCacheSize, setWsLogger } from './feeds/index.js';
 export { getBalance, placeOrder, getOpenOrders, getTradeHistory, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
 export { hasTradingPair as hasKrakenTradingPair } from './feeds/kraken-private.js';
 export {
@@ -32,6 +32,7 @@ import { placeOrder as placeCoinbaseOrder } from './feeds/coinbase-private.js';
 import { normalizePair } from './feeds/pairs.js';
 import { getActivePairs } from './pair-discovery.js';
 export { getActivePairs } from './pair-discovery.js';
+export { normalizePair } from './feeds/pairs.js';
 
 const MAX_POSITION_USD = 100;
 const MIN_EXECUTABLE_USD = 5;

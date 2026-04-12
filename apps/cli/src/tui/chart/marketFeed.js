@@ -1,0 +1,161 @@
+// @ts-nocheck
+import { subscribeWs, getAllSnapshots, normalizePair } from '@b1dz/source-crypto-arb';
+import { aggregateBars, TIMEFRAME_TO_MS } from './timeframeAggregator.js';
+
+const COINBASE_GRANULARITY = {
+  '1m': 'ONE_MINUTE',
+  '5m': 'FIVE_MINUTE',
+  '15m': 'FIFTEEN_MINUTE',
+  '1h': 'ONE_HOUR',
+  '1d': 'ONE_DAY',
+};
+
+function timeframeToKrakenInterval(timeframe) {
+  return {
+    '1m': 1,
+    '5m': 5,
+    '15m': 15,
+    '1h': 60,
+    '4h': 240,
+    '1d': 1440,
+    '1w': 10080,
+  }[timeframe] ?? 1;
+}
+
+function timeframeToBinanceInterval(timeframe) {
+  return {
+    '1m': '1m',
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1h',
+    '4h': '4h',
+    '1d': '1d',
+    '1w': '1w',
+  }[timeframe] ?? '1m';
+}
+
+function chooseCoinbaseFetchTimeframe(timeframe) {
+  if (timeframe === '4h') return { fetchTimeframe: '1h', aggregate: '4h' };
+  if (timeframe === '1w') return { fetchTimeframe: '1d', aggregate: '1w' };
+  return { fetchTimeframe: timeframe, aggregate: null };
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${text.slice(0, 160)}`.trim());
+  }
+  return res.json();
+}
+
+export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 120 }) {
+  try {
+    if (exchange === 'kraken') {
+      const interval = timeframeToKrakenInterval(timeframe);
+      const symbol = normalizePair(pair, 'kraken');
+      const data = await fetchJson(`https://api.kraken.com/0/public/OHLC?pair=${encodeURIComponent(symbol)}&interval=${interval}`);
+      const series = Array.isArray(data?.result?.[symbol])
+        ? data.result[symbol]
+        : Array.isArray(data?.result?.[Object.keys(data?.result ?? {}).find((key) => key !== 'last') ?? ''])
+          ? data.result[Object.keys(data.result).find((key) => key !== 'last')]
+          : [];
+      return series
+        .map((row) => ({
+          time: Number(row[0]) * 1000,
+          open: Number(row[1]),
+          high: Number(row[2]),
+          low: Number(row[3]),
+          close: Number(row[4]),
+          volume: Number(row[6] ?? 0),
+        }))
+        .filter((bar) => Number.isFinite(bar.close))
+        .slice(-limit);
+    }
+
+    if (exchange === 'binance-us') {
+      const interval = timeframeToBinanceInterval(timeframe);
+      const symbol = normalizePair(pair, 'binance-us');
+      const data = await fetchJson(`https://api.binance.us/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${Math.min(limit, 500)}`);
+      return Array.isArray(data)
+        ? data.map((row) => ({
+            time: Number(row[0]),
+            open: Number(row[1]),
+            high: Number(row[2]),
+            low: Number(row[3]),
+            close: Number(row[4]),
+            volume: Number(row[5]),
+          })).filter((bar) => Number.isFinite(bar.close))
+        : [];
+    }
+
+    if (exchange === 'coinbase') {
+      const { fetchTimeframe, aggregate } = chooseCoinbaseFetchTimeframe(timeframe);
+      const granularity = COINBASE_GRANULARITY[fetchTimeframe];
+      const seconds = TIMEFRAME_TO_MS[fetchTimeframe] / 1000;
+      const end = Math.floor(Date.now() / 1000);
+      const start = end - Math.max(1, limit) * seconds;
+      const data = await fetchJson(
+        `https://api.coinbase.com/api/v3/brokerage/products/${pair}/candles?granularity=${granularity}&start=${start}&end=${end}`,
+      );
+      const rawBars = (data?.candles ?? [])
+        .map((row) => ({
+          time: Number(row.start) * 1000,
+          open: Number(row.open),
+          high: Number(row.high),
+          low: Number(row.low),
+          close: Number(row.close),
+          volume: Number(row.volume ?? 0),
+        }))
+        .filter((bar) => Number.isFinite(bar.close))
+        .sort((a, b) => a.time - b.time);
+      return aggregate ? aggregateBars(rawBars, aggregate).slice(-limit) : rawBars.slice(-limit);
+    }
+  } catch (error) {
+    return [];
+  }
+  return [];
+}
+
+export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000 }) {
+  subscribeWs([pair]);
+  let stopped = false;
+  let lastSeen = 0;
+  let lastPublished = 0;
+
+  const emitStatus = (status) => {
+    if (!stopped) onStatus?.(status);
+  };
+
+  emitStatus('reconnecting');
+
+  const timer = setInterval(() => {
+    if (stopped) return;
+    const snapshots = getAllSnapshots(pair);
+    const snap = snapshots.find((entry) => entry.exchange === exchange) ?? snapshots[0] ?? null;
+    if (snap?.ts && snap.ts > lastPublished) {
+      lastPublished = snap.ts;
+      lastSeen = Date.now();
+      emitStatus('live');
+      onTick?.({
+        time: snap.ts,
+        price: Number.isFinite(snap.bid) && snap.bid > 0 ? snap.bid : snap.ask,
+        exchange: snap.exchange,
+        pair,
+      });
+      return;
+    }
+    if (!lastSeen) {
+      emitStatus('reconnecting');
+      return;
+    }
+    if (Date.now() - lastSeen > staleAfterMs) {
+      emitStatus('stale');
+    }
+  }, pollMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}

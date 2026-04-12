@@ -32,6 +32,16 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'logs');
   });
 
+  screen.key(['1'], () => tuiEvents.emit('set-chart-timeframe', '1m'));
+  screen.key(['2'], () => tuiEvents.emit('set-chart-timeframe', '5m'));
+  screen.key(['3'], () => tuiEvents.emit('set-chart-timeframe', '15m'));
+  screen.key(['4'], () => tuiEvents.emit('set-chart-timeframe', '1h'));
+  screen.key(['5'], () => tuiEvents.emit('set-chart-timeframe', '4h'));
+  screen.key(['6'], () => tuiEvents.emit('set-chart-timeframe', '1d'));
+  screen.key(['7'], () => tuiEvents.emit('set-chart-timeframe', '1w'));
+  screen.key([',', 'left'], () => tuiEvents.emit('cycle-chart-pair', -1));
+  screen.key(['.', 'right'], () => tuiEvents.emit('cycle-chart-pair', 1));
+
   screen.key(['pageup', 'ppage', 'prior', 'S-pageup', 'C-u', 'C-b'], () => pageLog(1));
   screen.key(['pagedown', 'npage', 'next', 'S-pagedown', 'C-d', 'C-f'], () => pageLog(-1));
 

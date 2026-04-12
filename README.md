@@ -36,6 +36,34 @@ pnpm dev:web   # Next.js dashboard
 pnpm dev:cli   # daemon
 ```
 
+## TUI Chart
+
+The crypto TUI now includes a realtime OHLC chart pane backed by exchange
+websocket data plus public candle bootstrap.
+
+Controls:
+
+- `1` = `1m`
+- `2` = `5m`
+- `3` = `15m`
+- `4` = `1h`
+- `5` = `4h`
+- `6` = `1d`
+- `7` = `1w`
+- `,` / `.` = previous / next chart pair
+
+Module usage example:
+
+```jsx
+<RealtimeOHLCChartContainer
+  pair="BTC-USD"
+  exchange="kraken"
+  timeframe="5m"
+  positions={positions}
+  closedTrades={closedTrades}
+/>
+```
+
 ## Migration plan (lifting dealdash)
 
 1. Move `~/src/dealdash/dealdash.ts` API helpers into `packages/source-dealdash/src/api.ts`

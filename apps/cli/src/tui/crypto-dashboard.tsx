@@ -3,6 +3,7 @@ import { tuiEvents } from './events.js';
 import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
+import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
@@ -143,6 +144,20 @@ function formatUsdPrice(value: number): string {
   return value.toFixed(6);
 }
 
+const CHART_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
+type ChartTimeframe = typeof CHART_TIMEFRAMES[number];
+
+function preferredChartExchange(pair: string, positions: TradeStatusData['positions'], prices: ArbState['prices'], closedTrades: NonNullable<TradeState['tradeState']>['closedTrades'] = []) {
+  const open = positions.find((pos) => pos.pair === pair);
+  if (open) return open.exchange;
+  const priceExchanges = new Set(prices.filter((price) => price.pair === pair).map((price) => price.exchange));
+  for (const exchange of ['kraken', 'coinbase', 'binance-us']) {
+    if (priceExchanges.has(exchange)) return exchange;
+  }
+  const recentClosed = [...closedTrades].sort((a, b) => b.exitTime - a.exitTime).find((trade) => trade.pair === pair);
+  return recentClosed?.exchange ?? 'kraken';
+}
+
 // Wrap the whole component in error handling so bad data doesn't crash React
 function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
@@ -155,6 +170,8 @@ function DashboardInner() {
   const [logTab, setLogTab] = useState<'activity' | 'logs'>('activity');
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
+  const [chartPair, setChartPair] = useState<string | null>(null);
+  const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('1m');
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -181,15 +198,41 @@ function DashboardInner() {
         setRawPage((prev) => Math.max(0, prev + delta));
       }
     };
+    const timeframeHandler = (next: ChartTimeframe) => {
+      setChartTimeframe(next);
+      addLog(`{cyan-fg}Chart{/cyan-fg} timeframe → ${next}`);
+    };
+    const pairCycleHandler = (delta: number) => {
+      setChartPair((current) => {
+        const tradePairs = tradeState?.tradeStatus?.ticksPerPair
+          ? [...new Set(Object.keys(tradeState.tradeStatus.ticksPerPair).map((key) => key.split(':').slice(1).join(':')))]
+          : [];
+        const pricePairs = [...new Set((arbState?.prices ?? []).map((price) => price.pair))];
+        const pairs = [...new Set([
+          ...(tradeState?.tradeStatus?.positions ?? []).map((pos) => pos.pair),
+          ...tradePairs,
+          ...pricePairs,
+        ])];
+        if (pairs.length === 0) return current;
+        const start = current && pairs.includes(current) ? pairs.indexOf(current) : 0;
+        const next = pairs[(start + delta + pairs.length) % pairs.length];
+        addLog(`{cyan-fg}Chart{/cyan-fg} pair → ${next}`);
+        return next;
+      });
+    };
     tuiEvents.on('toggle-auto-trade', handler);
     tuiEvents.on('set-log-tab', tabHandler);
     tuiEvents.on('page-log', pageHandler);
+    tuiEvents.on('set-chart-timeframe', timeframeHandler);
+    tuiEvents.on('cycle-chart-pair', pairCycleHandler);
     return () => {
       tuiEvents.off('toggle-auto-trade', handler);
       tuiEvents.off('set-log-tab', tabHandler);
       tuiEvents.off('page-log', pageHandler);
+      tuiEvents.off('set-chart-timeframe', timeframeHandler);
+      tuiEvents.off('cycle-chart-pair', pairCycleHandler);
     };
-  }, [logTab]);
+  }, [logTab, arbState, tradeState]);
 
   // Poll API for daemon state
   useEffect(() => {
@@ -301,6 +344,24 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
+
+  const chartPairs = [...new Set([
+    ...positions.map((pos) => pos.pair),
+    ...Object.keys(ts?.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':')),
+    ...prices.map((price) => price.pair),
+    ...closedTrades.map((trade) => trade.pair),
+  ])].filter(Boolean);
+  const activeChartPair = chartPairs.includes(chartPair ?? '') ? chartPair! : (chartPairs[0] ?? 'BTC-USD');
+  const chartExchange = preferredChartExchange(activeChartPair, positions, prices, closedTrades);
+  const chartPairIdx = chartPairs.indexOf(activeChartPair);
+
+  useEffect(() => {
+    if (!chartPairs.length) return;
+    if (!chartPair || !chartPairs.includes(chartPair)) {
+      setChartPair(chartPairs[0]);
+    }
+  }, [chartPairs, chartPair]);
+
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [];
   for (const pos of positions) {
@@ -311,19 +372,6 @@ function DashboardInner() {
   if (posLines.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
   }
-
-  // Prices — show top 5 pairs by volume (first in the list)
-  const DISPLAY_PAIRS = [...new Set(prices.map((p) => p.pair))].slice(0, 5);
-  const priceLines: string[] = ['{bold} Pair             Kraken          Coinbase        Binance{/bold}'];
-  for (const pair of DISPLAY_PAIRS) {
-    const kr = prices.find((p) => p.pair === pair && p.exchange === 'kraken');
-    const cb = prices.find((p) => p.pair === pair && p.exchange === 'coinbase');
-    const bn = prices.find((p) => p.pair === pair && p.exchange === 'binance-us');
-    const fmt = (v?: number) => v ? `$${formatUsdPrice(v)}`.padStart(14) : '           -  ';
-    priceLines.push(` ${pair.padEnd(16)} ${fmt(kr?.bid)}  ${fmt(cb?.bid)}  ${fmt(bn?.bid)}`);
-  }
-  if (!daemonOnline) priceLines.push('', ' {red-fg}Daemon offline — waiting for data...{/red-fg}');
-  if (apiError) priceLines.push(` {red-fg}API: ${apiError.slice(0, 60)}{/red-fg}`);
 
   // Arb spreads — show top 5
   const displaySpreads = spreads.filter((s) => s?.pair && s?.spread != null).slice(0, 5);
@@ -505,11 +553,11 @@ function DashboardInner() {
   ];
 
   const posH = Math.min(posLines.length + 2, 7);
-  const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
-  const footerTop = 2 + posH + row1H + row2H + row3H;
   const screenRows = process.stdout.rows ?? 40;
+  const chartH = Math.max(8, Math.min(14, screenRows - 2 - posH - row2H - row3H - 8));
+  const footerTop = 2 + posH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
 
@@ -567,31 +615,40 @@ function DashboardInner() {
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={posLines.join('\n')} />
 
-      <box label=" Prices " top={2 + posH} left={0} width="100%" height={row1H}
-        border={{ type: 'line' }} tags={true} style={{ border: { fg: 'cyan' } }}
-        content={priceLines.join('\n')} />
+      <RealtimeOHLCChartContainer
+        top={2 + posH}
+        left={0}
+        height={chartH}
+        width={(process.stdout.columns ?? 120) - 4}
+        label={` OHLC Chart  ${activeChartPair} @ ${chartExchange}  TF:${chartTimeframe}  Pair ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}  [1-7] tf [,/.] pair `}
+        pair={activeChartPair}
+        exchange={chartExchange}
+        timeframe={chartTimeframe}
+        positions={positions as any}
+        closedTrades={closedTrades as any}
+      />
 
-      <box label=" Arb Spreads " top={2 + posH + row1H} left={0} width="40%" height={row2H}
+      <box label=" Arb Spreads " top={2 + posH + chartH} left={0} width="40%" height={row2H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={arbLines.join('\n')} />
 
-      <box label=" Open Orders " top={2 + posH + row1H} left="40%" width="30%" height={row2H}
+      <box label=" Open Orders " top={2 + posH + chartH} left="40%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'magenta' } }}
         content={orderLines.join('\n')} />
 
-      <box label=" Trade Signals " top={2 + posH + row1H} left="70%" width="30%" height={row2H}
+      <box label=" Trade Signals " top={2 + posH + chartH} left="70%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true} keys={true} vi={true} alwaysScroll={true}
         scrollbar={{ ch: ' ', track: { bg: 'gray' }, style: { bg: 'cyan' } }}
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 
-      <box label=" Closed Trades " top={2 + posH + row1H + row2H} left={0} width="55%" height={row3H}
+      <box label=" Closed Trades " top={2 + posH + chartH + row2H} left={0} width="55%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
 
-      <box label=" Balances " top={2 + posH + row1H + row2H} left="55%" width="45%" height={row3H}
+      <box label=" Balances " top={2 + posH + chartH + row2H} left="55%" width="45%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={balLines.join('\n')} />

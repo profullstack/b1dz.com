@@ -1,0 +1,44 @@
+// @ts-nocheck
+import React from 'react';
+import { renderChart } from './chartRenderer.js';
+
+export function OHLCChart({
+  bars = [],
+  markers = [],
+  position = null,
+  status = 'bootstrapping',
+  width = '100%',
+  height = 12,
+  renderWidth = 80,
+  renderHeight = height,
+  pair = 'BTC-USD',
+  exchange = 'kraken',
+  timeframe = '1m',
+  currentPrice = null,
+  lastUpdateTime = null,
+  ascii = false,
+  ...boxProps
+}) {
+  const content = renderChart({
+    pair,
+    exchange,
+    timeframe,
+    bars,
+    markers,
+    position,
+    status,
+    currentPrice,
+    lastUpdateTime,
+    width: renderWidth,
+    height: renderHeight,
+    ascii,
+  });
+
+  return React.createElement('box', {
+    tags: true,
+    content,
+    ...boxProps,
+  });
+}
+
+export default OHLCChart;
