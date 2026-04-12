@@ -66,6 +66,6 @@ ENV NODE_ENV=production
 # v3
 COPY --from=build /app /app
 EXPOSE 8080
-# Start both web API and daemon in one container
-# Railway sets PORT=8080, next start reads PORT automatically
-CMD ["pnpm", "start"]
+# Start both web API and daemon under a small supervisor so if either dies,
+# the container exits and Railway/Docker can restart it.
+CMD ["bash", "./scripts/start-railway.sh"]

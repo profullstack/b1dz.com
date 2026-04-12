@@ -380,27 +380,19 @@ function DashboardInner() {
       if (!priceOf[base]) priceOf[base] = p.bid;
     }
   }
-  for (const t of recentTrades) {
-    const base = t.pair.replace(/^X/, '').split('USD')[0];
-    const price = parseFloat(t.price);
-    if (base && price > 0 && !priceOf[base]) priceOf[base] = price;
-  }
-  if (ts?.position?.entryPrice && ts.position.entryPrice > 0) {
-    const base = ts.position.pair.split('-')[0];
-    if (base && !priceOf[base]) priceOf[base] = ts.position.entryPrice;
-  }
 
   // Helper: extract all non-zero holdings from a balance map
   const stablecoins = new Set(['USD', 'USDC', 'USDT']);
   function parseBal(bal: Record<string, string>, nameMap?: Record<string, string>) {
-    const holdings: { asset: string; amount: number; isStable: boolean; usdValue: number }[] = [];
+    const holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[] = [];
     for (const [k, v] of Object.entries(bal)) {
       const name = nameMap?.[k] ?? k;
       const val = parseFloat(v);
       if (val < 0.0001) continue;
       const isStable = stablecoins.has(name);
-      const usdValue = isStable ? val : val * (priceOf[name] ?? 0);
-      holdings.push({ asset: name, amount: val, isStable, usdValue });
+      const unitPrice = isStable ? 1 : (priceOf[name] ?? 0);
+      const usdValue = val * unitPrice;
+      holdings.push({ asset: name, amount: val, isStable, unitPrice, usdValue });
     }
     return holdings;
   }
@@ -412,12 +404,12 @@ function DashboardInner() {
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
   const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings);
 
-  function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; usdValue: number }[]): string {
+  function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[]): string {
     if (holdings.length === 0) return '{white-fg}no data{/}';
     return holdings.map((h) => {
-      if (h.isStable) return `$${h.amount.toFixed(2)} ${h.asset}`;
-      return h.usdValue > 0
-        ? `${h.amount.toFixed(4)} ${h.asset} ($${h.usdValue.toFixed(2)})`
+      if (h.isStable) return `${h.amount.toFixed(2)} ${h.asset} ($${h.usdValue.toFixed(2)})`;
+      return h.unitPrice > 0 && h.usdValue > 0.01
+        ? `${h.amount.toFixed(4)} ${h.asset} @ $${h.unitPrice.toFixed(2)} ($${h.usdValue.toFixed(2)})`
         : `${h.amount.toFixed(4)} ${h.asset}`;
     }).join(' + ');
   }
