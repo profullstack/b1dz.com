@@ -34,33 +34,55 @@ async function binancePrivate<T>(
   method: 'GET' | 'POST' | 'DELETE',
   path: string,
   params: Record<string, string> = {},
+  retries = 3,
 ): Promise<T> {
   const { key, secret } = getKeys();
-  params.timestamp = (Date.now() - 1000).toString(); // offset for proxy latency
-  params.recvWindow = '10000';
+  let lastErr: Error | undefined;
 
-  const qs = new URLSearchParams(params).toString();
-  const signature = sign(qs, secret);
-  const fullQs = `${qs}&signature=${signature}`;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      // Fresh timestamp + signature for each attempt
+      const p = { ...params };
+      p.timestamp = (Date.now() - 1000).toString();
+      p.recvWindow = '10000';
 
-  const url = method === 'GET' || method === 'DELETE'
-    ? `${BASE}${path}?${fullQs}`
-    : `${BASE}${path}`;
+      const qs = new URLSearchParams(p).toString();
+      const signature = sign(qs, secret);
+      const fullQs = `${qs}&signature=${signature}`;
 
-  const res = await proxyFetch(url, {
-    method,
-    headers: {
-      'X-MBX-APIKEY': key,
-      ...(method === 'POST' ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
-    },
-    ...(method === 'POST' ? { body: fullQs } : {}),
-  });
+      const url = method === 'GET' || method === 'DELETE'
+        ? `${BASE}${path}?${fullQs}`
+        : `${BASE}${path}`;
 
-  const data = (await res.json()) as T & { code?: number; msg?: string };
-  if (!res.ok || data.code) {
-    throw new Error(`Binance ${path}: ${data.code ?? res.status} ${data.msg ?? res.statusText}`);
+      const res = await proxyFetch(url, {
+        method,
+        headers: {
+          'X-MBX-APIKEY': key,
+          ...(method === 'POST' ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+        },
+        ...(method === 'POST' ? { body: fullQs } : {}),
+      });
+
+      const data = (await res.json()) as T & { code?: number; msg?: string };
+      if (!res.ok || data.code) {
+        const err = new Error(`Binance ${path}: ${data.code ?? res.status} ${data.msg ?? res.statusText}`);
+        if ((res.status === 429 || res.status >= 500 || data.code === -1003) && attempt < retries - 1) {
+          lastErr = err;
+          await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+          continue;
+        }
+        throw err;
+      }
+      return data;
+    } catch (e) {
+      lastErr = e as Error;
+      if (attempt < retries - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        continue;
+      }
+    }
   }
-  return data;
+  throw lastErr ?? new Error(`Binance ${path}: all ${retries} attempts failed`);
 }
 
 // ─── Public API ───────────────────────────────────────────────

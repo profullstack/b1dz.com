@@ -20,6 +20,7 @@
     "daemon": "pnpm --filter @b1dz/daemon start",
     "b1dz": "pnpm --filter @b1dz/cli dev --",
     "dev:tui": "pnpm --filter @b1dz/cli dev -- tui --dev",
+    "test:exchange": "pnpm exec tsx scripts/test-exchange-connectivity.ts",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",
     "version:major": "node scripts/bump-version.mjs major"

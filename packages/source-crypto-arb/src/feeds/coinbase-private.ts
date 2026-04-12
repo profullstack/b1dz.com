@@ -38,10 +38,15 @@ function buildJwt(method: string, path: string): string {
   const pathOnly = path.split('?')[0];
   const uri = `${method} api.coinbase.com${pathOnly}`;
 
+  // Extract raw key UUID from full resource path for the iss claim
+  // keyName = "organizations/.../apiKeys/ed48be4f-5efd-4c3c-8cb6-361818489ec2"
+  // iss must be just the UUID: "ed48be4f-5efd-4c3c-8cb6-361818489ec2"
+  const keyId = keyName.split('/').pop() ?? keyName;
+
   const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
   const payload = {
     sub: keyName,
-    iss: 'cdp',
+    iss: keyId,
     aud: ['cdp_service'],
     nbf: now - 60,
     exp: now + 300,
@@ -65,27 +70,45 @@ async function coinbasePrivate<T>(
   method: 'GET' | 'POST',
   path: string,
   body?: Record<string, unknown>,
+  retries = 3,
 ): Promise<T> {
-  const jwt = buildJwt(method, path);
+  let lastErr: Error | undefined;
 
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      'Content-Type': 'application/json',
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      // Build a fresh JWT for each attempt (nonce + timestamps must be unique)
+      const jwt = buildJwt(method, path);
 
-  if (!res.ok) {
-    const text = await res.text();
-    // Log JWT payload for debugging (no secrets — just timestamps and URI)
-    const parts = jwt.split('.');
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-    throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uris?.[0]}`);
+      const res = await fetch(`${BASE}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          'Content-Type': 'application/json',
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        if ((res.status === 429 || res.status >= 500) && attempt < retries - 1) {
+          lastErr = new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 80)}`);
+          await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+          continue;
+        }
+        const parts = jwt.split('.');
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uris?.[0]}`);
+      }
+      return (await res.json()) as T & { error?: string; message?: string };
+    } catch (e) {
+      lastErr = e as Error;
+      if (attempt < retries - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        continue;
+      }
+    }
   }
-  const data = (await res.json()) as T & { error?: string; message?: string };
-  return data;
+  throw lastErr ?? new Error(`Coinbase ${path}: all ${retries} attempts failed`);
 }
 
 // ─── Public API ───────────────────────────────────────────────
