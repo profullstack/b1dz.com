@@ -8,7 +8,8 @@ interface LogEntry {
   text: string;
 }
 
-const MAX_ENTRIES = 100;
+const MAX_ACTIVITY_ENTRIES = 100;
+const MAX_RAW_ENTRIES = 2000;
 const ACTIVITY_BUFFER_KEY = 'activity';
 const RAW_BUFFER_KEY = 'raw';
 const buffers = new Map<string, LogEntry[]>();
@@ -19,11 +20,14 @@ const _origLog = console.log.bind(console);
 
 function push(kind: string, source: string, text: string) {
   const key = `${kind}:${source}`;
-  if (text === lastTextByBuffer.get(key)) return;
-  lastTextByBuffer.set(key, text);
+  if (kind === ACTIVITY_BUFFER_KEY) {
+    if (text === lastTextByBuffer.get(key)) return;
+    lastTextByBuffer.set(key, text);
+  }
   const buffer = buffers.get(key) ?? [];
   buffer.push({ at: new Date().toISOString(), text });
-  while (buffer.length > MAX_ENTRIES) buffer.shift();
+  const limit = kind === RAW_BUFFER_KEY ? MAX_RAW_ENTRIES : MAX_ACTIVITY_ENTRIES;
+  while (buffer.length > limit) buffer.shift();
   buffers.set(key, buffer);
 }
 

@@ -232,7 +232,7 @@ async function hydrateKrakenPositions(): Promise<void> {
 
 async function hydrateCoinbasePositions(): Promise<void> {
   const balance = await getCoinbaseBalance();
-  const fills = (await getCoinbaseFills()).sort((a, b) => Date.parse(b.trade_time) - Date.parse(a.trade_time));
+  const fills = (await getCoinbaseFills(200)).sort((a, b) => Date.parse(b.trade_time) - Date.parse(a.trade_time));
   const holdings = findNonStableHoldings(balance);
   if (holdings.length === 0) return;
 
@@ -263,7 +263,7 @@ async function hydrateBinancePositions(): Promise<void> {
   for (const holding of holdings) {
     const pair = `${holding.asset}-USD`;
     const symbol = pair.replace('-', '');
-    const trades = (await getBinanceTrades(symbol)).sort((a, b) => b.time - a.time);
+    const trades = (await getBinanceTrades(symbol, 1000)).sort((a, b) => b.time - a.time);
     const buyTrade = trades.find((trade) => trade.isBuyer);
     if (!buyTrade) {
       console.log(`[trade] holding binance-us:${pair}=${holding.amount} but no buy trade found in history`);

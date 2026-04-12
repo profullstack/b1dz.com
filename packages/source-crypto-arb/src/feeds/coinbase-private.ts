@@ -206,10 +206,10 @@ export async function getOpenOrders(): Promise<CoinbaseOrder[]> {
   return data.orders ?? [];
 }
 
-export async function getRecentFills(): Promise<{ trade_id: string; product_id: string; side: string; price: string; size: string; commission: string; trade_time: string }[]> {
+export async function getRecentFills(limit = 200): Promise<{ trade_id: string; product_id: string; side: string; price: string; size: string; commission: string; trade_time: string }[]> {
   const data = await coinbasePrivate<{ fills: { trade_id: string; product_id: string; side: string; price: string; size: string; commission: string; trade_time: string }[] }>(
     'GET',
-    '/api/v3/brokerage/orders/historical/fills?limit=20',
+    `/api/v3/brokerage/orders/historical/fills?limit=${limit}`,
   );
   return data.fills ?? [];
 }

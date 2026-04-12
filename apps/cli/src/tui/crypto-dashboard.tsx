@@ -451,17 +451,10 @@ function DashboardInner() {
     })
     .sort((a, b) => a.at.localeCompare(b.at))
     .slice(-30); // last 30 entries only
-  const rawSeen = new Set<string>();
   const daemonRawLog = [...arbRawLog, ...tradeRawLog]
-    .filter((l) => {
-      if (!l?.at || !l?.text?.trim()) return false;
-      const key = `${l.at}:${l.text}`;
-      if (rawSeen.has(key)) return false;
-      rawSeen.add(key);
-      return true;
-    })
+    .filter((l) => !!l?.at && !!l?.text?.trim())
     .sort((a, b) => a.at.localeCompare(b.at))
-    .slice(-60);
+    .slice(-300);
 
   const activityLines = [
     ...daemonLog.map((l) => {
@@ -476,16 +469,19 @@ function DashboardInner() {
     }),
     ...logs.map((l) => `{white-fg}${formatLogTs(l.at)}{/} {white-fg}${l.text}{/}`),
   ];
-  const rawLogLines = daemonRawLog.map((l) => {
-    const time = formatLogTs(l.at);
-    let color = '{white-fg}';
-    if (l.text.includes('✗') || l.text.includes('error') || l.text.includes('FAILED')) color = '{red-fg}';
-    else if (l.text.includes('[ws]')) color = '{cyan-fg}';
-    else if (l.text.includes('[coinbase]') || l.text.includes('[binance]') || l.text.includes('[kraken]')) color = '{yellow-fg}';
-    else if (l.text.includes('[trade]')) color = '{green-fg}';
-    else if (l.text.includes('[arb]')) color = '{blue-fg}';
-    return `{white-fg}${time}{/} ${color}${l.text}{/}`;
-  });
+  const rawLogLines = [
+    ...daemonRawLog.map((l) => {
+      const time = formatLogTs(l.at);
+      let color = '{white-fg}';
+      if (l.text.includes('✗') || l.text.includes('error') || l.text.includes('FAILED')) color = '{red-fg}';
+      else if (l.text.includes('[ws]')) color = '{cyan-fg}';
+      else if (l.text.includes('[coinbase]') || l.text.includes('[binance]') || l.text.includes('[kraken]')) color = '{yellow-fg}';
+      else if (l.text.includes('[trade]')) color = '{green-fg}';
+      else if (l.text.includes('[arb]')) color = '{blue-fg}';
+      return `{white-fg}${time}{/} ${color}${l.text}{/}`;
+    }),
+    ...logs.map((l) => `{white-fg}${formatLogTs(l.at)}{/} {white-fg}${l.text}{/}`),
+  ];
   const footerLines = logTab === 'activity' ? activityLines : rawLogLines;
 
   const posH = Math.min(posLines.length + 2, 7);
