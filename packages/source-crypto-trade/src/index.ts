@@ -148,11 +148,19 @@ let dailyPnl = 0;
 let dailyPnlDate = new Date().toDateString();
 let tradePollCount = 0;
 let lastEligiblePairs: string[] = [];
+let lastQuoteBalanceRefresh = 0;
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
 let krakenHydrationBlockedUntil = 0;
 const KRAKEN_HYDRATION_LOCKOUT_MS = 15 * 60_000;
+const QUOTE_BALANCE_REFRESH_MS = 60_000;
+const MIN_SPENDABLE_QUOTE_USD = 5;
+const spendableQuoteBalances: Record<string, Record<string, number>> = {
+  kraken: {},
+  coinbase: {},
+  'binance-us': {},
+};
 
 const STABLES = new Set(['ZUSD', 'USDC', 'USDT', 'USD', 'BUSD']);
 const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
@@ -210,6 +218,53 @@ function krakenQuoteBalanceKey(quoteAsset: string): string {
     default:
       return quoteAsset;
   }
+}
+
+async function refreshSpendableQuoteBalances(): Promise<void> {
+  if (Date.now() - lastQuoteBalanceRefresh < QUOTE_BALANCE_REFRESH_MS) return;
+  lastQuoteBalanceRefresh = Date.now();
+
+  try {
+    const bal = await getKrakenBalance();
+    spendableQuoteBalances.kraken = {
+      USD: parseFloat(bal.ZUSD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch (e) {
+    spendableQuoteBalances.kraken = {};
+    const msg = (e as Error).message;
+    if (msg.includes('Temporary lockout')) {
+      krakenHydrationBlockedUntil = Math.max(krakenHydrationBlockedUntil, Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS);
+    }
+  }
+
+  try {
+    const bal = await getCoinbaseBalance();
+    spendableQuoteBalances.coinbase = {
+      USD: parseFloat(bal.USD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch {
+    spendableQuoteBalances.coinbase = {};
+  }
+
+  try {
+    const bal = await getBinanceBalance();
+    spendableQuoteBalances['binance-us'] = {
+      USD: parseFloat(bal.USD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch {
+    spendableQuoteBalances['binance-us'] = {};
+  }
+}
+
+function spendableQuoteFor(exchange: string, pair: string): number {
+  const quoteAsset = quoteAssetForPair(pair);
+  return Math.max(0, spendableQuoteBalances[exchange]?.[quoteAsset] ?? 0);
 }
 
 async function hydrateKrakenPositions(): Promise<void> {
@@ -484,6 +539,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       restorePersistedTradeState(ctx.state);
       // Restore positions from exchange APIs on first tick (source of truth)
       await hydrateFromExchange();
+      await refreshSpendableQuoteBalances();
       tradePollCount++;
 
       const PAIRS = await getActivePairs();
@@ -614,6 +670,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // Already have a position for this pair on this exchange
       const posKey2 = `${tradeExchange}:${item.pair}`;
       if (openPositions.has(posKey2)) return null;
+
+      // Skip actionable entries when the exchange does not have enough spendable
+      // quote balance for this market.
+      const spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
+      if (spendableQuote < MIN_SPENDABLE_QUOTE_USD) return null;
 
       // Run strategy
       const sig = activeStrategy.evaluate(item.snap, item.history);
