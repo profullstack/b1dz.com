@@ -12,6 +12,8 @@ import { createHmac } from 'node:crypto';
 import { proxyFetch } from './proxy.js';
 
 const BASE = 'https://api.binance.us';
+const SERVER_TIME_TTL_MS = 60_000;
+const DEFAULT_RECV_WINDOW_MS = '15000';
 
 /** Hard ceiling — refuse any order where cost > $100. */
 export const MAX_POSITION_USD = 100;
@@ -30,6 +32,25 @@ function sign(queryString: string, secret: string): string {
   return createHmac('sha256', secret).update(queryString).digest('hex');
 }
 
+let serverTimeOffsetMs = 0;
+let serverTimeFetchedAt = 0;
+
+async function syncServerTime(force = false): Promise<void> {
+  if (!force && Date.now() - serverTimeFetchedAt < SERVER_TIME_TTL_MS) return;
+
+  const res = await proxyFetch(`${BASE}/api/v3/time`);
+  if (!res.ok) throw new Error(`Binance /api/v3/time: ${res.status} ${res.statusText}`);
+  const data = (await res.json()) as { serverTime?: number };
+  if (!data.serverTime) throw new Error('Binance /api/v3/time: missing serverTime');
+
+  serverTimeOffsetMs = data.serverTime - Date.now();
+  serverTimeFetchedAt = Date.now();
+}
+
+function binanceTimestamp(): string {
+  return Math.round(Date.now() + serverTimeOffsetMs).toString();
+}
+
 async function binancePrivate<T>(
   method: 'GET' | 'POST' | 'DELETE',
   path: string,
@@ -41,10 +62,12 @@ async function binancePrivate<T>(
 
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      await syncServerTime(attempt > 0);
+
       // Fresh timestamp + signature for each attempt
       const p = { ...params };
-      p.timestamp = (Date.now() - 1000).toString();
-      p.recvWindow = '10000';
+      p.timestamp = binanceTimestamp();
+      p.recvWindow = DEFAULT_RECV_WINDOW_MS;
 
       const qs = new URLSearchParams(p).toString();
       const signature = sign(qs, secret);
@@ -66,9 +89,16 @@ async function binancePrivate<T>(
       const data = (await res.json()) as T & { code?: number; msg?: string };
       if (!res.ok || data.code) {
         const err = new Error(`Binance ${path}: ${data.code ?? res.status} ${data.msg ?? res.statusText}`);
+        if (data.code === -1021) {
+          await syncServerTime(true);
+        }
         if ((res.status === 429 || res.status >= 500 || data.code === -1003) && attempt < retries - 1) {
           lastErr = err;
           await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+          continue;
+        }
+        if (data.code === -1021 && attempt < retries - 1) {
+          lastErr = err;
           continue;
         }
         throw err;
