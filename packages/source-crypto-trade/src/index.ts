@@ -15,12 +15,14 @@
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import {
-  KrakenFeed, CoinbaseFeed,
+  KrakenFeed, CoinbaseFeed, BinanceUsFeed,
   placeOrder as placeKrakenOrder,
   placeCoinbaseOrder,
+  placeBinanceOrder,
   getBalance as getKrakenBalance,
   getCoinbaseBalance,
-  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE,
+  getBinanceBalance,
+  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
 
@@ -85,9 +87,11 @@ const DAILY_LOSS_LIMIT_USD = 5;
 // Pairs are discovered dynamically — top volume pairs across exchanges
 const krakenFeed: PriceFeed = new KrakenFeed();
 const coinbaseFeed: PriceFeed = new CoinbaseFeed();
+const binanceFeed: PriceFeed = new BinanceUsFeed();
 const TRADE_FEEDS: { feed: PriceFeed; exchange: string }[] = [
   { feed: krakenFeed, exchange: 'kraken' },
   { feed: coinbaseFeed, exchange: 'coinbase' },
+  { feed: binanceFeed, exchange: 'binance-us' },
 ];
 const histories = new Map<string, MarketSnapshot[]>();
 
@@ -407,8 +411,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const netPnl = grossPnl - sellFee;
           console.log(`[trade] EXIT ${item.pair}: ${exitReason} gross=$${grossPnl.toFixed(4)} net=$${netPnl.toFixed(4)}`);
           return {
-            id: `crypto-trade:kraken:${item.pair}:sell:${Date.now()}`,
-            sourceId: `crypto-trade:kraken:${strategyId}`,
+            id: `crypto-trade:${item.exchange}:${item.pair}:sell:${Date.now()}`,
+            sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
             externalId: `${item.pair}:sell:${Date.now()}`,
             title: `SELL ${item.pair} @ ${item.snap.bid.toFixed(2)} — ${exitReason}`,
             category: 'crypto-trade',
@@ -467,8 +471,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       pendingBuyExchange = tradeExchange;
       console.log(`[trade] ENTRY SIGNAL ${item.pair} @ $${price.toFixed(2)}: ${sig.reason} (str=${sig.strength.toFixed(2)})`);
       return {
-        id: `crypto-trade:kraken:${item.pair}:buy:${Date.now()}`,
-        sourceId: `crypto-trade:kraken:${strategyId}`,
+        id: `crypto-trade:${item.exchange}:${item.pair}:buy:${Date.now()}`,
+        sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
         externalId: `${item.pair}:buy:${Date.now()}`,
         title: `BUY ${item.pair} @ ${price.toFixed(2)} — ${sig.reason}`,
         category: 'crypto-trade',
@@ -501,8 +505,13 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           } else if (exchange === 'coinbase') {
             const result = await placeCoinbaseOrder({ productId: pair, side: 'SELL', size: pos.volume.toFixed(8) });
             txInfo = `orderId=${result.order_id}`;
+          } else if (exchange === 'binance-us') {
+            const symbol = pair.replace('-', '');
+            const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: pos.volume.toFixed(8) });
+            txInfo = `orderId=${result.orderId}`;
           }
-          const fee = meta.snap.bid * pos.volume * (exchange === 'kraken' ? KRAKEN_TAKER_FEE : COINBASE_TAKER_FEE);
+          const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+          const fee = meta.snap.bid * pos.volume * feeRate;
           const grossPnl = (meta.snap.bid - pos.entryPrice) * pos.volume;
           const netPnl = grossPnl - fee;
           resetDailyPnlIfNeeded();
@@ -528,9 +537,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           availableUsd = Math.min(parseFloat(bal.ZUSD ?? '0') * 0.995, 99.50);
         } else if (exchange === 'coinbase') {
           const bal = await getCoinbaseBalance();
-          // Coinbase might have USD or USDC
           availableUsd = Math.min(
             (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0')) * 0.995,
+            99.50,
+          );
+        } else if (exchange === 'binance-us') {
+          const bal = await getBinanceBalance();
+          availableUsd = Math.min(
+            (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0') + parseFloat(bal.USDT ?? '0')) * 0.995,
             99.50,
           );
         }
@@ -550,6 +564,10 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         } else if (exchange === 'coinbase') {
           const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volume.toFixed(8), limitPrice: price.toFixed(2) });
           txInfo = `orderId=${result.order_id}`;
+        } else if (exchange === 'binance-us') {
+          const symbol = pair.replace('-', '');
+          const result = await placeBinanceOrder({ symbol, side: 'BUY', type: 'LIMIT', quantity: volume.toFixed(8), price: price.toFixed(2) });
+          txInfo = `orderId=${result.orderId}`;
         }
         const posKey = `${exchange}:${pair}`;
         openPositions.set(posKey, { pair, exchange, entryPrice: price, volume, entryTime: Date.now(), highWaterMark: price });
