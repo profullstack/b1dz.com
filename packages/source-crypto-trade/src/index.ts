@@ -25,6 +25,8 @@ import {
   getCoinbaseFills,
   getBinanceTrades,
   hasBinanceTradingSymbol,
+  hasCoinbaseTradingProduct,
+  hasKrakenTradingPair,
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
@@ -266,9 +268,9 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
 function spendableQuoteFor(exchange: string, pair: string): number {
   const quoteAsset = quoteAssetForPair(pair);
   let spendable = Math.max(0, spendableQuoteBalances[exchange]?.[quoteAsset] ?? 0);
-  if (exchange === 'binance-us' && quoteAsset === 'USD' && spendable < MIN_SPENDABLE_QUOTE_USD) {
-    spendable += Math.max(0, spendableQuoteBalances['binance-us']?.USDC ?? 0);
-    spendable += Math.max(0, spendableQuoteBalances['binance-us']?.USDT ?? 0);
+  if (quoteAsset === 'USD' && spendable < MIN_SPENDABLE_QUOTE_USD) {
+    spendable += Math.max(0, spendableQuoteBalances[exchange]?.USDC ?? 0);
+    spendable += Math.max(0, spendableQuoteBalances[exchange]?.USDT ?? 0);
   }
   return spendable;
 }
@@ -302,6 +304,53 @@ async function maybeAutoConvertBinanceQuote(targetQuote: string, neededQuote: nu
     await placeBinanceOrder({ symbol: path.symbol, side: 'SELL', type: 'MARKET', quantity: convertQty.toFixed(8) });
     const refreshed = await getBinanceBalance();
     direct = parseFloat(refreshed[targetQuote] ?? '0') * 0.995;
+    if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
+  }
+
+  return Math.min(direct, 99.50);
+}
+
+async function maybeAutoConvertCoinbaseQuote(targetQuote: string, neededQuote: number): Promise<number> {
+  const bal = await getCoinbaseBalance();
+  let direct = parseFloat(bal[targetQuote] ?? '0') * 0.995;
+  if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
+  if (targetQuote !== 'USD') return Math.min(direct, 99.50);
+
+  for (const source of ['USDC', 'USDT']) {
+    const sourceFree = parseFloat(bal[source] ?? '0') * 0.995;
+    if (sourceFree < MIN_SPENDABLE_QUOTE_USD) continue;
+    const productId = `${source}-USD`;
+    if (!(await hasCoinbaseTradingProduct(productId))) continue;
+    const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
+    console.log(`[trade] AUTO-CONVERT coinbase ${source}->USD via ${productId} qty=${convertQty.toFixed(8)}`);
+    await placeCoinbaseOrder({ productId, side: 'SELL', size: convertQty.toFixed(8) });
+    const refreshed = await getCoinbaseBalance();
+    direct = parseFloat(refreshed.USD ?? '0') * 0.995;
+    if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
+  }
+
+  return Math.min(direct, 99.50);
+}
+
+async function maybeAutoConvertKrakenQuote(targetQuote: string, neededQuote: number): Promise<number> {
+  const bal = await getKrakenBalance();
+  let direct = parseFloat(bal[krakenQuoteBalanceKey(targetQuote)] ?? '0') * 0.995;
+  if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
+  if (targetQuote !== 'USD') return Math.min(direct, 99.50);
+
+  const conversionPairs = [
+    { source: 'USDC', pair: 'USDCUSD' },
+    { source: 'USDT', pair: 'USDTUSD' },
+  ];
+  for (const path of conversionPairs) {
+    const sourceFree = parseFloat(bal[path.source] ?? '0') * 0.995;
+    if (sourceFree < MIN_SPENDABLE_QUOTE_USD) continue;
+    if (!(await hasKrakenTradingPair(path.pair))) continue;
+    const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
+    console.log(`[trade] AUTO-CONVERT kraken ${path.source}->USD via ${path.pair} qty=${convertQty.toFixed(8)}`);
+    await placeKrakenOrder({ pair: path.pair, type: 'sell', ordertype: 'market', volume: convertQty.toFixed(8) });
+    const refreshed = await getKrakenBalance();
+    direct = parseFloat(refreshed.ZUSD ?? '0') * 0.995;
     if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
   }
 
@@ -815,11 +864,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       let availableQuote = 0;
       try {
         if (exchange === 'kraken') {
-          const bal = await getKrakenBalance();
-          availableQuote = Math.min(parseFloat(bal[krakenQuoteBalanceKey(quoteAsset)] ?? '0') * 0.995, 99.50);
+          availableQuote = await maybeAutoConvertKrakenQuote(quoteAsset, MAX_POSITION_USD);
         } else if (exchange === 'coinbase') {
-          const bal = await getCoinbaseBalance();
-          availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
+          availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
         } else if (exchange === 'binance-us') {
           availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
         }

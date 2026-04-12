@@ -12,11 +12,14 @@
 import { createSign, randomBytes } from 'node:crypto';
 
 const BASE = 'https://api.coinbase.com';
+const PRODUCT_CACHE_TTL_MS = 5 * 60_000;
 
 export const MAX_POSITION_USD = 100;
 export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 
 import { getCoinbasePem } from './coinbase-pem.js';
+let productFetchedAt = 0;
+let tradableProducts = new Set<string>();
 
 export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid: boolean; hasPem: boolean } {
   const keyName = process.env.COINBASE_API_KEY_NAME ?? '';
@@ -127,6 +130,34 @@ interface CoinbaseAccount {
 
 interface AccountsResponse {
   accounts: CoinbaseAccount[];
+}
+
+interface CoinbaseProduct {
+  product_id: string;
+  trading_disabled?: boolean;
+  is_disabled?: boolean;
+  cancel_only?: boolean;
+  auction_mode?: boolean;
+}
+
+interface CoinbaseProductsResponse {
+  products?: CoinbaseProduct[];
+}
+
+async function syncProducts(force = false): Promise<void> {
+  if (!force && Date.now() - productFetchedAt < PRODUCT_CACHE_TTL_MS && tradableProducts.size > 0) return;
+  const data = await coinbasePrivate<CoinbaseProductsResponse>('GET', '/api/v3/brokerage/products?limit=250');
+  tradableProducts = new Set(
+    (data.products ?? [])
+      .filter((p) => p?.product_id && p.trading_disabled !== true && p.is_disabled !== true && p.cancel_only !== true && p.auction_mode !== true)
+      .map((p) => p.product_id),
+  );
+  productFetchedAt = Date.now();
+}
+
+export async function hasTradingProduct(productId: string): Promise<boolean> {
+  await syncProducts();
+  return tradableProducts.has(productId);
 }
 
 export async function getBalance(): Promise<Record<string, string>> {

@@ -15,6 +15,7 @@ import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } fro
 import { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed } from './feeds/index.js';
 export { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed, subscribeWs, wsCacheSize, setWsLogger } from './feeds/index.js';
 export { getBalance, placeOrder, getOpenOrders, getTradeHistory, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
+export { hasTradingPair as hasKrakenTradingPair } from './feeds/kraken-private.js';
 export {
   getBalance as getBinanceBalance,
   placeOrder as placeBinanceOrder,
@@ -24,7 +25,7 @@ export {
   BINANCE_TAKER_FEE,
   type BinanceTrade,
 } from './feeds/binance-us-private.js';
-export { getBalance as getCoinbaseBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE, getCoinbaseAuthDebug } from './feeds/coinbase-private.js';
+export { getBalance as getCoinbaseBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE, getCoinbaseAuthDebug, hasTradingProduct as hasCoinbaseTradingProduct } from './feeds/coinbase-private.js';
 import { placeOrder as placeKrakenOrder } from './feeds/kraken-private.js';
 import { placeOrder as placeBinanceOrder } from './feeds/binance-us-private.js';
 import { placeOrder as placeCoinbaseOrder } from './feeds/coinbase-private.js';
