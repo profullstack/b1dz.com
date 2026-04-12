@@ -3,8 +3,6 @@ import { createSign, randomBytes } from 'node:crypto';
 import { getSnapshot } from './ws-price-cache.js';
 import { getCoinbasePem } from './coinbase-pem.js';
 
-const coinbasePemCached = getCoinbasePem();
-
 const BASE = 'https://api.coinbase.com';
 
 function base64url(buf: Buffer): string {
@@ -13,7 +11,7 @@ function base64url(buf: Buffer): string {
 
 function buildJwt(method: string, path: string): string | null {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const pem = coinbasePemCached;
+  const pem = getCoinbasePem();
   if (!keyName || !pem) return null;
 
   const now = Math.floor(Date.now() / 1000);
