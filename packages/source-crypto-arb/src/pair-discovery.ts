@@ -125,19 +125,29 @@ async function discoverPairs(): Promise<string[]> {
     console.error(`[discovery] coingecko error (skipping mcap filter): ${(e as Error).message}`);
   }
 
-  // Find pairs on BOTH exchanges, filter by market cap
+  // Find pairs on ANY exchange with sufficient volume, prefer pairs on multiple
+  const allPairs = new Map<string, { totalVol: number; change: number; mcap: number; exchanges: number }>();
+  for (const [pair, vol] of krakenVols) {
+    const existing = allPairs.get(pair);
+    if (existing) { existing.totalVol += vol; existing.exchanges++; }
+    else allPairs.set(pair, { totalVol: vol, change: 0, mcap: 0, exchanges: 1 });
+  }
+  for (const [pair, data] of coinbaseData) {
+    const existing = allPairs.get(pair);
+    if (existing) { existing.totalVol += data.volUsd; existing.change = data.change24h; existing.exchanges++; }
+    else allPairs.set(pair, { totalVol: data.volUsd, change: data.change24h, mcap: 0, exchanges: 1 });
+  }
+
   const common: { pair: string; totalVol: number; change: number; mcap: number }[] = [];
   let filtered = 0;
-  for (const [pair, krakenVol] of krakenVols) {
-    const cb = coinbaseData.get(pair);
-    if (!cb) continue;
+  for (const [pair, data] of allPairs) {
     const mcap = marketCaps.get(pair) ?? 0;
-    // Skip if we have market cap data and it's below minimum
+    data.mcap = mcap;
     if (marketCaps.size > 0 && mcap > 0 && mcap < MIN_MARKET_CAP_USD) {
       filtered++;
       continue;
     }
-    common.push({ pair, totalVol: krakenVol + cb.volUsd, change: cb.change24h, mcap });
+    common.push({ pair, totalVol: data.totalVol, change: data.change, mcap });
   }
 
   // Sort by volume, take top N
