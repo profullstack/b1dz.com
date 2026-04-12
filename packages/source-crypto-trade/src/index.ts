@@ -199,6 +199,19 @@ function krakenPairForAsset(asset: string): string {
   return KRAKEN_ASSET_TO_PAIR[asset] ?? `${asset}-USD`;
 }
 
+function quoteAssetForPair(pair: string): string {
+  return pair.split('-')[1]?.toUpperCase() ?? 'USD';
+}
+
+function krakenQuoteBalanceKey(quoteAsset: string): string {
+  switch (quoteAsset) {
+    case 'USD':
+      return 'ZUSD';
+    default:
+      return quoteAsset;
+  }
+}
+
 async function hydrateKrakenPositions(): Promise<void> {
   if (Date.now() < krakenHydrationBlockedUntil) {
     throw new Error(`Kraken hydration backoff ${Math.ceil((krakenHydrationBlockedUntil - Date.now()) / 1000)}s remaining`);
@@ -696,29 +709,24 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       // Buy — check available balance on the target exchange
       const price = meta.snap.ask;
-      let availableUsd = 0;
+      const quoteAsset = quoteAssetForPair(pair);
+      let availableQuote = 0;
       try {
         if (exchange === 'kraken') {
           const bal = await getKrakenBalance();
-          availableUsd = Math.min(parseFloat(bal.ZUSD ?? '0') * 0.995, 99.50);
+          availableQuote = Math.min(parseFloat(bal[krakenQuoteBalanceKey(quoteAsset)] ?? '0') * 0.995, 99.50);
         } else if (exchange === 'coinbase') {
           const bal = await getCoinbaseBalance();
-          availableUsd = Math.min(
-            (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0')) * 0.995,
-            99.50,
-          );
+          availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
         } else if (exchange === 'binance-us') {
           const bal = await getBinanceBalance();
-          availableUsd = Math.min(
-            (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0') + parseFloat(bal.USDT ?? '0')) * 0.995,
-            99.50,
-          );
+          availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
         }
       } catch {}
-      if (availableUsd < 5) {
-        return { ok: false, message: `insufficient funds on ${exchange} ($${availableUsd.toFixed(2)})` };
+      if (availableQuote < 5) {
+        return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
-      const volume = availableUsd / price;
+      const volume = availableQuote / price;
 
       console.log(`[trade] EXECUTE BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {
