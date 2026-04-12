@@ -12,6 +12,10 @@ export function startTui() {
     tags: true,
   });
 
+  const pageLog = (delta: number) => {
+    tuiEvents.emit('page-log', delta);
+  };
+
   screen.key(['q', 'C-c'], () => {
     process.exit(0);
   });
@@ -28,12 +32,30 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'logs');
   });
 
-  screen.key(['pageup', 'ppage', 'S-pageup', 'C-u', 'C-b', '['], () => {
-    tuiEvents.emit('page-log', 1);
-  });
+  screen.key(['pageup', 'ppage', 'prior', 'S-pageup', 'C-u', 'C-b'], () => pageLog(1));
+  screen.key(['pagedown', 'npage', 'next', 'S-pagedown', 'C-d', 'C-f'], () => pageLog(-1));
 
-  screen.key(['pagedown', 'npage', 'S-pagedown', 'C-d', 'C-f', ']'], () => {
-    tuiEvents.emit('page-log', -1);
+  screen.on('keypress', (ch: string, key: { name?: string; full?: string; sequence?: string } = {}) => {
+    const name = key.name ?? '';
+    const full = key.full ?? '';
+    const sequence = key.sequence ?? ch ?? '';
+
+    if (sequence === '[' || ch === '[' || full === '[') {
+      pageLog(1);
+      return;
+    }
+    if (sequence === ']' || ch === ']' || full === ']') {
+      pageLog(-1);
+      return;
+    }
+
+    if (name === 'pageup' || name === 'ppage' || name === 'prior' || full === 'C-u' || full === 'C-b') {
+      pageLog(1);
+      return;
+    }
+    if (name === 'pagedown' || name === 'npage' || name === 'next' || full === 'C-d' || full === 'C-f') {
+      pageLog(-1);
+    }
   });
 
   render(<CryptoDashboard />, screen);
