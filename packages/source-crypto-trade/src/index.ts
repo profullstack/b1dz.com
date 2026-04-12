@@ -24,6 +24,7 @@ import {
   getBinanceBalance,
   getCoinbaseFills,
   getBinanceTrades,
+  hasBinanceTradingSymbol,
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
@@ -264,7 +265,47 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
 
 function spendableQuoteFor(exchange: string, pair: string): number {
   const quoteAsset = quoteAssetForPair(pair);
-  return Math.max(0, spendableQuoteBalances[exchange]?.[quoteAsset] ?? 0);
+  let spendable = Math.max(0, spendableQuoteBalances[exchange]?.[quoteAsset] ?? 0);
+  if (exchange === 'binance-us' && quoteAsset === 'USD' && spendable < MIN_SPENDABLE_QUOTE_USD) {
+    spendable += Math.max(0, spendableQuoteBalances['binance-us']?.USDC ?? 0);
+    spendable += Math.max(0, spendableQuoteBalances['binance-us']?.USDT ?? 0);
+  }
+  return spendable;
+}
+
+async function maybeAutoConvertBinanceQuote(targetQuote: string, neededQuote: number): Promise<number> {
+  const bal = await getBinanceBalance();
+  let direct = parseFloat(bal[targetQuote] ?? '0') * 0.995;
+  if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
+
+  const conversionPaths: Record<string, Array<{ from: string; symbol: string }>> = {
+    USD: [
+      { from: 'USDC', symbol: 'USDCUSD' },
+      { from: 'USDT', symbol: 'USDTUSD' },
+    ],
+    USDC: [
+      { from: 'USD', symbol: 'USDUSDC' },
+      { from: 'USDT', symbol: 'USDTUSDC' },
+    ],
+    USDT: [
+      { from: 'USD', symbol: 'USDUSDT' },
+      { from: 'USDC', symbol: 'USDCUSDT' },
+    ],
+  };
+
+  for (const path of conversionPaths[targetQuote] ?? []) {
+    const sourceFree = parseFloat(bal[path.from] ?? '0') * 0.995;
+    if (sourceFree < MIN_SPENDABLE_QUOTE_USD) continue;
+    if (!(await hasBinanceTradingSymbol(path.symbol))) continue;
+    const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
+    console.log(`[trade] AUTO-CONVERT binance-us ${path.from}->${targetQuote} via ${path.symbol} qty=${convertQty.toFixed(8)}`);
+    await placeBinanceOrder({ symbol: path.symbol, side: 'SELL', type: 'MARKET', quantity: convertQty.toFixed(8) });
+    const refreshed = await getBinanceBalance();
+    direct = parseFloat(refreshed[targetQuote] ?? '0') * 0.995;
+    if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
+  }
+
+  return Math.min(direct, 99.50);
 }
 
 async function hydrateKrakenPositions(): Promise<void> {
@@ -780,8 +821,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const bal = await getCoinbaseBalance();
           availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
         } else if (exchange === 'binance-us') {
-          const bal = await getBinanceBalance();
-          availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
+          availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
         }
       } catch {}
       if (availableQuote < 5) {

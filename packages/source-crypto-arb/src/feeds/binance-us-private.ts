@@ -71,6 +71,11 @@ interface BinanceExchangeInfo {
   symbols: BinanceSymbolInfo[];
 }
 
+export async function hasTradingSymbol(symbol: string): Promise<boolean> {
+  await syncExchangeInfo();
+  return exchangeInfoBySymbol.get(symbol.toUpperCase())?.status === 'TRADING';
+}
+
 async function syncExchangeInfo(force = false): Promise<void> {
   if (!force && Date.now() - exchangeInfoFetchedAt < EXCHANGE_INFO_TTL_MS && exchangeInfoBySymbol.size > 0) return;
   const res = await proxyFetch(`${BASE}/api/v3/exchangeInfo`);

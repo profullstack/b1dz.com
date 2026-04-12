@@ -20,6 +20,7 @@ export {
   placeOrder as placeBinanceOrder,
   getOpenOrders as getBinanceOpenOrders,
   getRecentTrades as getBinanceTrades,
+  hasTradingSymbol as hasBinanceTradingSymbol,
   BINANCE_TAKER_FEE,
   type BinanceTrade,
 } from './feeds/binance-us-private.js';
