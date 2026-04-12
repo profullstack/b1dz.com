@@ -18,6 +18,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "redis": "latest"
+  },
   "devDependencies": {
     "@types/node": "latest",
     "typescript": "latest",
