@@ -84,10 +84,31 @@ export class DaemonRuntime {
     if (this.scheduled.has(key)) return;
     const tick = async () => {
       if (this.stopping) return;
+      let ctx: UserContext | null = null;
       try {
-        const ctx = await this.makeContext(userId, source.id);
+        ctx = await this.makeContext(userId, source.id);
+        await ctx.savePayload({
+          enabled: ctx.payload?.enabled ?? true,
+          daemon: {
+            lastTickAt: new Date().toISOString(),
+            worker: source.id,
+            status: 'running',
+            version: getB1dzVersion(),
+          },
+        });
         await source.tick(ctx);
       } catch (e) {
+        if (ctx) {
+          await ctx.savePayload({
+            enabled: ctx.payload?.enabled ?? true,
+            daemon: {
+              lastTickAt: new Date().toISOString(),
+              worker: source.id,
+              status: 'error',
+              version: getB1dzVersion(),
+            },
+          }).catch(() => {});
+        }
         console.error(`b1dzd: tick ${userId.slice(0, 8)}…/${source.id} failed: ${(e as Error).message}`);
       }
     };
