@@ -244,10 +244,10 @@ export function subscribe(pairs: string[]) {
   if (coinbaseWs) { coinbaseWs.close(); coinbaseWs = null; }
   if (binanceWs) { binanceWs.close(); binanceWs = null; }
 
-  console.log(`[ws] subscribing to ${allPairs.length} pairs across 3 exchanges`);
+  // Binance.US blocks datacenter IPs — WS won't work, use REST polling via proxy instead
+  console.log(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
   connectKraken(allPairs);
   connectCoinbase(allPairs);
-  connectBinance(allPairs);
   initialized = true;
 }
 
