@@ -8,3 +8,4 @@ export * from './runner.js';
 export * from './market.js';
 export * from './env.js';
 export * from './version.js';
+export * from './runtime-cache.js';

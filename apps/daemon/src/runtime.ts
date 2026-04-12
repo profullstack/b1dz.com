@@ -14,7 +14,7 @@
  */
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { getB1dzVersion } from '@b1dz/core';
+import { getB1dzVersion, setRuntimeSourceState } from '@b1dz/core';
 import type { SourceWorker, UserContext } from './types.js';
 import { SOURCES } from './registry.js';
 
@@ -115,6 +115,7 @@ export class DaemonRuntime {
         .eq('source_id', sourceId)
         .maybeSingle();
       const next = { ...((latest?.payload as Record<string, unknown>) ?? {}), ...patch };
+      await setRuntimeSourceState(userId, sourceId, next);
       await supabase.from('source_state').upsert(
         { user_id: userId, source_id: sourceId, payload: next, updated_at: new Date().toISOString() },
         { onConflict: 'user_id,source_id' },
