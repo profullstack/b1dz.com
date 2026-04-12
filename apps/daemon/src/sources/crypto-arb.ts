@@ -45,7 +45,7 @@ export const cryptoArbWorker: SourceWorker = {
       const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
       try {
         cachedKrakenBalance = await getBalance();
-        console.log('b1dzd: kraken balance:', Object.entries(cachedKrakenBalance).filter(([, v]) => parseFloat(v) > 0.0001).map(([k, v]) => `${k}=${v}`).join(' '));
+        logActivity(`[kraken] balance: ${Object.entries(cachedKrakenBalance).filter(([, v]) => parseFloat(v) > 0.0001).map(([k, v]) => `${k}=${v}`).join(' ')}`);
         await wait(2000);
         const th = await getTradeHistory();
         cachedRecentTrades = Object.values(th).sort((a, b) => b.time - a.time).slice(0, 20);
@@ -55,29 +55,25 @@ export const cryptoArbWorker: SourceWorker = {
       } catch (e) {
         const msg = (e as Error).message;
         if (msg.includes('Rate limit')) {
-          console.error('b1dzd: kraken rate limited, backing off 60s');
+          logActivity('[kraken] ✗ Rate limited, backing off 60s');
           lastPrivateFetch = Date.now() + 60_000;
         } else {
-          console.error(`b1dzd: kraken private API error: ${msg}`);
+          logActivity(`[kraken] ✗ Unable to connect: ${msg.slice(0, 80)}`);
         }
       }
       try {
         cachedBinanceBalance = await getBinanceBalance();
-        console.log('b1dzd: binance balance:', Object.entries(cachedBinanceBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
+        logActivity(`[binance] balance: ${Object.entries(cachedBinanceBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`);
       } catch (e) {
-        console.error(`b1dzd: binance balance error: ${(e as Error).message}`);
+        logActivity(`[binance] ✗ Unable to connect: ${(e as Error).message.slice(0, 80)}`);
       }
       try {
-        const ecKey = process.env.COINBASE_EC_KEY_B64;
-        const b64val = process.env.COINBASE_API_PRIVATE_KEY_B64;
-        console.log(`b1dzd: coinbase keys EC=${ecKey?.length ?? 0} B64=${b64val?.length ?? 0}`);
         cachedCoinbaseBalance = await getCoinbaseBalance();
-        console.log('b1dzd: coinbase balance:', Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
+        logActivity(`[coinbase] balance: ${Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`);
       } catch (e) {
         const err = e as Error & { cause?: Error };
-        const keySet = !!process.env.COINBASE_API_KEY_NAME;
-        const pemLen = process.env.COINBASE_API_PRIVATE_KEY?.length ?? 0;
-        console.error(`b1dzd: coinbase error: ${err.message}${err.cause ? ' cause: ' + err.cause.message : ''} (key=${keySet} pemLen=${pemLen})`);
+        const detail = err.cause ? ` (${err.cause.message})` : '';
+        logActivity(`[coinbase] ✗ Unable to connect: ${err.message.slice(0, 80)}${detail}`);
       }
     }
 
