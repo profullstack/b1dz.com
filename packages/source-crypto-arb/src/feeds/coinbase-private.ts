@@ -10,7 +10,6 @@
  */
 
 import { createSign, randomBytes } from 'node:crypto';
-import { proxyFetch } from './proxy.js';
 
 const BASE = 'https://api.coinbase.com';
 
@@ -69,8 +68,7 @@ async function coinbasePrivate<T>(
 ): Promise<T> {
   const jwt = buildJwt(method, path);
 
-  const url = `${BASE}${path}`;
-  const res = await proxyFetch(url, {
+  const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${jwt}`,
