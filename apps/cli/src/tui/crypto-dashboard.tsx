@@ -247,7 +247,7 @@ function DashboardInner() {
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
   const pos = ts?.position;
-  const posStr = pos ? `{cyan-fg}${pos.pair}{/}` : '{gray-fg}no position{/}';
+  const posStr = pos ? `{cyan-fg}${pos.pair}{/}` : '{white-fg}no position{/}';
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
@@ -271,7 +271,7 @@ function DashboardInner() {
     posLines.push(` {cyan-fg}kraken{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${pos.entryPrice.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}  stop:$${pos.stopPrice.toFixed(2)}  ${pos.elapsed}`);
   }
   if (posLines.length === 0) {
-    posLines.push(' {gray-fg}No open positions{/gray-fg}');
+    posLines.push(' {white-fg}No open positions{/white-fg}');
   }
 
   // Prices — show top 5 pairs by volume (first in the list)
@@ -293,7 +293,7 @@ function DashboardInner() {
   for (const s of displaySpreads) {
     const spread = s.spread ?? 0;
     const color = s.profitable ? '{green-fg}' : '{white-fg}';
-    const status = s.profitable ? '{green-fg}✓ PROFIT{/green-fg}' : '{gray-fg}below fees{/gray-fg}';
+    const status = s.profitable ? '{green-fg}✓ PROFIT{/green-fg}' : '{white-fg}below fees{/white-fg}';
     const route = s.buyExchange ? `${s.buyExchange}→${s.sellExchange}` : '---';
     arbLines.push(` ${(s.pair ?? '').padEnd(10)} ${color}${spread.toFixed(4)}%{/}  ${route.padEnd(22)} ${status}`);
   }
@@ -301,7 +301,7 @@ function DashboardInner() {
   // Open orders
   const orderLines: string[] = ['{bold} Open Orders{/bold}'];
   if (openOrders.length === 0) {
-    orderLines.push(' {gray-fg}None{/gray-fg}');
+    orderLines.push(' {white-fg}None{/white-fg}');
   } else {
     for (const o of openOrders.slice(0, 5)) {
       orderLines.push(` ${o.descr.type.toUpperCase()} ${o.descr.pair} @ $${o.descr.price}  ${o.status}`);
@@ -313,7 +313,7 @@ function DashboardInner() {
   const recentTrades = trades.filter((t) => t.time >= oneDayAgo);
   const tradeLines: string[] = ['{bold} Recent Trades (24h){/bold}'];
   if (recentTrades.length === 0) {
-    tradeLines.push(' {gray-fg}No trades in last 24h{/gray-fg}');
+    tradeLines.push(' {white-fg}No trades in last 24h{/white-fg}');
   } else {
     for (const t of recentTrades.slice(0, 8)) {
       const color = t.type === 'buy' ? '{green-fg}' : '{red-fg}';
@@ -324,7 +324,7 @@ function DashboardInner() {
   // Strategy status
   const sigLines: string[] = ['{bold} Strategy Status{/bold}'];
   if (!ts) {
-    sigLines.push(' {gray-fg}Waiting for daemon...{/gray-fg}');
+    sigLines.push(' {white-fg}Waiting for daemon...{/white-fg}');
   } else {
     sigLines.push(` Strategies: {cyan-fg}composite{/} (scalp + multi-signal)`);
     sigLines.push(` Pairs scanned: {white-fg}${ts.pairsScanned}{/}`);
@@ -343,7 +343,7 @@ function DashboardInner() {
       sigLines.push(`  entry: $${p.entryPrice.toFixed(2)}  stop: $${p.stopPrice.toFixed(2)}`);
       sigLines.push(`  ${pnlColor}P/L: ${p.pnlPct >= 0 ? '+' : ''}${p.pnlPct.toFixed(3)}%{/}  time: ${p.elapsed}`);
     } else {
-      sigLines.push(` {gray-fg}No open position — scanning for entry...{/gray-fg}`);
+      sigLines.push(` {white-fg}No open position — scanning for entry...{/white-fg}`);
     }
     if (ts.dailyLossLimitHit) {
       sigLines.push(` {red-fg}⚠ DAILY LOSS LIMIT HIT ($${ts.dailyPnl.toFixed(2)}) — trading halted{/red-fg}`);
@@ -393,7 +393,7 @@ function DashboardInner() {
   const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings);
 
   function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; usdValue: number }[]): string {
-    if (holdings.length === 0) return '{gray-fg}no data{/}';
+    if (holdings.length === 0) return '{white-fg}no data{/}';
     return holdings.map((h) => {
       if (h.isStable) return `$${h.amount.toFixed(2)} ${h.asset}`;
       return h.usdValue > 0.01
