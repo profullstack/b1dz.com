@@ -43,8 +43,8 @@ function buildJwt(method: string, path: string): string {
     sub: keyName,
     iss: 'cdp',
     aud: ['cdp_service'],
-    nbf: now,
-    exp: now + 120,
+    nbf: now - 60,
+    exp: now + 300,
     uris: [uri],
   };
 

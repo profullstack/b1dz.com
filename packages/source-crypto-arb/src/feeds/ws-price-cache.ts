@@ -114,7 +114,7 @@ function buildCoinbaseWsJwt(): string | null {
   const b64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
   const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
-  const payload = { sub: keyName, iss: 'cdp', aud: ['cdp_service'], nbf: now, exp: now + 120 };
+  const payload = { sub: keyName, iss: 'cdp', aud: ['cdp_service'], nbf: now - 60, exp: now + 300 };
   const segs = [b64url(Buffer.from(JSON.stringify(header))), b64url(Buffer.from(JSON.stringify(payload)))];
   const input = segs.join('.');
   const sign = createSign('SHA256');
