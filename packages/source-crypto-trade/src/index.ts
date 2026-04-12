@@ -105,8 +105,26 @@ interface Position {
   volume: number;
   entryTime: number;
   highWaterMark: number; // highest price seen since entry
+  strategyId?: string;
 }
 const openPositions = new Map<string, Position>();
+
+export interface ClosedTrade {
+  exchange: string;
+  pair: string;
+  strategyId: string;
+  entryPrice: number;
+  exitPrice: number;
+  volume: number;
+  entryTime: number;
+  exitTime: number;
+  grossPnl: number;
+  fee: number;
+  netPnl: number;
+}
+
+const closedTrades: ClosedTrade[] = [];
+let restoredTradeState = false;
 
 /** One position per exchange — check if THIS exchange already has a position. */
 function hasPositionOnExchange(exchange: string): boolean {
@@ -306,6 +324,18 @@ async function hydrateFromExchange() {
   }
 }
 
+function restorePersistedTradeState(state: Record<string, unknown> | undefined) {
+  if (restoredTradeState) return;
+  restoredTradeState = true;
+  const tradeState = (state?.tradeState as Record<string, unknown> | undefined) ?? {};
+  const savedDailyPnl = tradeState.dailyPnl;
+  const savedDailyPnlDate = tradeState.dailyPnlDate;
+  if (typeof savedDailyPnl === 'number') dailyPnl = savedDailyPnl;
+  if (typeof savedDailyPnlDate === 'string') dailyPnlDate = savedDailyPnlDate;
+  const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
+  closedTrades.splice(0, closedTrades.length, ...savedClosedTrades);
+}
+
 /** Serialize positions/cooldowns/dailyPnl for persistence. */
 export function serializeTradeState(): Record<string, unknown> {
   return {
@@ -313,6 +343,7 @@ export function serializeTradeState(): Record<string, unknown> {
     exits: [...lastExitAt.entries()].map(([pair, at]) => ({ pair, at })),
     dailyPnl,
     dailyPnlDate,
+    closedTrades,
   };
 }
 
@@ -423,6 +454,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     pollIntervalMs: 5000,
 
     async poll(ctx) {
+      restorePersistedTradeState(ctx.state);
       // Restore positions from exchange APIs on first tick (source of truth)
       await hydrateFromExchange();
       tradePollCount++;
@@ -587,7 +619,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     },
 
     async act(opp): Promise<ActionResult> {
-      const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position };
+      const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position; strategy?: string };
       const pair = meta.snap.pair;
       const exchange = meta.snap.exchange;
       pendingBuyExchange = null;
@@ -616,6 +648,20 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const netPnl = grossPnl - fee;
           resetDailyPnlIfNeeded();
           dailyPnl += netPnl;
+          closedTrades.push({
+            exchange,
+            pair,
+            strategyId: pos.strategyId ?? 'restored',
+            entryPrice: pos.entryPrice,
+            exitPrice: meta.snap.bid,
+            volume: pos.volume,
+            entryTime: pos.entryTime,
+            exitTime: Date.now(),
+            grossPnl,
+            fee,
+            netPnl,
+          });
+          while (closedTrades.length > 100) closedTrades.shift();
           openPositions.delete(posKey);
           const stillHolding = [...openPositions.values()].some((p) => p.exchange === exchange);
           if (!stillHolding) exchangesHoldingCrypto.delete(exchange);
@@ -670,7 +716,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           txInfo = `orderId=${result.orderId}`;
         }
         const posKey = `${exchange}:${pair}`;
-        openPositions.set(posKey, { pair, exchange, entryPrice: price, volume, entryTime: Date.now(), highWaterMark: price });
+        openPositions.set(posKey, {
+          pair,
+          exchange,
+          entryPrice: price,
+          volume,
+          entryTime: Date.now(),
+          highWaterMark: price,
+          strategyId: meta.strategy ?? 'composite',
+        });
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
         return { ok: true, message: `bought ${volume.toFixed(8)} on ${exchange} @ ${price.toFixed(2)}` };
       } catch (e) {

@@ -79,6 +79,21 @@ interface TradeState {
   activityLog: { at: string; text: string }[];
   rawLog?: { at: string; text: string }[];
   tradeStatus: TradeStatusData;
+  tradeState?: {
+    closedTrades?: {
+      exchange: string;
+      pair: string;
+      strategyId: string;
+      entryPrice: number;
+      exitPrice: number;
+      volume: number;
+      entryTime: number;
+      exitTime: number;
+      grossPnl: number;
+      fee: number;
+      netPnl: number;
+    }[];
+  };
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
@@ -231,9 +246,9 @@ function DashboardInner() {
   const krakenBal = arbState?.krakenBalance ?? {};
   const binanceBal = arbState?.binanceBalance ?? {};
   const coinbaseBal = arbState?.coinbaseBalance ?? {};
-  const trades = arbState?.recentTrades ?? [];
   const openOrders = arbState?.openOrders ?? [];
   const signals = tradeState?.signals ?? [];
+  const closedTrades = tradeState?.tradeState?.closedTrades ?? [];
 
   const btc = prices.find((p) => p.pair === 'BTC-USD' && p.exchange === 'kraken')?.bid;
   const eth = prices.find((p) => p.pair === 'ETH-USD' && p.exchange === 'kraken')?.bid;
@@ -244,14 +259,14 @@ function DashboardInner() {
 
   const realizedPnl = ts?.dailyPnl ?? 0;
 
-  // Fees shown in the header are still based on the visible recent trade feed.
+  // Fees shown in the header are based on today's closed strategy trades.
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const todayTs = todayStart.getTime() / 1000;
-  const todayTrades = trades.filter((t) => t.time >= todayTs);
+  const todayTsMs = todayStart.getTime();
+  const todayClosedTrades = closedTrades.filter((t) => t.exitTime >= todayTsMs);
   let totalFees = 0;
-  for (const t of todayTrades) {
-    totalFees += parseFloat(t.fee);
+  for (const t of todayClosedTrades) {
+    totalFees += t.fee;
   }
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
@@ -321,16 +336,17 @@ function DashboardInner() {
     }
   }
 
-  // Recent trades (last 24h only)
-  const oneDayAgo = Date.now() / 1000 - 86400;
-  const recentTrades = trades.filter((t) => t.time >= oneDayAgo);
-  const tradeLines: string[] = ['{bold} Recent Trades (24h){/bold}'];
-  if (recentTrades.length === 0) {
-    tradeLines.push(' {white-fg}No trades in last 24h{/white-fg}');
+  // Closed trades (last 24h) — strategy round-trips, not raw exchange fills.
+  const oneDayAgoMs = Date.now() - 86400_000;
+  const recentClosedTrades = closedTrades.filter((t) => t.exitTime >= oneDayAgoMs);
+  const tradeLines: string[] = ['{bold} Closed Trades (24h){/bold}'];
+  if (recentClosedTrades.length === 0) {
+    tradeLines.push(' {white-fg}No closed trades in last 24h{/white-fg}');
   } else {
-    for (const t of recentTrades.slice(0, 8)) {
-      const color = t.type === 'buy' ? '{green-fg}' : '{red-fg}';
-      tradeLines.push(` ${color}${t.type.toUpperCase().padEnd(4)}{/} ${t.pair.padEnd(10)} ${parseFloat(t.vol).toFixed(6)} @ $${parseFloat(t.price).toFixed(2)}  fee=$${parseFloat(t.fee).toFixed(4)}  ${timeSince(t.time)}`);
+    for (const t of [...recentClosedTrades].sort((a, b) => b.exitTime - a.exitTime).slice(0, 8)) {
+      const color = t.netPnl >= 0 ? '{green-fg}' : '{red-fg}';
+      tradeLines.push(` ${color}${t.exchange.padEnd(10)}{/} ${t.pair.padEnd(10)} ${t.volume.toFixed(6)}  ${t.strategyId.padEnd(10)} net:${t.netPnl >= 0 ? '+' : ''}$${t.netPnl.toFixed(2)}`);
+      tradeLines.push(`   entry:$${t.entryPrice.toFixed(2)} exit:$${t.exitPrice.toFixed(2)} gross:$${t.grossPnl.toFixed(2)} fee:$${t.fee.toFixed(2)}  ${timeSince(Math.floor(t.exitTime / 1000))}`);
     }
   }
 
@@ -483,7 +499,7 @@ function DashboardInner() {
   const posH = Math.min(posLines.length + 2, 7);
   const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
   const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 7);
-  const row3H = Math.min(Math.max(recentTrades.length + 2, balLines.length + 2, 6), 9);
+  const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const footerTop = 2 + posH + row1H + row2H + row3H;
   const screenRows = process.stdout.rows ?? 40;
   const footerH = Math.max(8, screenRows - footerTop);
@@ -538,7 +554,7 @@ function DashboardInner() {
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 
-      <box label=" Recent Trades " top={2 + posH + row1H + row2H} left={0} width="55%" height={row3H}
+      <box label=" Closed Trades " top={2 + posH + row1H + row2H} left={0} width="55%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
