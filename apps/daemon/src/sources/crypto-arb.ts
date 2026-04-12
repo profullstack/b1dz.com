@@ -132,9 +132,9 @@ export const cryptoArbWorker: SourceWorker = {
     }
     spreads.sort((a, b) => b.spread - a.spread);
 
-    // Log top spread every 5 ticks (~10s)
+    // Log top spread every 15 ticks (~30s)
     tickCount++;
-    if (spreads.length > 0 && tickCount % 5 === 0) {
+    if (spreads.length > 0 && tickCount % 15 === 0) {
       const top = spreads[0];
       const feeThreshold = 0.36;
       const gap = (feeThreshold - top.spread).toFixed(3);

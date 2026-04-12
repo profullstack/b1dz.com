@@ -398,14 +398,15 @@ function DashboardInner() {
   const logLines = [
     ...daemonLog.map((l) => {
       const time = (() => { try { return new Date(l.at).toLocaleTimeString('en-US', { hour12: false }); } catch { return '??:??'; } })();
-      let color = '{gray-fg}';
-      if (l.text.includes('BUY') || l.text.includes('✓')) color = '{green-fg}';
-      else if (l.text.includes('SELL') || l.text.includes('✗')) color = '{red-fg}';
-      else if (l.text.includes('SIGNAL') || l.text.includes('⚡')) color = '{yellow-fg}';
+      let color = '{white-fg}';
+      if (l.text.includes('BUY') || l.text.includes('✓') || l.text.includes('EXECUTED')) color = '{green-fg}';
+      else if (l.text.includes('SELL') || l.text.includes('✗') || l.text.includes('SKIPPED')) color = '{red-fg}';
+      else if (l.text.includes('SIGNAL') || l.text.includes('⚡') || l.text.includes('ENTRY')) color = '{yellow-fg}';
       else if (l.text.includes('[ws]')) color = '{cyan-fg}';
+      else if (l.text.includes('[arb]')) color = '{blue-fg}';
       return `{gray-fg}${time}{/} ${color}${l.text}{/}`;
     }),
-    ...logs.map((l) => `{gray-fg}${l.time}{/} ${l.text}`),
+    ...logs.map((l) => `{gray-fg}${l.time}{/} {white-fg}${l.text}{/}`),
   ];
 
   const row1H = Math.min(DISPLAY_PAIRS.length + (daemonOnline ? 3 : 5) + (apiError ? 1 : 0), 9);

@@ -91,30 +91,13 @@ export const cryptoArbSource: Source<ArbItem> = {
         .filter((s): s is MarketSnapshot => s != null);
       if (snaps.length >= 2) {
         items.push({ pair, snapshots: snaps });
-        const prices = snaps.map((s) => `${s.exchange}=$${s.bid.toFixed(2)}`).join(' ');
-        console.log(`[arb] ${pair} ${prices}`);
       }
     }
     return items;
   },
   evaluate(item): Opportunity | null {
     const arb = bestArb(item.snapshots);
-    if (!arb) {
-      // Log best spread even when not profitable
-      const snaps = item.snapshots;
-      if (snaps.length >= 2) {
-        let bestSpread = 0;
-        for (const buyer of snaps) {
-          for (const seller of snaps) {
-            if (buyer.exchange === seller.exchange) continue;
-            const spread = ((seller.bid - buyer.ask) / buyer.ask) * 100;
-            if (spread > bestSpread) bestSpread = spread;
-          }
-        }
-        console.log(`[arb] ${item.pair} best spread: ${bestSpread.toFixed(4)}% (below fee threshold)`);
-      }
-      return null;
-    }
+    if (!arb) return null;
     // Sized at 1 unit for now — real impl computes max safe size from order book depth
     const size = 1;
     const costNow = arb.buyPrice * size;
