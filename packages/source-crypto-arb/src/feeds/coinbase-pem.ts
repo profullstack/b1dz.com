@@ -11,6 +11,7 @@ export function getCoinbasePem(): string | null {
 
   // Try base64-encoded key first (Railway-safe)
   const b64Key = process.env.COINBASE_API_PRIVATE_KEY_B64;
+  console.log(`[coinbase-pem] B64 env set: ${!!b64Key} (${b64Key?.length ?? 0} chars)`);
   if (b64Key) {
     cached = Buffer.from(b64Key, 'base64').toString('utf8');
     console.log(`[coinbase] PEM from B64 (${cached.length} chars)`);
