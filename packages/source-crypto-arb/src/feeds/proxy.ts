@@ -45,7 +45,7 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
   const { execFileSync } = await import('node:child_process');
   const method = init?.method ?? 'GET';
   const headers = init?.headers as Record<string, string> | undefined;
-  const args = ['-s', '-x', proxyUrl, '--max-time', '15', '-X', method];
+  const args = ['-sS', '--fail-with-body', '-x', proxyUrl, '--max-time', '15', '-X', method];
   if (headers) {
     for (const [k, v] of Object.entries(headers)) {
       args.push('-H', `${k}: ${v}`);
@@ -68,7 +68,7 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
         ? err.stderr.toString('utf8').trim()
         : '';
     const detail = stderr || err.message || 'unknown proxy error';
-    console.error(`[proxy] ✗ ${host} failed: ${detail.slice(0, 120)}`);
+    console.error(`[proxy] ✗ ${host} failed: ${detail.slice(0, 300)}`);
     return new Response(JSON.stringify({ error: `proxy fetch failed for ${host}` }), { status: 502, headers: { 'content-type': 'application/json' } });
   }
 }
