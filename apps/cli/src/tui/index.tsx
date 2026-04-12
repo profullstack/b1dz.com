@@ -28,11 +28,11 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'logs');
   });
 
-  screen.key(['pageup', '['], () => {
+  screen.key(['pageup', 'ppage', 'S-pageup', 'C-u', 'C-b', '['], () => {
     tuiEvents.emit('page-log', 1);
   });
 
-  screen.key(['pagedown', ']'], () => {
+  screen.key(['pagedown', 'npage', 'S-pagedown', 'C-d', 'C-f', ']'], () => {
     tuiEvents.emit('page-log', -1);
   });
 

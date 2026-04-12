@@ -68,8 +68,9 @@ interface TradeStatusData {
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
-  eligiblePairs: number;
-  observedPairs: number;
+  eligiblePairs?: number;
+  observedPairs?: number;
+  pairsScanned?: number;
   ticksPerPair: Record<string, number>;
   exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
@@ -122,6 +123,15 @@ function timeSince(ts: number): string {
   if (sec < 60) return `${sec}s ago`;
   if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
   return `${Math.floor(sec / 3600)}h ago`;
+}
+
+function safeCount(...values: unknown[]): number {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      return Math.floor(value);
+    }
+  }
+  return 0;
 }
 
 // Wrap the whole component in error handling so bad data doesn't crash React
@@ -257,6 +267,9 @@ function DashboardInner() {
   // Trade status from daemon
   const ts = tradeState?.tradeStatus;
   const positions = ts?.positions ?? (ts?.position ? [{ exchange: 'kraken', ...ts.position }] : []);
+  const observedPairFallback = ts ? new Set(Object.keys(ts.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':'))).size : 0;
+  const eligiblePairs = safeCount(ts?.eligiblePairs, ts?.pairsScanned, observedPairFallback);
+  const observedPairs = safeCount(ts?.observedPairs, observedPairFallback, ts?.pairsScanned);
 
   const realizedPnl = ts?.dailyPnl ?? 0;
 
@@ -353,8 +366,8 @@ function DashboardInner() {
     sigLines.push(' {white-fg}Waiting for daemon...{/white-fg}');
   } else {
     sigLines.push(` Strategies: {cyan-fg}composite{/} (scalp + multi-signal)`);
-    sigLines.push(` Pairs eligible: {white-fg}${ts.eligiblePairs}{/}`);
-    sigLines.push(` Pairs observed: {white-fg}${ts.observedPairs}{/}`);
+    sigLines.push(` Pairs eligible: {white-fg}${eligiblePairs}{/}`);
+    sigLines.push(` Pairs observed: {white-fg}${observedPairs}{/}`);
     // Show warmup progress for top pairs
     const pairEntries = Object.entries(ts.ticksPerPair).sort((a, b) => b[1] - a[1]).slice(0, 5);
     for (const [pair, ticks] of pairEntries) {
@@ -521,7 +534,7 @@ function DashboardInner() {
   const footerLines = logTab === 'activity' ? pagedActivity.pageLines : pagedRaw.pageLines;
   const footerPage = logTab === 'activity' ? pagedActivity.page : pagedRaw.page;
   const footerPages = logTab === 'activity' ? pagedActivity.totalPages : pagedRaw.totalPages;
-  const footerLabel = `${logTab === 'activity' ? 'Activity' : 'Logs'}  page ${footerPage + 1}/${footerPages}  ([ ] or PgUp/PgDn)`;
+  const footerLabel = `${logTab === 'activity' ? 'Activity' : 'Logs'}  page ${footerPage + 1}/${footerPages}  ([ ] or PgUp/PgDn, C-b/C-f)`;
 
   return (
     <>
