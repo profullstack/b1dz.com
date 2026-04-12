@@ -55,3 +55,4 @@ The whole project lives at `~/src/b1dz.com`.
 - Per-token thresholds for small accounts: net edge after fees, min notional, and size caps.
 - Inventory rebalance guidance: flag when one venue has become cash-heavy or token-heavy after repeated arb rounds.
 - Executable depth sizing: use real order book depth, not only top-of-book price, before auto-firing cross-exchange spot arb.
+- Per-exchange market-rule normalization: cache and enforce lot size, min notional, quantity increments, and price tick rules across Binance, Kraken, and Coinbase before order placement.
