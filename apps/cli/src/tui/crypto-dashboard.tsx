@@ -225,6 +225,28 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const statusText = ` b1dz crypto ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [q]uit`;
 
+  // Positions — from recent trades (open buys without matching sells)
+  const posLines: string[] = [];
+  const openBuys = new Map<string, { pair: string; price: number; vol: number; time: number }>();
+  for (const t of [...trades].reverse()) { // oldest first
+    if (t.type === 'buy') {
+      openBuys.set(t.pair, { pair: t.pair, price: parseFloat(t.price), vol: parseFloat(t.vol), time: t.time });
+    } else if (t.type === 'sell') {
+      openBuys.delete(t.pair);
+    }
+  }
+  if (openBuys.size === 0 && !pos) {
+    posLines.push(' {gray-fg}No open positions{/gray-fg}');
+  } else {
+    for (const [, p] of openBuys) {
+      const currentPrice = prices.find((pr) => pr.pair.includes(p.pair.replace('ZUSD', '-USD').replace('USD', '-USD').split('-')[0]))?.bid ?? 0;
+      const pnlPct = currentPrice > 0 ? ((currentPrice - p.price) / p.price * 100) : 0;
+      const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
+      const pnlUsd = currentPrice > 0 ? (currentPrice - p.price) * p.vol : 0;
+      posLines.push(` ${p.pair.padEnd(14)} ${p.vol.toFixed(6)} @ $${p.price.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}`);
+    }
+  }
+
   // Prices — show top 5 pairs by volume (first in the list)
   const DISPLAY_PAIRS = [...new Set(prices.map((p) => p.pair))].slice(0, 5);
   const priceLines: string[] = ['{bold} Pair             Kraken          Coinbase        Binance{/bold}'];
@@ -409,45 +431,50 @@ function DashboardInner() {
     ...logs.map((l) => `{gray-fg}${l.time}{/} {white-fg}${l.text}{/}`),
   ];
 
-  const row1H = Math.min(DISPLAY_PAIRS.length + (daemonOnline ? 3 : 5) + (apiError ? 1 : 0), 9);
-  const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 8);
-  const row3H = Math.min(Math.max(recentTrades.length + 2, balLines.length + 2, 6), 10);
+  const posH = Math.min(posLines.length + 2, 5);
+  const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
+  const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 7);
+  const row3H = Math.min(Math.max(recentTrades.length + 2, balLines.length + 2, 6), 9);
 
   return (
     <>
       <box top={0} left={0} width="100%" height={1} tags={true}
         style={{ bg: 'blue', fg: 'white' }} content={statusText} />
 
-      <box label=" Prices (via API) " top={1} left={0} width="100%" height={row1H}
+      <box label=" Positions " top={1} left={0} width="100%" height={posH}
+        border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
+        content={posLines.join('\n')} />
+
+      <box label=" Prices " top={1 + posH} left={0} width="100%" height={row1H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'cyan' } }}
         content={priceLines.join('\n')} />
 
-      <box label=" Arb Spreads " top={1 + row1H} left={0} width="40%" height={row2H}
+      <box label=" Arb Spreads " top={1 + posH + row1H} left={0} width="40%" height={row2H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={arbLines.join('\n')} />
 
-      <box label=" Open Orders " top={1 + row1H} left="40%" width="30%" height={row2H}
+      <box label=" Open Orders " top={1 + posH + row1H} left="40%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'magenta' } }}
         content={orderLines.join('\n')} />
 
-      <box label=" Trade Signals " top={1 + row1H} left="70%" width="30%" height={row2H}
+      <box label=" Trade Signals " top={1 + posH + row1H} left="70%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 
-      <box label=" Recent Trades " top={1 + row1H + row2H} left={0} width="55%" height={row3H}
+      <box label=" Recent Trades " top={1 + posH + row1H + row2H} left={0} width="55%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
 
-      <box label=" Balances " top={1 + row1H + row2H} left="55%" width="45%" height={row3H}
+      <box label=" Balances " top={1 + posH + row1H + row2H} left="55%" width="45%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={balLines.join('\n')} />
 
-      <box label=" Activity Log " top={1 + row1H + row2H + row3H} left={0} width="100%"
-        height={`100%-${2 + row1H + row2H + row3H}`}
+      <box label=" Activity Log " top={1 + posH + row1H + row2H + row3H} left={0} width="100%"
+        height={`100%-${2 + posH + row1H + row2H + row3H}`}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'gray' } }}
         content={logLines.join('\n') || ' Waiting for daemon data...'} />
