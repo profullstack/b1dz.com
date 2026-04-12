@@ -79,12 +79,22 @@ interface TradeState {
 }
 
 interface LogEntry {
-  time: string;
+  at: string;
   text: string;
 }
 
-function timeStr(): string {
-  return new Date().toLocaleTimeString('en-US', { hour12: false });
+function formatLogTs(isoLike: string): string {
+  try {
+    const d = new Date(isoLike);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${mm}-${dd} ${hh}:${min}:${ss}`;
+  } catch {
+    return '??-?? ??:??:??';
+  }
 }
 
 function timeSince(ts: number): string {
@@ -106,7 +116,7 @@ function DashboardInner() {
 
   const addLog = (text: string) => {
     setLogs((prev) => {
-      const next = [...prev, { time: timeStr(), text }];
+      const next = [...prev, { at: new Date().toISOString(), text }];
       while (next.length > 50) next.shift();
       return next;
     });
@@ -418,16 +428,16 @@ function DashboardInner() {
 
   const logLines = [
     ...daemonLog.map((l) => {
-      const time = (() => { try { return new Date(l.at).toLocaleTimeString('en-US', { hour12: false }); } catch { return '??:??'; } })();
+      const time = formatLogTs(l.at);
       let color = '{white-fg}';
       if (l.text.includes('BUY') || l.text.includes('✓') || l.text.includes('EXECUTED')) color = '{green-fg}';
       else if (l.text.includes('SELL') || l.text.includes('✗') || l.text.includes('SKIPPED')) color = '{red-fg}';
       else if (l.text.includes('SIGNAL') || l.text.includes('⚡') || l.text.includes('ENTRY')) color = '{yellow-fg}';
       else if (l.text.includes('[ws]')) color = '{cyan-fg}';
       else if (l.text.includes('[arb]')) color = '{blue-fg}';
-      return `{gray-fg}${time}{/} ${color}${l.text}{/}`;
+      return `{white-fg}${time}{/} ${color}${l.text}{/}`;
     }),
-    ...logs.map((l) => `{gray-fg}${l.time}{/} {white-fg}${l.text}{/}`),
+    ...logs.map((l) => `{white-fg}${formatLogTs(l.at)}{/} {white-fg}${l.text}{/}`),
   ];
 
   const posH = Math.min(posLines.length + 2, 5);
