@@ -48,3 +48,10 @@ pnpm dev:cli   # daemon
 8. Swap `storage-json` for a `storage-supabase` package
 
 The whole project lives at `~/src/b1dz.com`.
+
+## Crypto TODO
+
+- Inventory-aware spot scanner: alert only when the user already has token inventory on the sell venue and stable balance on the buy venue.
+- Per-token thresholds for small accounts: net edge after fees, min notional, and size caps.
+- Inventory rebalance guidance: flag when one venue has become cash-heavy or token-heavy after repeated arb rounds.
+- Executable depth sizing: use real order book depth, not only top-of-book price, before auto-firing cross-exchange spot arb.

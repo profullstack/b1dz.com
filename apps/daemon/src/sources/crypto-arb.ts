@@ -41,7 +41,7 @@ export const cryptoArbWorker: SourceWorker = {
   async tick(ctx: UserContext) {
     const storage = runnerStorageFor(ctx);
     const alerts = new AlertBus();
-    const sourceCtx = { storage, alerts, state: ctx.payload };
+    const sourceCtx = { storage, alerts, state: { ...ctx.payload } };
     const origLog = console.log;
     const origErr = console.error;
     console.log = (...args: unknown[]) => {
@@ -171,6 +171,13 @@ export const cryptoArbWorker: SourceWorker = {
         logActivity(`[arb] ★ PROFITABLE: ${s.pair} ${s.spread.toFixed(4)}% ${s.buyExchange}→${s.sellExchange}`, 'crypto-arb');
       }
       }
+
+      sourceCtx.state = {
+        ...ctx.payload,
+        krakenBalance: cachedKrakenBalance,
+        binanceBalance: cachedBinanceBalance,
+        coinbaseBalance: cachedCoinbaseBalance,
+      };
 
       // ── Run arb evaluation + execution ──
       const items = await cryptoArbSource.poll(sourceCtx);

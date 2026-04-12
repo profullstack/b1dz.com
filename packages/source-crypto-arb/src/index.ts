@@ -32,7 +32,21 @@ import { getActivePairs } from './pair-discovery.js';
 export { getActivePairs } from './pair-discovery.js';
 
 const MAX_POSITION_USD = 100;
+const MIN_EXECUTABLE_USD = 5;
 const SUPPORTED_TRADE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase']);
+const STABLE_ASSETS = ['USD', 'USDC', 'USDT'];
+const KRAKEN_ASSET_ALIASES: Record<string, string[]> = {
+  BTC: ['XXBT', 'XBT', 'BTC'],
+  ETH: ['XETH', 'ETH'],
+  DOGE: ['XXDG', 'XDG', 'DOGE'],
+  ZEC: ['XZEC', 'ZEC'],
+  XRP: ['XXRP', 'XRP'],
+  XLM: ['XXLM', 'XLM'],
+  XMR: ['XXMR', 'XMR'],
+  LTC: ['XLTC', 'LTC'],
+  ADA: ['XADA', 'ADA'],
+  SOL: ['XSOL', 'SOL'],
+};
 
 // Feeds — Gemini and Binance.US included for price comparison even if we can't trade on them
 const FEEDS: PriceFeed[] = [new GeminiFeed(), new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
@@ -59,6 +73,45 @@ interface ArbResult {
   spreadPct: number;
   /** profit per unit after fees on both legs */
   netPerUnit: number;
+}
+
+function readBalanceMap(ctx: Parameters<Source<ArbItem>['evaluate']>[1], exchange: string): Record<string, string> {
+  if (exchange === 'kraken') return (ctx.state.krakenBalance as Record<string, string> | undefined) ?? {};
+  if (exchange === 'binance-us') return (ctx.state.binanceBalance as Record<string, string> | undefined) ?? {};
+  if (exchange === 'coinbase') return (ctx.state.coinbaseBalance as Record<string, string> | undefined) ?? {};
+  return {};
+}
+
+function exchangeAssetBalance(exchange: string, asset: string, balance: Record<string, string>): number {
+  const aliases = exchange === 'kraken'
+    ? (KRAKEN_ASSET_ALIASES[asset] ?? [asset])
+    : [asset];
+  for (const alias of aliases) {
+    const amount = parseFloat(balance[alias] ?? '0');
+    if (isFinite(amount) && amount > 0) return amount;
+  }
+  return 0;
+}
+
+function quoteBalance(exchange: string, balance: Record<string, string>): number {
+  const assets = exchange === 'kraken' ? ['ZUSD', ...STABLE_ASSETS] : STABLE_ASSETS;
+  return assets.reduce((sum, asset) => {
+    const amount = parseFloat(balance[asset] ?? '0');
+    return isFinite(amount) ? sum + amount : sum;
+  }, 0);
+}
+
+function executableInventorySize(arb: ArbResult, ctx: Parameters<Source<ArbItem>['evaluate']>[1]): number {
+  const baseAsset = arb.pair.split('-')[0];
+  const sellBalance = readBalanceMap(ctx, arb.sellExchange);
+  const buyBalance = readBalanceMap(ctx, arb.buyExchange);
+  const sellTokens = exchangeAssetBalance(arb.sellExchange, baseAsset, sellBalance);
+  const buyQuote = quoteBalance(arb.buyExchange, buyBalance);
+  const maxBySell = sellTokens;
+  const maxByBuy = arb.buyPrice > 0 ? buyQuote / arb.buyPrice : 0;
+  const maxByCapital = MAX_POSITION_USD / arb.buyPrice;
+  const size = Math.min(maxBySell, maxByBuy, maxByCapital);
+  return isFinite(size) && size > 0 ? size : 0;
 }
 
 function bestArb(snaps: MarketSnapshot[]): ArbResult | null {
@@ -105,15 +158,16 @@ export const cryptoArbSource: Source<ArbItem> = {
     }
     return items;
   },
-  evaluate(item): Opportunity | null {
+  evaluate(item, ctx): Opportunity | null {
     const arb = bestArb(item.snapshots);
     if (!arb) return null;
     if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
       return null;
     }
-    // Sized at 1 unit for now — real impl computes max safe size from order book depth
-    const size = 1;
+    const size = executableInventorySize(arb, ctx);
+    if (!isFinite(size) || size <= 0) return null;
     const costNow = arb.buyPrice * size;
+    if (!isFinite(costNow) || costNow < MIN_EXECUTABLE_USD) return null;
     const projectedReturn = arb.sellPrice * size;
     return {
       id: `crypto-arb:${item.pair}:${arb.buyExchange}-${arb.sellExchange}`,
@@ -128,7 +182,7 @@ export const cryptoArbSource: Source<ArbItem> = {
       confidence: Math.min(1, arb.spreadPct / 0.5),
       // Short window — arb closes fast
       expiresAt: Date.now() + 5_000,
-      metadata: { ...arb, size },
+      metadata: { ...arb, size, inventoryMode: true },
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
