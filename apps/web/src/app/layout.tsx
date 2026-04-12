@@ -3,8 +3,8 @@ import './globals.css';
 import { ServiceWorkerRegister } from './sw-register';
 
 export const metadata: Metadata = {
-  title: 'b1dz',
-  description: 'Multi-source profit monitor — auctions, travel, deals, crypto',
+  title: 'b1dz — AI Arbitrage Terminal',
+  description: 'Realtime auto-trading across multiple crypto exchanges. AI-powered arbitrage and trading strategies.',
   manifest: '/manifest.webmanifest',
   applicationName: 'b1dz',
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'b1dz' },
