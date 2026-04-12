@@ -366,27 +366,24 @@ function DashboardInner() {
     sigLines.push(' {white-fg}Waiting for daemon...{/white-fg}');
   } else {
     sigLines.push(` Strategies: {cyan-fg}composite{/} (scalp + multi-signal)`);
-    sigLines.push(` Pairs eligible: {white-fg}${eligiblePairs}{/}`);
-    sigLines.push(` Pairs observed: {white-fg}${observedPairs}{/}`);
-    // Show warmup progress for top pairs
-    const pairEntries = Object.entries(ts.ticksPerPair).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    for (const [pair, ticks] of pairEntries) {
-      const ready = ticks >= 20;
-      const bar = ready ? '{green-fg}ready{/}' : `{yellow-fg}warming ${ticks}/20{/}`;
-      sigLines.push(`  ${pair.padEnd(10)} ${bar}`);
+    sigLines.push(` Pairs: {white-fg}${eligiblePairs}{/} eligible  {white-fg}${observedPairs}{/} observed`);
+    const pairEntries = Object.entries(ts.ticksPerPair).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    if (pairEntries.length > 0) {
+      const warmupSummary = pairEntries
+        .map(([pair, ticks]) => `${pair}:${ticks >= 20 ? 'ready' : `${ticks}/20`}`)
+        .join('  ');
+      sigLines.push(` Warmups: ${warmupSummary}`);
     }
-    sigLines.push('');
     for (const s of ts.exchangeStates ?? []) {
       const mode = s.blockedReason
         ? `{red-fg}${s.blockedReason}{/}`
         : s.warmingPairs > 0
           ? `{yellow-fg}warming{/}`
           : `{green-fg}ready{/}`;
-      sigLines.push(`  ${s.exchange.padEnd(10)} ${mode}  ready:${s.readyPairs} warm:${s.warmingPairs} open:${s.openPositions}`);
+      sigLines.push(` ${s.exchange.padEnd(10)} ${mode}  r:${s.readyPairs} w:${s.warmingPairs} o:${s.openPositions}`);
     }
-    sigLines.push('');
     if (positions.length > 0) {
-      sigLines.push(` {bold}POSITIONS:{/} ${positions.length}`);
+      sigLines.push(` Positions: {white-fg}${positions.length}{/}`);
       for (const p of positions.slice(0, 3)) {
         sigLines.push(`  ${p.exchange}:${p.pair} entry:$${formatUsdPrice(p.entryPrice)} now:$${formatUsdPrice(p.currentPrice)} stop:$${formatUsdPrice(p.stopPrice)} time:${p.elapsed}`);
       }
@@ -509,7 +506,7 @@ function DashboardInner() {
 
   const posH = Math.min(posLines.length + 2, 7);
   const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
-  const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 7);
+  const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const footerTop = 2 + posH + row1H + row2H + row3H;
   const screenRows = process.stdout.rows ?? 40;
