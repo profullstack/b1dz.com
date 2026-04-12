@@ -278,10 +278,6 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
-  const tabsText = logTab === 'activity'
-    ? ' {black-fg}{green-bg} Activity {/} {white-fg} Logs {/}'
-    : ' {white-fg} Activity {/} {black-fg}{cyan-bg} Logs {/}';
-
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [];
   for (const pos of positions) {
@@ -529,8 +525,30 @@ function DashboardInner() {
       <box top={0} left={0} width="100%" height={1} tags={true}
         style={{ bg: 'blue', fg: 'white' }} content={statusText} />
 
-      <box top={1} left={0} width="100%" height={1} tags={true}
-        style={{ bg: 'black', fg: 'white' }} content={tabsText} />
+      <box top={1} left={0} width="100%" height={1}
+        style={{ bg: 'black', fg: 'white' }} />
+      <box
+        top={1}
+        left={1}
+        width={12}
+        height={1}
+        mouse={true}
+        clickable={true}
+        onClick={() => setLogTab('activity')}
+        tags={true}
+        style={{ bg: logTab === 'activity' ? 'green' : 'black', fg: logTab === 'activity' ? 'black' : 'white' }}
+        content=" Activity " />
+      <box
+        top={1}
+        left={14}
+        width={8}
+        height={1}
+        mouse={true}
+        clickable={true}
+        onClick={() => setLogTab('logs')}
+        tags={true}
+        style={{ bg: logTab === 'logs' ? 'cyan' : 'black', fg: logTab === 'logs' ? 'black' : 'white' }}
+        content=" Logs " />
 
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
