@@ -349,44 +349,56 @@ function DashboardInner() {
   const fmtCrypto = (c: { asset: string; amount: number; value: number }) =>
     c.value > 0.01 ? `${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})` : `${c.amount.toFixed(4)} ${c.asset}`;
 
+  const noData = Object.keys(krakenBal).length === 0 && Object.keys(coinbaseBal).length === 0;
   const balLines: string[] = [];
-  // Kraken
-  let krakenStr = ` {cyan-fg}Kraken{/}    $${krakenCash.toFixed(2)} USD`;
-  for (const c of krakenCrypto) krakenStr += ` + ${fmtCrypto(c)}`;
-  balLines.push(krakenStr);
-  // Binance
-  let binanceStr = ` {yellow-fg}Binance{/}   $${binanceCash.toFixed(2)} USDC`;
-  for (const c of binanceCrypto) binanceStr += ` + ${fmtCrypto(c)}`;
-  balLines.push(binanceStr);
-  // Coinbase
-  let coinbaseStr = ` {magenta-fg}Coinbase{/}  $${coinbaseCash.toFixed(2)} USD`;
-  for (const c of coinbaseCrypto) coinbaseStr += ` + ${fmtCrypto(c)}`;
-  balLines.push(coinbaseStr);
+  if (noData) {
+    balLines.push(' {gray-fg}Loading balances...{/gray-fg}');
+  } else {
+    // Kraken
+    let krakenStr = ` {cyan-fg}Kraken{/}    $${krakenCash.toFixed(2)} USD`;
+    for (const c of krakenCrypto) krakenStr += ` + ${fmtCrypto(c)}`;
+    balLines.push(krakenStr);
+    // Binance
+    let binanceStr = ` {yellow-fg}Binance{/}   $${binanceCash.toFixed(2)} USDC`;
+    for (const c of binanceCrypto) binanceStr += ` + ${fmtCrypto(c)}`;
+    balLines.push(binanceStr);
+    // Coinbase
+    let coinbaseStr = ` {magenta-fg}Coinbase{/}  $${coinbaseCash.toFixed(2)} USD`;
+    for (const c of coinbaseCrypto) coinbaseStr += ` + ${fmtCrypto(c)}`;
+    balLines.push(coinbaseStr);
+  }
   // Total
   balLines.push(' ─────────────────────────');
   balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
 
-  // Activity log — merge arb + trade daemon logs + local events
+  // Activity log — merge arb + trade logs, deduplicate, filter blanks
   const arbLog = ((arbState as unknown as Record<string, unknown>)?.activityLog ?? []) as { at: string; text: string }[];
   const tradeLog = tradeState?.activityLog ?? [];
-  const daemonLog = [...arbLog, ...tradeLog].filter((l) => l?.at && l?.text);
-  daemonLog.sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
-  const allLogs = [
+  const seen = new Set<string>();
+  const daemonLog = [...arbLog, ...tradeLog]
+    .filter((l) => {
+      if (!l?.at || !l?.text?.trim()) return false;
+      // Dedup by timestamp+text
+      const key = `${l.at}:${l.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(-30); // last 30 entries only
+
+  const logLines = [
     ...daemonLog.map((l) => {
-      try { return { time: new Date(l.at).toLocaleTimeString('en-US', { hour12: false }), text: l.text }; }
-      catch { return { time: '??:??:??', text: l.text ?? '' }; }
+      const time = (() => { try { return new Date(l.at).toLocaleTimeString('en-US', { hour12: false }); } catch { return '??:??'; } })();
+      let color = '{gray-fg}';
+      if (l.text.includes('BUY') || l.text.includes('✓')) color = '{green-fg}';
+      else if (l.text.includes('SELL') || l.text.includes('✗')) color = '{red-fg}';
+      else if (l.text.includes('SIGNAL') || l.text.includes('⚡')) color = '{yellow-fg}';
+      else if (l.text.includes('[ws]')) color = '{cyan-fg}';
+      return `{gray-fg}${time}{/} ${color}${l.text}{/}`;
     }),
-    ...logs,
-  ].sort((a, b) => a.time.localeCompare(b.time)).slice(-50);
-  const logLines = allLogs.map((l) => {
-    let color = '{gray-fg}';
-    if (l.text.includes('BUY')) color = '{green-fg}';
-    else if (l.text.includes('SELL')) color = '{red-fg}';
-    else if (l.text.includes('SIGNAL') || l.text.includes('⚡')) color = '{yellow-fg}';
-    else if (l.text.includes('EXECUTED') || l.text.includes('✓')) color = '{green-fg}';
-    else if (l.text.includes('SKIPPED') || l.text.includes('✗')) color = '{red-fg}';
-    return `{gray-fg}${l.time}{/} ${color}${l.text}{/}`;
-  });
+    ...logs.map((l) => `{gray-fg}${l.time}{/} ${l.text}`),
+  ];
 
   const row1H = Math.min(DISPLAY_PAIRS.length + (daemonOnline ? 3 : 5) + (apiError ? 1 : 0), 9);
   const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 8);
