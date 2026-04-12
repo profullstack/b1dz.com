@@ -24,6 +24,10 @@ const cache = new Map<string, CacheEntry>(); // key: "exchange:pair"
 const subscribedPairs = new Set<string>();
 let initialized = false;
 
+let wsLogger: ((msg: string) => void) | null = null;
+export function setWsLogger(fn: (msg: string) => void) { wsLogger = fn; }
+function wsLog(msg: string) { wsLogger?.(msg); console.log(msg); }
+
 function cacheKey(exchange: string, pair: string): string {
   return `${exchange}:${pair}`;
 }
@@ -58,7 +62,7 @@ function connectKraken(pairs: string[]) {
   krakenWs = new WebSocket('wss://ws.kraken.com/v2');
 
   krakenWs.on('open', () => {
-    console.log('[ws] kraken connected');
+    wsLog('[ws] kraken connected');
     krakenWs!.send(JSON.stringify({
       method: 'subscribe',
       params: {
@@ -95,13 +99,13 @@ function connectKraken(pairs: string[]) {
   });
 
   krakenWs.on('close', () => {
-    console.log('[ws] kraken disconnected, reconnecting in 5s...');
+    wsLog('[ws] ✗ kraken disconnected, reconnecting in 5s...');
     krakenWs = null;
     setTimeout(() => connectKraken(pairs), 5000);
   });
 
   krakenWs.on('error', (e) => {
-    console.error('[ws] kraken error:', e.message);
+    wsLog(`[ws] ✗ kraken error: ${e.message}`);
   });
 }
 
@@ -133,7 +137,7 @@ function connectCoinbase(pairs: string[]) {
   coinbaseWs = new WebSocket('wss://advanced-trade-ws.coinbase.com');
 
   coinbaseWs.on('open', () => {
-    console.log('[ws] coinbase connected');
+    wsLog('[ws] coinbase connected');
     const jwt = buildCoinbaseWsJwt();
     coinbaseWs!.send(JSON.stringify({
       type: 'subscribe',
@@ -169,13 +173,13 @@ function connectCoinbase(pairs: string[]) {
   });
 
   coinbaseWs.on('close', () => {
-    console.log('[ws] coinbase disconnected, reconnecting in 5s...');
+    wsLog('[ws] ✗ coinbase disconnected, reconnecting in 5s...');
     coinbaseWs = null;
     setTimeout(() => connectCoinbase(pairs), 5000);
   });
 
   coinbaseWs.on('error', (e) => {
-    console.error('[ws] coinbase error:', e.message);
+    wsLog(`[ws] ✗ coinbase error: ${e.message}`);
   });
 }
 
@@ -191,7 +195,7 @@ function connectBinance(pairs: string[]) {
   binanceWs = new WebSocket(url);
 
   binanceWs.on('open', () => {
-    console.log('[ws] binance.us connected');
+    wsLog('[ws] binance.us connected');
     const pingTimer = setInterval(() => {
       if (binanceWs?.readyState === WebSocket.OPEN) binanceWs.ping();
       else clearInterval(pingTimer);
@@ -216,13 +220,13 @@ function connectBinance(pairs: string[]) {
   });
 
   binanceWs.on('close', () => {
-    console.log('[ws] binance.us disconnected, reconnecting in 5s...');
+    wsLog('[ws] ✗ binance.us disconnected, reconnecting in 5s...');
     binanceWs = null;
     setTimeout(() => connectBinance(pairs), 5000);
   });
 
   binanceWs.on('error', (e) => {
-    console.error('[ws] binance.us error:', e.message);
+    wsLog(`[ws] ✗ binance.us error: ${e.message}`);
   });
 }
 
@@ -245,7 +249,7 @@ export function subscribe(pairs: string[]) {
   if (binanceWs) { binanceWs.close(); binanceWs = null; }
 
   // Binance.US blocks datacenter IPs — WS won't work, use REST polling via proxy instead
-  console.log(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
+  wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
   connectKraken(allPairs);
   connectCoinbase(allPairs);
   initialized = true;

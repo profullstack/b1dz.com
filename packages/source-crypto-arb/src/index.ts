@@ -13,7 +13,7 @@
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed } from './feeds/index.js';
-export { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed, subscribeWs, wsCacheSize } from './feeds/index.js';
+export { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed, subscribeWs, wsCacheSize, setWsLogger } from './feeds/index.js';
 export { getBalance, placeOrder, getOpenOrders, getTradeHistory, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
 export { getBalance as getBinanceBalance, placeOrder as placeBinanceOrder, getOpenOrders as getBinanceOpenOrders, BINANCE_TAKER_FEE } from './feeds/binance-us-private.js';
 export { getBalance as getCoinbaseBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE } from './feeds/coinbase-private.js';

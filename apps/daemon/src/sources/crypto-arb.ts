@@ -5,7 +5,7 @@ import {
   getBalance, getBinanceBalance, getCoinbaseBalance,
   getTradeHistory, getOpenOrders,
   getActivePairs,
-  subscribeWs, wsCacheSize,
+  subscribeWs, wsCacheSize, setWsLogger,
 } from '@b1dz/source-crypto-arb';
 import { AlertBus } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
@@ -80,6 +80,7 @@ export const cryptoArbWorker: SourceWorker = {
     // ── Initialize WebSocket feeds on first tick ──
     if (!wsInitialized) {
       wsInitialized = true;
+      setWsLogger(logActivity);
       const discoveredPairs = await getActivePairs();
       subscribeWs(discoveredPairs);
       logActivity(`[ws] subscribed to ${discoveredPairs.length} pairs across 3 exchanges`);

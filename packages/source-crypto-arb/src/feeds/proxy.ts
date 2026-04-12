@@ -61,6 +61,8 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
     const stdout = execSync(cmd, { encoding: 'utf8', timeout: 20000 });
     return new Response(stdout, { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e) {
-    return new Response('proxy fetch failed', { status: 502 });
+    const host = new URL(url).host;
+    console.error(`[proxy] ✗ ${host} failed: ${(e as Error).message?.slice(0, 60)}`);
+    return new Response(JSON.stringify({ error: `proxy fetch failed for ${host}` }), { status: 502, headers: { 'content-type': 'application/json' } });
   }
 }
