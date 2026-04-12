@@ -81,6 +81,7 @@ const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes (was 10)
 
 /** Max daily loss before halting trades. */
 const DAILY_LOSS_LIMIT_USD = 5;
+const WARMUP_TICKS = 20;
 
 // ─── State ─────────────────────────────────────────────────────
 
@@ -358,15 +359,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             pos.highWaterMark = snap.bid;
           }
 
-          // Log current state (only every 5th tick to reduce noise)
-          if (hist.length % 5 === 0) {
-            if (pos) {
-              const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
-              const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
-              console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
-            } else {
-              console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ticks=${hist.length}`);
-            }
+          // Verbose raw logs should reflect every tick and warmup state.
+          if (pos) {
+            const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
+            const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
+            console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
+          } else if (hist.length < WARMUP_TICKS) {
+            console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} warming ${hist.length}/${WARMUP_TICKS}`);
+          } else {
+            console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ready ticks=${hist.length}`);
           }
         }
       }

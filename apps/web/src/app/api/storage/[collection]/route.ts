@@ -30,8 +30,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ coll
     if (!row.source_id) continue;
     persisted.set(row.source_id, stripLiveSourceState(row.payload ?? {}) ?? {});
   }
-  for (const row of await listRuntimeSourceStates<Record<string, unknown>>(auth.userId)) {
+  const runtimeRows = await listRuntimeSourceStates<Record<string, unknown>>(auth.userId);
+  for (const row of runtimeRows) {
     persisted.set(row.sourceId, row.value);
   }
+  console.log(`[api] source-state list user=${auth.userId.slice(0, 8)} runtime=${runtimeRows.length} merged=${persisted.size}`);
   return Response.json({ items: [...persisted.values()] });
 }
