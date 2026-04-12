@@ -343,60 +343,42 @@ function DashboardInner() {
     }
   }
 
-  // Helper: extract cash + crypto from a balance map
+  // Helper: extract all non-zero holdings from a balance map
   const stablecoins = new Set(['USD', 'USDC', 'USDT']);
   function parseBal(bal: Record<string, string>, nameMap?: Record<string, string>) {
-    let cash = 0;
-    const crypto: { asset: string; amount: number; value: number }[] = [];
+    const holdings: { asset: string; amount: number; isStable: boolean; usdValue: number }[] = [];
     for (const [k, v] of Object.entries(bal)) {
       const name = nameMap?.[k] ?? k;
       const val = parseFloat(v);
       if (val < 0.0001) continue;
-      if (stablecoins.has(name)) { cash += val; }
-      else {
-        const usdVal = val * (priceOf[name] ?? 0);
-        crypto.push({ asset: name, amount: val, value: usdVal });
-      }
+      const isStable = stablecoins.has(name);
+      const usdValue = isStable ? val : val * (priceOf[name] ?? 0);
+      holdings.push({ asset: name, amount: val, isStable, usdValue });
     }
-    return { cash, crypto };
+    return holdings;
   }
 
-  const kraken = parseBal(krakenBal, krakenNameMap);
-  const binance = parseBal(binanceBal);
-  const coinbase = parseBal(coinbaseBal);
-  const krakenCash = kraken.cash;
-  const krakenCrypto = kraken.crypto;
-  const binanceCash = binance.cash;
-  const binanceCrypto = binance.crypto;
-  const coinbaseCash = coinbase.cash;
-  const coinbaseCrypto = coinbase.crypto;
+  const krakenHoldings = parseBal(krakenBal, krakenNameMap);
+  const binanceHoldings = parseBal(binanceBal);
+  const coinbaseHoldings = parseBal(coinbaseBal);
 
-  const krakenTotal = krakenCash + krakenCrypto.reduce((s, c) => s + c.value, 0);
-  const binanceTotal = binanceCash + binanceCrypto.reduce((s, c) => s + c.value, 0);
-  const coinbaseTotal = coinbaseCash + coinbaseCrypto.reduce((s, c) => s + c.value, 0);
-  const totalValue = krakenTotal + binanceTotal + coinbaseTotal;
+  const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
+  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings);
 
-  const fmtCrypto = (c: { asset: string; amount: number; value: number }) =>
-    c.value > 0.01 ? `${c.amount.toFixed(4)} ${c.asset} ($${c.value.toFixed(2)})` : `${c.amount.toFixed(4)} ${c.asset}`;
+  function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; usdValue: number }[]): string {
+    if (holdings.length === 0) return '{gray-fg}no data{/}';
+    return holdings.map((h) => {
+      if (h.isStable) return `$${h.amount.toFixed(2)} ${h.asset}`;
+      return h.usdValue > 0.01
+        ? `${h.amount.toFixed(4)} ${h.asset} ($${h.usdValue.toFixed(2)})`
+        : `${h.amount.toFixed(4)} ${h.asset}`;
+    }).join(' + ');
+  }
 
-  const noData = Object.keys(krakenBal).length === 0 && Object.keys(coinbaseBal).length === 0;
   const balLines: string[] = [];
-  if (noData) {
-    balLines.push(' {gray-fg}Loading balances...{/gray-fg}');
-  } else {
-    // Kraken
-    let krakenStr = ` {cyan-fg}Kraken{/}    $${krakenCash.toFixed(2)} USD`;
-    for (const c of krakenCrypto) krakenStr += ` + ${fmtCrypto(c)}`;
-    balLines.push(krakenStr);
-    // Binance
-    let binanceStr = ` {yellow-fg}Binance{/}   $${binanceCash.toFixed(2)} USDC`;
-    for (const c of binanceCrypto) binanceStr += ` + ${fmtCrypto(c)}`;
-    balLines.push(binanceStr);
-    // Coinbase
-    let coinbaseStr = ` {magenta-fg}Coinbase{/}  $${coinbaseCash.toFixed(2)} USD`;
-    for (const c of coinbaseCrypto) coinbaseStr += ` + ${fmtCrypto(c)}`;
-    balLines.push(coinbaseStr);
-  }
+  balLines.push(` {cyan-fg}Kraken{/}    ${fmtHoldings(krakenHoldings)}`);
+  balLines.push(` {yellow-fg}Binance{/}   ${fmtHoldings(binanceHoldings)}`);
+  balLines.push(` {magenta-fg}Coinbase{/}  ${fmtHoldings(coinbaseHoldings)}`);
   // Total
   balLines.push(' ─────────────────────────');
   balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
