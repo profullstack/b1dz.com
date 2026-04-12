@@ -22,7 +22,8 @@ let cachedCoinbaseBalance: Record<string, string> = {};
 let cachedRecentTrades: unknown[] = [];
 let cachedOpenOrders: unknown[] = [];
 let lastPrivateFetch = 0;
-const PRIVATE_FETCH_INTERVAL = 15_000; // 15s — balances/trades/orders
+const PRIVATE_FETCH_INTERVAL = 60_000; // 60s — balances/trades/orders
+const KRAKEN_LOCKOUT_BACKOFF_MS = 5 * 60_000;
 
 const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
@@ -67,9 +68,10 @@ export const cryptoArbWorker: SourceWorker = {
         cachedRecentTrades = [];
         cachedOpenOrders = [];
         const msg = (e as Error).message;
-        if (msg.includes('Rate limit')) {
-          logRaw('[kraken] ✗ Rate limited, backing off 60s', 'crypto-arb');
-          lastPrivateFetch = Date.now() + 60_000;
+        if (msg.includes('Rate limit') || msg.includes('Temporary lockout')) {
+          const backoffMs = msg.includes('Temporary lockout') ? KRAKEN_LOCKOUT_BACKOFF_MS : 60_000;
+          logRaw(`[kraken] ✗ Rate limited, backing off ${Math.round(backoffMs / 1000)}s`, 'crypto-arb');
+          lastPrivateFetch = Date.now() + backoffMs;
         } else {
           logRaw(`[kraken] ✗ Unable to connect: ${msg}`, 'crypto-arb');
         }
