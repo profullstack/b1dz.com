@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import { TuiScreenshot } from './components/tui-screenshot';
+import { DashboardMock } from './components/dashboard-mock';
 
 export default function LandingPage() {
   return (
@@ -37,11 +39,16 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Banner */}
+      {/* Terminal Screenshot */}
+      <section className="max-w-5xl mx-auto px-6 pb-8">
+        <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Terminal Interface</h3>
+        <TuiScreenshot />
+      </section>
+
+      {/* Web Dashboard Mock */}
       <section className="max-w-5xl mx-auto px-6 pb-16">
-        <div className="rounded-2xl overflow-hidden border border-zinc-800">
-          <Image src="/banner.png" alt="b1dz AI Arbitrage Terminal" width={1200} height={400} className="w-full" />
-        </div>
+        <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Web Dashboard</h3>
+        <DashboardMock />
       </section>
 
       {/* Features */}
