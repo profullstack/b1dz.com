@@ -1,8 +1,8 @@
 /**
  * Dynamic pair discovery — finds the best tradeable pairs across exchanges.
  *
- * 1. Fetch all USD pairs + volumes from Kraken and Coinbase
- * 2. Find pairs that exist on BOTH exchanges
+ * 1. Fetch all liquid USD pairs + volumes across supported exchanges
+ * 2. Keep pairs that exist on at least two exchanges
  * 3. Rank by 24h volume (must exceed minimum threshold)
  * 4. Return every pair that clears the liquidity + market-cap filters
  *
@@ -11,9 +11,11 @@
 
 import { createSign, randomBytes } from 'node:crypto';
 import { getCoinbasePem } from './feeds/coinbase-pem.js';
+import { fetchJson } from './feeds/http.js';
 
 const MIN_VOLUME_USD = 1_000_000; // $1M minimum combined 24h volume
 const MIN_MARKET_CAP_USD = 50_000_000; // $50M minimum market cap
+const MIN_EXCHANGES = 2;
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 
 const EXCLUDED = new Set(['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USDP', 'GUSD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY']);
@@ -97,12 +99,40 @@ async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; chang
   return result;
 }
 
+// ─── Binance.US ───────────────────────────────────────────────
+
+interface Binance24hTicker {
+  symbol: string;
+  quoteVolume: string;
+  lastPrice: string;
+  priceChangePercent: string;
+}
+
+async function getBinanceVolumes(): Promise<Map<string, { volUsd: number; change24h: number }>> {
+  const data = await fetchJson<Binance24hTicker[]>('https://api.binance.us/api/v3/ticker/24hr');
+  const result = new Map<string, { volUsd: number; change24h: number }>();
+  for (const ticker of data) {
+    if (!ticker.symbol.endsWith('USD')) continue;
+    const base = ticker.symbol.slice(0, -3).toUpperCase();
+    if (EXCLUDED.has(base)) continue;
+    const pair = `${base}-USD`;
+    const volUsd = parseFloat(ticker.quoteVolume);
+    if (!isFinite(volUsd) || volUsd < MIN_VOLUME_USD) continue;
+    result.set(pair, {
+      volUsd,
+      change24h: parseFloat(ticker.priceChangePercent || '0'),
+    });
+  }
+  return result;
+}
+
 // ─── Discovery ────────────────────────────────────────────────
 
 async function discoverPairs(): Promise<string[]> {
-  const [krakenVols, coinbaseData] = await Promise.all([
+  const [krakenVols, coinbaseData, binanceData] = await Promise.all([
     getKrakenVolumes(),
     getCoinbaseVolumes(),
+    getBinanceVolumes(),
   ]);
 
   // Fetch market caps from CoinGecko (top 250 coins)
@@ -135,14 +165,24 @@ async function discoverPairs(): Promise<string[]> {
     if (existing) { existing.totalVol += data.volUsd; existing.change = data.change24h; existing.exchanges++; }
     else allPairs.set(pair, { totalVol: data.volUsd, change: data.change24h, mcap: 0, exchanges: 1 });
   }
+  for (const [pair, data] of binanceData) {
+    const existing = allPairs.get(pair);
+    if (existing) { existing.totalVol += data.volUsd; existing.change = existing.change || data.change24h; existing.exchanges++; }
+    else allPairs.set(pair, { totalVol: data.volUsd, change: data.change24h, mcap: 0, exchanges: 1 });
+  }
 
   const common: { pair: string; totalVol: number; change: number; mcap: number }[] = [];
-  let filtered = 0;
+  let filteredMcap = 0;
+  let filteredExchanges = 0;
   for (const [pair, data] of allPairs) {
+    if (data.exchanges < MIN_EXCHANGES) {
+      filteredExchanges++;
+      continue;
+    }
     const mcap = marketCaps.get(pair) ?? 0;
     data.mcap = mcap;
     if (marketCaps.size > 0 && mcap > 0 && mcap < MIN_MARKET_CAP_USD) {
-      filtered++;
+      filteredMcap++;
       continue;
     }
     common.push({ pair, totalVol: data.totalVol, change: data.change, mcap });
@@ -153,7 +193,7 @@ async function discoverPairs(): Promise<string[]> {
   const selected = common;
 
   if (selected.length > 0) {
-    console.log(`[discovery] ${selected.length} pairs (${filtered} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap, min vol $${(MIN_VOLUME_USD / 1e6).toFixed(1)}M), scanning all:`);
+    console.log(`[discovery] ${selected.length} pairs (${filteredExchanges} filtered by <${MIN_EXCHANGES} exchanges, ${filteredMcap} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap, min vol $${(MIN_VOLUME_USD / 1e6).toFixed(1)}M), scanning all:`);
     for (const p of selected.slice(0, 12)) {
       const chg = p.change >= 0 ? `+${p.change.toFixed(1)}%` : `${p.change.toFixed(1)}%`;
       const mcapStr = p.mcap > 0 ? `mcap=$${(p.mcap / 1e9).toFixed(1)}B` : 'mcap=?';
