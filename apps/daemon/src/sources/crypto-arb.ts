@@ -164,22 +164,24 @@ export const cryptoArbWorker: SourceWorker = {
     while (opps.length > 100) opps.shift();
 
     // ── Save everything every tick ──
-    await ctx.savePayload({
+    // Only include balances if they've been fetched (avoid overwriting with {})
+    const payload: Record<string, unknown> = {
       enabled: ctx.payload?.enabled ?? true,
       opportunities: opps,
       prices,
       spreads,
-      krakenBalance: cachedKrakenBalance,
-      binanceBalance: cachedBinanceBalance,
-      coinbaseBalance: cachedCoinbaseBalance,
-      recentTrades: cachedRecentTrades,
-      openOrders: cachedOpenOrders,
       activityLog: getActivityLog(),
       daemon: {
         lastTickAt: new Date().toISOString(),
         worker: 'crypto-arb',
         status: 'running',
       },
-    });
+    };
+    if (Object.keys(cachedKrakenBalance).length > 0) payload.krakenBalance = cachedKrakenBalance;
+    if (Object.keys(cachedBinanceBalance).length > 0) payload.binanceBalance = cachedBinanceBalance;
+    if (Object.keys(cachedCoinbaseBalance).length > 0) payload.coinbaseBalance = cachedCoinbaseBalance;
+    if (cachedRecentTrades.length > 0) payload.recentTrades = cachedRecentTrades;
+    if (cachedOpenOrders.length > 0) payload.openOrders = cachedOpenOrders;
+    await ctx.savePayload(payload);
   },
 };
