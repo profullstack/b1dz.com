@@ -68,7 +68,8 @@ interface TradeStatusData {
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
-  pairsScanned: number;
+  eligiblePairs: number;
+  observedPairs: number;
   ticksPerPair: Record<string, number>;
   exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
@@ -352,7 +353,8 @@ function DashboardInner() {
     sigLines.push(' {white-fg}Waiting for daemon...{/white-fg}');
   } else {
     sigLines.push(` Strategies: {cyan-fg}composite{/} (scalp + multi-signal)`);
-    sigLines.push(` Pairs scanned: {white-fg}${ts.pairsScanned}{/}`);
+    sigLines.push(` Pairs eligible: {white-fg}${ts.eligiblePairs}{/}`);
+    sigLines.push(` Pairs observed: {white-fg}${ts.observedPairs}{/}`);
     // Show warmup progress for top pairs
     const pairEntries = Object.entries(ts.ticksPerPair).sort((a, b) => b[1] - a[1]).slice(0, 5);
     for (const [pair, ticks] of pairEntries) {
@@ -501,20 +503,21 @@ function DashboardInner() {
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
 
-  function paginateFromEnd(lines: string[], pageFromEnd: number) {
+  function paginateNewestFirst(lines: string[], pageFromStart: number) {
+    const newestFirst = [...lines].reverse();
     const totalPages = Math.max(1, Math.ceil(lines.length / footerPageSize));
-    const safePage = Math.min(pageFromEnd, totalPages - 1);
-    const end = Math.max(0, lines.length - safePage * footerPageSize);
-    const start = Math.max(0, end - footerPageSize);
+    const safePage = Math.min(pageFromStart, totalPages - 1);
+    const start = safePage * footerPageSize;
+    const end = start + footerPageSize;
     return {
-      pageLines: lines.slice(start, end),
+      pageLines: newestFirst.slice(start, end),
       page: safePage,
       totalPages,
     };
   }
 
-  const pagedActivity = paginateFromEnd(activityLines, activityPage);
-  const pagedRaw = paginateFromEnd(rawLogLines, rawPage);
+  const pagedActivity = paginateNewestFirst(activityLines, activityPage);
+  const pagedRaw = paginateNewestFirst(rawLogLines, rawPage);
   const footerLines = logTab === 'activity' ? pagedActivity.pageLines : pagedRaw.pageLines;
   const footerPage = logTab === 'activity' ? pagedActivity.page : pagedRaw.page;
   const footerPages = logTab === 'activity' ? pagedActivity.totalPages : pagedRaw.totalPages;
@@ -568,7 +571,8 @@ function DashboardInner() {
         content={orderLines.join('\n')} />
 
       <box label=" Trade Signals " top={2 + posH + row1H} left="70%" width="30%" height={row2H}
-        border={{ type: 'line' }} tags={true} scrollable={true}
+        border={{ type: 'line' }} tags={true} scrollable={true} mouse={true} keys={true} vi={true} alwaysScroll={true}
+        scrollbar={{ ch: ' ', track: { bg: 'gray' }, style: { bg: 'cyan' } }}
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 

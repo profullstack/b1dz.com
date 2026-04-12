@@ -147,6 +147,7 @@ const lastExitAt = new Map<string, number>();
 let dailyPnl = 0;
 let dailyPnlDate = new Date().toDateString();
 let tradePollCount = 0;
+let lastEligiblePairs: string[] = [];
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
@@ -367,7 +368,8 @@ export interface TradeStatus {
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
-  pairsScanned: number;
+  eligiblePairs: number;
+  observedPairs: number;
   ticksPerPair: Record<string, number>;
   exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
@@ -411,7 +413,8 @@ export function getTradeStatus(): TradeStatus {
     dailyPnl,
     dailyLossLimitHit: isDailyLossLimitHit(),
     cooldowns,
-    pairsScanned: histories.size,
+    eligiblePairs: lastEligiblePairs.length,
+    observedPairs: new Set([...histories.keys()].map((key) => key.split(':').slice(1).join(':'))).size,
     ticksPerPair,
     exchangeStates,
     lastSignal: null,
@@ -460,6 +463,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       tradePollCount++;
 
       const PAIRS = await getActivePairs();
+      lastEligiblePairs = [...PAIRS];
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
       for (const { feed, exchange } of TRADE_FEEDS) {
