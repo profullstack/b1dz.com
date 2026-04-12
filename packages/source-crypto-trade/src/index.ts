@@ -151,6 +151,8 @@ let lastEligiblePairs: string[] = [];
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
+let krakenHydrationBlockedUntil = 0;
+const KRAKEN_HYDRATION_LOCKOUT_MS = 15 * 60_000;
 
 const STABLES = new Set(['ZUSD', 'USDC', 'USDT', 'USD', 'BUSD']);
 const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
@@ -198,9 +200,23 @@ function krakenPairForAsset(asset: string): string {
 }
 
 async function hydrateKrakenPositions(): Promise<void> {
+  if (Date.now() < krakenHydrationBlockedUntil) {
+    throw new Error(`Kraken hydration backoff ${Math.ceil((krakenHydrationBlockedUntil - Date.now()) / 1000)}s remaining`);
+  }
   const { getBalance, getTradeHistory } = await import('@b1dz/source-crypto-arb');
-  const balance = await getBalance();
-  const tradeHistory = await getTradeHistory();
+  let balance: Record<string, string>;
+  let tradeHistory: Awaited<ReturnType<typeof getTradeHistory>>;
+  try {
+    balance = await getBalance();
+    tradeHistory = await getTradeHistory();
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes('Temporary lockout')) {
+      krakenHydrationBlockedUntil = Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS;
+    }
+    throw e;
+  }
+  krakenHydrationBlockedUntil = 0;
   const holdings = findNonStableHoldings(balance);
   if (holdings.length === 0) return;
 
