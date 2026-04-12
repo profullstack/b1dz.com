@@ -131,7 +131,7 @@ let dailyPnlDate = new Date().toDateString();
 let tradePollCount = 0;
 
 /** Whether we've hydrated from exchange APIs yet. */
-let hydrated = false;
+const hydratedExchanges = new Set<string>();
 
 const STABLES = new Set(['ZUSD', 'USDC', 'USDT', 'USD', 'BUSD']);
 const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
@@ -279,20 +279,30 @@ async function hydrateBinancePositions(): Promise<void> {
  * Reconstruct positions from exchange data (source of truth).
  */
 async function hydrateFromExchange() {
-  if (hydrated) return;
-  hydrated = true;
+  if (hydratedExchanges.size === 3) return;
 
-  try {
+  if (hydratedExchanges.size === 0) {
     exchangesHoldingCrypto.clear();
-    await hydrateKrakenPositions();
-    await hydrateCoinbasePositions();
-    await hydrateBinancePositions();
-    if (openPositions.size === 0 && exchangesHoldingCrypto.size === 0) {
-      console.log('[trade] no crypto holdings found — starting clean');
+  }
+
+  const steps: Array<{ exchange: string; fn: () => Promise<void> }> = [
+    { exchange: 'kraken', fn: hydrateKrakenPositions },
+    { exchange: 'coinbase', fn: hydrateCoinbasePositions },
+    { exchange: 'binance-us', fn: hydrateBinancePositions },
+  ];
+
+  for (const step of steps) {
+    if (hydratedExchanges.has(step.exchange)) continue;
+    try {
+      await step.fn();
+      hydratedExchanges.add(step.exchange);
+    } catch (e) {
+      console.error(`[trade] ${step.exchange} hydration failed: ${(e as Error).message}`);
     }
-  } catch (e) {
-    console.error(`[trade] exchange hydration failed: ${(e as Error).message}`);
-    // Fall back — start clean, daemon will pick up on next trade
+  }
+
+  if (hydratedExchanges.size === steps.length && openPositions.size === 0 && exchangesHoldingCrypto.size === 0) {
+    console.log('[trade] no crypto holdings found — starting clean');
   }
 }
 
