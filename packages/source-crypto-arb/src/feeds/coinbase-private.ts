@@ -38,16 +38,11 @@ function buildJwt(method: string, path: string): string {
   const pathOnly = path.split('?')[0];
   const uri = `${method} api.coinbase.com${pathOnly}`;
 
-  // Extract raw key UUID from full resource path for the iss claim
-  // keyName = "organizations/.../apiKeys/ed48be4f-5efd-4c3c-8cb6-361818489ec2"
-  // iss must be just the UUID: "ed48be4f-5efd-4c3c-8cb6-361818489ec2"
-  const keyId = keyName.split('/').pop() ?? keyName;
-
   const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
   const payload = {
     sub: keyName,
-    iss: keyId,
-    aud: ['cdp_service'],
+    iss: 'cdp',
+    aud: 'https://api.coinbase.com',
     nbf: now - 60,
     exp: now + 300,
     uris: [uri],
