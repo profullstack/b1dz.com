@@ -68,8 +68,9 @@ export const cryptoArbWorker: SourceWorker = {
         console.error(`b1dzd: binance balance error: ${(e as Error).message}`);
       }
       try {
-        const b64set = !!process.env.COINBASE_API_PRIVATE_KEY_B64;
-        console.log(`b1dzd: coinbase fetch (B64=${b64set})`);
+        const b64val = process.env.COINBASE_API_PRIVATE_KEY_B64 ?? '';
+        const b64clean = b64val.replace(/\s/g, '');
+        console.log(`b1dzd: coinbase fetch B64 len=${b64val.length} clean=${b64clean.length} hasNewlines=${b64val.includes('\n')}`);
         cachedCoinbaseBalance = await getCoinbaseBalance();
         console.log('b1dzd: coinbase balance:', Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
       } catch (e) {

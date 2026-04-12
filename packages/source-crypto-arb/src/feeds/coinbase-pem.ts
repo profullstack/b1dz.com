@@ -8,7 +8,9 @@ export function getCoinbasePem(): string | null {
   // Try base64-encoded key first (Railway-safe, no line-breaking issues)
   const b64Key = process.env.COINBASE_API_PRIVATE_KEY_B64;
   if (b64Key && b64Key.length > 10) {
-    return Buffer.from(b64Key, 'base64').toString('utf8');
+    // Strip any whitespace/newlines Railway might inject
+    const cleaned = b64Key.replace(/\s/g, '');
+    return Buffer.from(cleaned, 'base64').toString('utf8');
   }
 
   // Fall back to raw PEM (works locally)
