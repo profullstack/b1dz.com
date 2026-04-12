@@ -63,12 +63,14 @@ interface ArbState {
 }
 
 interface TradeStatusData {
+  positions: { exchange: string; pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string }[];
   position: { pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
   pairsScanned: number;
   ticksPerPair: Record<string, number>;
+  exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
 }
 
@@ -227,6 +229,7 @@ function DashboardInner() {
 
   // Trade status from daemon
   const ts = tradeState?.tradeStatus;
+  const positions = ts?.positions ?? (ts?.position ? [{ exchange: 'kraken', ...ts.position }] : []);
 
   // P/L — only count REALIZED round-trips (matched buy then sell on same pair)
   const todayStart = new Date();
@@ -254,8 +257,11 @@ function DashboardInner() {
   }
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
-  const pos = ts?.position;
-  const posStr = pos ? `{cyan-fg}${pos.pair}{/}` : '{white-fg}no position{/}';
+  const posStr = positions.length === 0
+    ? '{white-fg}no position{/}'
+    : positions.length === 1
+      ? `{cyan-fg}${positions[0].exchange}:${positions[0].pair}{/}`
+      : `{cyan-fg}${positions.length} positions{/}`;
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
@@ -264,22 +270,20 @@ function DashboardInner() {
     : ' {white-fg} Activity {/} {black-fg}{cyan-bg} Logs {/}';
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
-  const krakenPairMap: Record<string, string> = {
-    XXBTZUSD: 'BTC-USD', XETHZUSD: 'ETH-USD', XZECZUSD: 'ZEC-USD',
-    SOLUSD: 'SOL-USD', TAOUSD: 'TAO-USD', ADAUSD: 'ADA-USD',
-    FARTCOINUSD: 'FARTCOIN-USD', DOGEUSD: 'DOGE-USD', HYPEUSD: 'HYPE-USD',
-    DASHUSD: 'DASH-USD', RAVEUSD: 'RAVE-USD', LINKUSD: 'LINK-USD',
-  };
   const posLines: string[] = [];
-  if (pos) {
+  for (const pos of positions) {
     const currentPrice = prices.find((pr) => {
+      const base = pos.pair.split('-')[0];
+      return pr.exchange === pos.exchange && pr.pair === pos.pair;
+    })?.bid ?? prices.find((pr) => {
       const base = pos.pair.split('-')[0];
       return pr.pair.includes(base);
     })?.bid ?? 0;
     const pnlPct = currentPrice > 0 ? ((currentPrice - pos.entryPrice) / pos.entryPrice * 100) : 0;
     const pnlUsd = currentPrice > 0 ? (currentPrice - pos.entryPrice) * pos.volume : 0;
     const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
-    posLines.push(` {cyan-fg}kraken{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${pos.entryPrice.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}  stop:$${pos.stopPrice.toFixed(2)}  ${pos.elapsed}`);
+    const exColor = pos.exchange === 'kraken' ? '{cyan-fg}' : pos.exchange === 'coinbase' ? '{magenta-fg}' : '{yellow-fg}';
+    posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${pos.entryPrice.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}  stop:$${pos.stopPrice.toFixed(2)}  ${pos.elapsed}`);
   }
   if (posLines.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
@@ -347,12 +351,20 @@ function DashboardInner() {
       sigLines.push(`  ${pair.padEnd(10)} ${bar}`);
     }
     sigLines.push('');
-    if (ts.position) {
-      const p = ts.position;
-      const pnlColor = p.pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
-      sigLines.push(` {bold}POSITION:{/} ${p.pair}`);
-      sigLines.push(`  entry: $${p.entryPrice.toFixed(2)}  stop: $${p.stopPrice.toFixed(2)}`);
-      sigLines.push(`  ${pnlColor}P/L: ${p.pnlPct >= 0 ? '+' : ''}${p.pnlPct.toFixed(3)}%{/}  time: ${p.elapsed}`);
+    for (const s of ts.exchangeStates ?? []) {
+      const mode = s.blockedReason
+        ? `{red-fg}${s.blockedReason}{/}`
+        : s.warmingPairs > 0
+          ? `{yellow-fg}warming{/}`
+          : `{green-fg}ready{/}`;
+      sigLines.push(`  ${s.exchange.padEnd(10)} ${mode}  ready:${s.readyPairs} warm:${s.warmingPairs} open:${s.openPositions}`);
+    }
+    sigLines.push('');
+    if (positions.length > 0) {
+      sigLines.push(` {bold}POSITIONS:{/} ${positions.length}`);
+      for (const p of positions.slice(0, 3)) {
+        sigLines.push(`  ${p.exchange}:${p.pair} entry:$${p.entryPrice.toFixed(2)} stop:$${p.stopPrice.toFixed(2)} time:${p.elapsed}`);
+      }
     } else {
       sigLines.push(` {white-fg}No open position — scanning for entry...{/white-fg}`);
     }
@@ -476,7 +488,7 @@ function DashboardInner() {
   });
   const footerLines = logTab === 'activity' ? activityLines : rawLogLines;
 
-  const posH = Math.min(posLines.length + 2, 5);
+  const posH = Math.min(posLines.length + 2, 7);
   const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
   const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 7);
   const row3H = Math.min(Math.max(recentTrades.length + 2, balLines.length + 2, 6), 9);

@@ -126,6 +126,7 @@ const lastExitAt = new Map<string, number>();
 /** Cumulative realized P/L for today. */
 let dailyPnl = 0;
 let dailyPnlDate = new Date().toDateString();
+let tradePollCount = 0;
 
 /** Whether we've hydrated from exchange APIs yet. */
 let hydrated = false;
@@ -191,7 +192,7 @@ async function hydrateFromExchange() {
       const entryTime = buyTrade ? buyTrade.time * 1000 : Date.now();
 
       if (entryPrice > 0) {
-        openPositions.set(pair, {
+        openPositions.set(`kraken:${pair}`, {
           pair,
           exchange: 'kraken',
           entryPrice,
@@ -260,18 +261,29 @@ function isDailyLossLimitHit(): boolean {
 
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
+  positions: { exchange: string; pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string }[];
   position: { pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
   pairsScanned: number;
   ticksPerPair: Record<string, number>;
+  exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
 }
 
 export function getTradeStatus(): TradeStatus {
   resetDailyPnlIfNeeded();
-  const pos = openPositions.size > 0 ? [...openPositions.values()][0] : null;
+  const positions = [...openPositions.values()].map((pos) => ({
+    exchange: pos.exchange,
+    pair: pos.pair,
+    entryPrice: pos.entryPrice,
+    volume: pos.volume,
+    pnlPct: 0,
+    stopPrice: trailingStopPrice(pos),
+    elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+  }));
+  const pos = positions[0] ?? null;
   const cooldowns: { pair: string; remainingSec: number }[] = [];
   for (const [pair, exitTime] of lastExitAt) {
     const remaining = Math.max(0, COOLDOWN_MS - (Date.now() - exitTime));
@@ -279,21 +291,28 @@ export function getTradeStatus(): TradeStatus {
   }
   const ticksPerPair: Record<string, number> = {};
   for (const [pair, hist] of histories) ticksPerPair[pair] = hist.length;
+  const exchangeStates = TRADE_FEEDS.map(({ exchange }) => {
+    const openCount = positions.filter((p) => p.exchange === exchange).length;
+    const histEntries = [...histories.entries()].filter(([key]) => key.startsWith(`${exchange}:`));
+    const readyPairs = histEntries.filter(([, hist]) => hist.length >= WARMUP_TICKS).length;
+    const warmingPairs = histEntries.filter(([, hist]) => hist.length > 0 && hist.length < WARMUP_TICKS).length;
+    const blockedReason = exchangesHoldingCrypto.has(exchange)
+      ? 'holding crypto'
+      : openCount > 0
+        ? 'open position'
+        : null;
+    return { exchange, readyPairs, warmingPairs, openPositions: openCount, blockedReason };
+  });
 
   return {
-    position: pos ? {
-      pair: pos.pair,
-      entryPrice: pos.entryPrice,
-      volume: pos.volume,
-      pnlPct: 0, // will be filled by caller with current price
-      stopPrice: trailingStopPrice(pos),
-      elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
-    } : null,
+    positions,
+    position: pos,
     dailyPnl,
     dailyLossLimitHit: isDailyLossLimitHit(),
     cooldowns,
     pairsScanned: histories.size,
     ticksPerPair,
+    exchangeStates,
     lastSignal: null,
   };
 }
@@ -336,6 +355,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     async poll(ctx) {
       // Restore positions from exchange APIs on first tick (source of truth)
       await hydrateFromExchange();
+      tradePollCount++;
 
       const PAIRS = await getActivePairs();
       const items: TradeItem[] = [];
@@ -370,6 +390,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ready ticks=${hist.length}`);
           }
         }
+      }
+      if (tradePollCount % 4 === 0) {
+        const status = getTradeStatus();
+        const summary = status.exchangeStates.map((s) => {
+          const state = s.blockedReason ? `blocked:${s.blockedReason}` : (s.warmingPairs > 0 ? 'warming' : 'ready');
+          return `${s.exchange}=${state} ready=${s.readyPairs} warming=${s.warmingPairs} open=${s.openPositions}`;
+        }).join(' | ');
+        console.log(`[trade] status ${summary}`);
       }
       return items;
     },
