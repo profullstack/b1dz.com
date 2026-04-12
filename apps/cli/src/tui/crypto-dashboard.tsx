@@ -118,6 +118,8 @@ function DashboardInner() {
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [logTab, setLogTab] = useState<'activity' | 'logs'>('activity');
+  const [activityPage, setActivityPage] = useState(0);
+  const [rawPage, setRawPage] = useState(0);
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -137,13 +139,22 @@ function DashboardInner() {
       });
     };
     const tabHandler = (tab: 'activity' | 'logs') => setLogTab(tab);
+    const pageHandler = (delta: number) => {
+      if (logTab === 'activity') {
+        setActivityPage((prev) => Math.max(0, prev + delta));
+      } else {
+        setRawPage((prev) => Math.max(0, prev + delta));
+      }
+    };
     tuiEvents.on('toggle-auto-trade', handler);
     tuiEvents.on('set-log-tab', tabHandler);
+    tuiEvents.on('page-log', pageHandler);
     return () => {
       tuiEvents.off('toggle-auto-trade', handler);
       tuiEvents.off('set-log-tab', tabHandler);
+      tuiEvents.off('page-log', pageHandler);
     };
-  }, []);
+  }, [logTab]);
 
   // Poll API for daemon state
   useEffect(() => {
@@ -449,8 +460,7 @@ function DashboardInner() {
       seen.add(key);
       return true;
     })
-    .sort((a, b) => a.at.localeCompare(b.at))
-    .slice(-30); // last 30 entries only
+    .sort((a, b) => a.at.localeCompare(b.at));
   const daemonRawLog = [...arbRawLog, ...tradeRawLog]
     .filter((l) => !!l?.at && !!l?.text?.trim())
     .sort((a, b) => a.at.localeCompare(b.at))
@@ -482,12 +492,34 @@ function DashboardInner() {
     }),
     ...logs.map((l) => `{white-fg}${formatLogTs(l.at)}{/} {white-fg}${l.text}{/}`),
   ];
-  const footerLines = logTab === 'activity' ? activityLines : rawLogLines;
 
   const posH = Math.min(posLines.length + 2, 7);
   const row1H = Math.min(DISPLAY_PAIRS.length + 3, 8);
   const row2H = Math.min(Math.max(displaySpreads.length + 3, 5), 7);
   const row3H = Math.min(Math.max(recentTrades.length + 2, balLines.length + 2, 6), 9);
+  const footerTop = 2 + posH + row1H + row2H + row3H;
+  const screenRows = process.stdout.rows ?? 40;
+  const footerH = Math.max(8, screenRows - footerTop);
+  const footerPageSize = Math.max(1, footerH - 2);
+
+  function paginateFromEnd(lines: string[], pageFromEnd: number) {
+    const totalPages = Math.max(1, Math.ceil(lines.length / footerPageSize));
+    const safePage = Math.min(pageFromEnd, totalPages - 1);
+    const end = Math.max(0, lines.length - safePage * footerPageSize);
+    const start = Math.max(0, end - footerPageSize);
+    return {
+      pageLines: lines.slice(start, end),
+      page: safePage,
+      totalPages,
+    };
+  }
+
+  const pagedActivity = paginateFromEnd(activityLines, activityPage);
+  const pagedRaw = paginateFromEnd(rawLogLines, rawPage);
+  const footerLines = logTab === 'activity' ? pagedActivity.pageLines : pagedRaw.pageLines;
+  const footerPage = logTab === 'activity' ? pagedActivity.page : pagedRaw.page;
+  const footerPages = logTab === 'activity' ? pagedActivity.totalPages : pagedRaw.totalPages;
+  const footerLabel = `${logTab === 'activity' ? 'Activity' : 'Logs'}  page ${footerPage + 1}/${footerPages}  ([ ] or PgUp/PgDn)`;
 
   return (
     <>
@@ -529,8 +561,8 @@ function DashboardInner() {
         style={{ border: { fg: 'green' } }}
         content={balLines.join('\n')} />
 
-      <box label={logTab === 'activity' ? ' Activity ' : ' Logs '} top={2 + posH + row1H + row2H + row3H} left={0} width="100%"
-        height={`100%-${2 + posH + row1H + row2H + row3H}`}
+      <box label={` ${footerLabel} `} top={footerTop} left={0} width="100%"
+        height={footerH}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'gray' }, bg: 'black', fg: 'white' }}
         content={footerLines.join('\n') || (logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...')} />

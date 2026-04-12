@@ -28,5 +28,13 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'logs');
   });
 
+  screen.key(['pageup', '['], () => {
+    tuiEvents.emit('page-log', 1);
+  });
+
+  screen.key(['pagedown', ']'], () => {
+    tuiEvents.emit('page-log', -1);
+  });
+
   render(<CryptoDashboard />, screen);
 }
