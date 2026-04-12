@@ -4,7 +4,7 @@
  * 1. Fetch all USD pairs + volumes from Kraken and Coinbase
  * 2. Find pairs that exist on BOTH exchanges
  * 3. Rank by 24h volume (must exceed minimum threshold)
- * 4. Return top N pairs for the arb scanner to poll
+ * 4. Return every pair that clears the liquidity + market-cap filters
  *
  * Refreshes every 5 minutes.
  */
@@ -12,9 +12,8 @@
 import { createSign, randomBytes } from 'node:crypto';
 import { getCoinbasePem } from './feeds/coinbase-pem.js';
 
-const MIN_VOLUME_USD = 100_000;
+const MIN_VOLUME_USD = 1_000_000; // $1M minimum combined 24h volume
 const MIN_MARKET_CAP_USD = 50_000_000; // $50M minimum market cap
-const MAX_PAIRS = 15;
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 
 const EXCLUDED = new Set(['USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USDP', 'GUSD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY']);
@@ -149,21 +148,21 @@ async function discoverPairs(): Promise<string[]> {
     common.push({ pair, totalVol: data.totalVol, change: data.change, mcap });
   }
 
-  // Sort by volume, take top N
+  // Sort by volume and scan every pair that clears the filters.
   common.sort((a, b) => b.totalVol - a.totalVol);
-  const top = common.slice(0, MAX_PAIRS);
+  const selected = common;
 
-  if (top.length > 0) {
-    console.log(`[discovery] ${common.length} pairs (${filtered} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap), scanning top ${top.length}:`);
-    for (const p of top.slice(0, 8)) {
+  if (selected.length > 0) {
+    console.log(`[discovery] ${selected.length} pairs (${filtered} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap, min vol $${(MIN_VOLUME_USD / 1e6).toFixed(1)}M), scanning all:`);
+    for (const p of selected.slice(0, 12)) {
       const chg = p.change >= 0 ? `+${p.change.toFixed(1)}%` : `${p.change.toFixed(1)}%`;
       const mcapStr = p.mcap > 0 ? `mcap=$${(p.mcap / 1e9).toFixed(1)}B` : 'mcap=?';
       console.log(`  ${p.pair.padEnd(12)} vol=$${(p.totalVol / 1e6).toFixed(1)}M  24h=${chg}  ${mcapStr}`);
     }
-    if (top.length > 8) console.log(`  ... +${top.length - 8} more`);
+    if (selected.length > 12) console.log(`  ... +${selected.length - 12} more`);
   }
 
-  return top.map((p) => p.pair);
+  return selected.map((p) => p.pair);
 }
 
 /**
