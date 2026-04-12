@@ -14,7 +14,15 @@
  */
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
-import { KrakenFeed, placeOrder, MAX_POSITION_USD, KRAKEN_TAKER_FEE, getActivePairs } from '@b1dz/source-crypto-arb';
+import {
+  KrakenFeed, CoinbaseFeed,
+  placeOrder as placeKrakenOrder,
+  placeCoinbaseOrder,
+  getBalance as getKrakenBalance,
+  getCoinbaseBalance,
+  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE,
+  getActivePairs,
+} from '@b1dz/source-crypto-arb';
 
 export interface Signal {
   side: 'buy' | 'sell';
@@ -42,6 +50,7 @@ export const momentumStrategy: Strategy = {
 
 interface TradeItem {
   pair: string;
+  exchange: string;
   snap: MarketSnapshot;
   history: MarketSnapshot[];
 }
@@ -74,7 +83,12 @@ const DAILY_LOSS_LIMIT_USD = 5;
 // ─── State ─────────────────────────────────────────────────────
 
 // Pairs are discovered dynamically — top volume pairs across exchanges
-const feed: PriceFeed = new KrakenFeed();
+const krakenFeed: PriceFeed = new KrakenFeed();
+const coinbaseFeed: PriceFeed = new CoinbaseFeed();
+const TRADE_FEEDS: { feed: PriceFeed; exchange: string }[] = [
+  { feed: krakenFeed, exchange: 'kraken' },
+  { feed: coinbaseFeed, exchange: 'coinbase' },
+];
 const histories = new Map<string, MarketSnapshot[]>();
 
 interface Position {
@@ -311,7 +325,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
   const strategyId = strategy?.id ?? 'multi-signal';
 
   return {
-    id: `crypto-trade:kraken:${strategyId}`,
+    id: `crypto-trade:multi:${strategyId}`,
     pollIntervalMs: 5000,
 
     async poll(ctx) {
@@ -320,29 +334,35 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       const PAIRS = await getActivePairs();
       const items: TradeItem[] = [];
-      for (const pair of PAIRS) {
-        const snap = await feed.snapshot(pair);
-        if (!snap) continue;
-        const hist = histories.get(pair) ?? [];
-        hist.push(snap);
-        while (hist.length > 200) hist.shift();
-        histories.set(pair, hist);
-        items.push({ pair, snap, history: [...hist] });
+      // Poll each pair on each exchange — one position per exchange
+      for (const { feed, exchange } of TRADE_FEEDS) {
+        for (const pair of PAIRS) {
+          const snap = await feed.snapshot(pair);
+          if (!snap) continue;
+          const histKey = `${exchange}:${pair}`;
+          const hist = histories.get(histKey) ?? [];
+          hist.push(snap);
+          while (hist.length > 200) hist.shift();
+          histories.set(histKey, hist);
+          items.push({ pair, exchange, snap, history: [...hist] });
 
-        // Update high water mark for open positions
-        const pos = openPositions.get(pair);
-        if (pos && snap.bid > pos.highWaterMark) {
-          pos.highWaterMark = snap.bid;
-        }
+          // Update high water mark for open positions
+          const posKey = `${exchange}:${pair}`;
+          const pos = openPositions.get(posKey);
+          if (pos && snap.bid > pos.highWaterMark) {
+            pos.highWaterMark = snap.bid;
+          }
 
-        // Log current state
-        if (pos) {
-          const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
-          const stopPrice = trailingStopPrice(pos);
-          const stopPct = ((stopPrice - pos.entryPrice) / pos.entryPrice) * 100;
-          console.log(`[trade] ${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
-        } else {
-          console.log(`[trade] ${pair} $${snap.bid.toFixed(2)} (no position) ticks=${hist.length}`);
+          // Log current state (only every 5th tick to reduce noise)
+          if (hist.length % 5 === 0) {
+            if (pos) {
+              const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
+              const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
+              console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
+            } else {
+              console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ticks=${hist.length}`);
+            }
+          }
         }
       }
       return items;
@@ -352,7 +372,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const activeStrategy = strategy ?? defaultStrategy ?? momentumStrategy;
 
       // ── Check exits first ──
-      const pos = openPositions.get(item.pair);
+      const posKey = `${item.exchange}:${item.pair}`;
+      const pos = openPositions.get(posKey);
       if (pos) {
         const pnlPct = (item.snap.bid - pos.entryPrice) / pos.entryPrice;
         const stopPrice = trailingStopPrice(pos);
@@ -419,13 +440,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null; // silent — don't spam logs during cooldown
       }
 
-      // One position per exchange — check the exchange this pair trades on
-      const tradeExchange = 'kraken';
+      // One position per exchange
+      const tradeExchange = item.exchange;
       if (hasPositionOnExchange(tradeExchange)) return null;
-      if (pendingBuyExchange === tradeExchange) return null; // another pair already triggered this tick
+      if (pendingBuyExchange === tradeExchange) return null;
 
-      // Already have a position for this pair
-      if (openPositions.has(item.pair)) return null;
+      // Already have a position for this pair on this exchange
+      const posKey2 = `${tradeExchange}:${item.pair}`;
+      if (openPositions.has(posKey2)) return null;
 
       // Run strategy
       const sig = activeStrategy.evaluate(item.snap, item.history);
@@ -463,76 +485,78 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     async act(opp): Promise<ActionResult> {
       const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position };
       const pair = meta.snap.pair;
-      const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
-      pendingBuyExchange = null; // clear pending lock
+      const exchange = meta.snap.exchange;
+      pendingBuyExchange = null;
 
       if (meta.signal.side === 'sell') {
-        const pos = openPositions.get(pair);
+        const posKey = `${exchange}:${pair}`;
+        const pos = openPositions.get(posKey);
         if (!pos) return { ok: false, message: 'no open position to sell' };
         try {
-          const result = await placeOrder({
-            pair: krakenPair,
-            type: 'sell',
-            ordertype: 'market',
-            volume: pos.volume.toFixed(8),
-          });
+          let txInfo = '';
+          if (exchange === 'kraken') {
+            const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+            const result = await placeKrakenOrder({ pair: krakenPair, type: 'sell', ordertype: 'market', volume: pos.volume.toFixed(8) });
+            txInfo = `${result.descr.order} txid=${result.txid}`;
+          } else if (exchange === 'coinbase') {
+            const result = await placeCoinbaseOrder({ productId: pair, side: 'SELL', size: pos.volume.toFixed(8) });
+            txInfo = `orderId=${result.order_id}`;
+          }
+          const fee = meta.snap.bid * pos.volume * (exchange === 'kraken' ? KRAKEN_TAKER_FEE : COINBASE_TAKER_FEE);
           const grossPnl = (meta.snap.bid - pos.entryPrice) * pos.volume;
-          const fee = meta.snap.bid * pos.volume * KRAKEN_TAKER_FEE;
           const netPnl = grossPnl - fee;
-
-          // Track daily P/L
           resetDailyPnlIfNeeded();
           dailyPnl += netPnl;
-
-          const closedExchange = openPositions.get(pair)?.exchange ?? 'kraken';
-          openPositions.delete(pair);
-          // Clear exchange lock if no more positions on that exchange
-          const stillHolding = [...openPositions.values()].some((p) => p.exchange === closedExchange);
-          if (!stillHolding) exchangesHoldingCrypto.delete(closedExchange);
-          lastExitAt.set(pair, Date.now());
-          console.log(`[trade] SOLD ${pair}: ${result.descr.order} txid=${result.txid} net=$${netPnl.toFixed(4)} dayPnL=$${dailyPnl.toFixed(2)}`);
-          return { ok: true, message: `sold ${pos.volume.toFixed(8)} net=$${netPnl.toFixed(4)}` };
+          openPositions.delete(posKey);
+          const stillHolding = [...openPositions.values()].some((p) => p.exchange === exchange);
+          if (!stillHolding) exchangesHoldingCrypto.delete(exchange);
+          lastExitAt.set(`${exchange}:${pair}`, Date.now());
+          console.log(`[trade] SOLD ${exchange}:${pair} ${txInfo} net=$${netPnl.toFixed(4)} dayPnL=$${dailyPnl.toFixed(2)}`);
+          return { ok: true, message: `sold ${pos.volume.toFixed(8)} on ${exchange} net=$${netPnl.toFixed(4)}` };
         } catch (e) {
-          console.error(`[trade] SELL FAILED: ${(e as Error).message}`);
+          console.error(`[trade] SELL FAILED ${exchange}: ${(e as Error).message}`);
           return { ok: false, message: (e as Error).message };
         }
       }
 
-      // Buy — check actual available balance first
+      // Buy — check available balance on the target exchange
       const price = meta.snap.ask;
-      let availableUsd = 99.50;
+      let availableUsd = 0;
       try {
-        const { getBalance: getKrakenBal } = await import('@b1dz/source-crypto-arb');
-        const bal = await getKrakenBal();
-        availableUsd = Math.min(parseFloat(bal.ZUSD ?? '0') * 0.995, 99.50); // 0.5% buffer for fees
-        if (availableUsd < 5) {
-          console.log(`[trade] insufficient funds: $${availableUsd.toFixed(2)} available`);
-          return { ok: false, message: `insufficient funds ($${availableUsd.toFixed(2)})` };
+        if (exchange === 'kraken') {
+          const bal = await getKrakenBalance();
+          availableUsd = Math.min(parseFloat(bal.ZUSD ?? '0') * 0.995, 99.50);
+        } else if (exchange === 'coinbase') {
+          const bal = await getCoinbaseBalance();
+          // Coinbase might have USD or USDC
+          availableUsd = Math.min(
+            (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0')) * 0.995,
+            99.50,
+          );
         }
       } catch {}
+      if (availableUsd < 5) {
+        return { ok: false, message: `insufficient funds on ${exchange} ($${availableUsd.toFixed(2)})` };
+      }
       const volume = availableUsd / price;
 
-      console.log(`[trade] EXECUTE BUY ${pair}: vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
+      console.log(`[trade] EXECUTE BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {
-        const result = await placeOrder({
-          pair: krakenPair,
-          type: 'buy',
-          ordertype: 'limit',
-          volume: volume.toFixed(8),
-          price: price.toFixed(2),
-        });
-        openPositions.set(pair, {
-          pair,
-          exchange: 'kraken',
-          entryPrice: price,
-          volume,
-          entryTime: Date.now(),
-          highWaterMark: price,
-        });
-        console.log(`[trade] BUY placed: ${result.descr.order} txid=${result.txid}`);
-        return { ok: true, message: `bought ${volume.toFixed(8)} @ ${price.toFixed(2)}` };
+        let txInfo = '';
+        if (exchange === 'kraken') {
+          const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+          const result = await placeKrakenOrder({ pair: krakenPair, type: 'buy', ordertype: 'limit', volume: volume.toFixed(8), price: price.toFixed(2) });
+          txInfo = `${result.descr.order} txid=${result.txid}`;
+        } else if (exchange === 'coinbase') {
+          const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volume.toFixed(8), limitPrice: price.toFixed(2) });
+          txInfo = `orderId=${result.order_id}`;
+        }
+        const posKey = `${exchange}:${pair}`;
+        openPositions.set(posKey, { pair, exchange, entryPrice: price, volume, entryTime: Date.now(), highWaterMark: price });
+        console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
+        return { ok: true, message: `bought ${volume.toFixed(8)} on ${exchange} @ ${price.toFixed(2)}` };
       } catch (e) {
-        console.error(`[trade] BUY FAILED: ${(e as Error).message}`);
+        console.error(`[trade] BUY FAILED ${exchange}: ${(e as Error).message}`);
         return { ok: false, message: (e as Error).message };
       }
     },
