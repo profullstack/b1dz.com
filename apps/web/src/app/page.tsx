@@ -18,8 +18,8 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="max-w-6xl mx-auto px-6 pt-20 pb-16 text-center">
-        <div className="mb-6">
-          <Image src="/logo.svg" alt="b1dz" width={80} height={80} className="mx-auto mb-4" />
+        <div className="mb-8">
+          <Image src="/logo.svg" alt="b1dz" width={320} height={320} className="mx-auto" />
         </div>
         <h1 className="text-5xl md:text-6xl font-bold mb-4 leading-tight">
           <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">AI Arbitrage Terminal</span>
