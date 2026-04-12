@@ -14,6 +14,7 @@ import { WebSocket } from 'ws';
 import type { MarketSnapshot } from '@b1dz/core';
 import { normalizePair } from './pairs.js';
 import { createSign, randomBytes } from 'node:crypto';
+import { getCoinbasePem } from './coinbase-pem.js';
 
 interface CacheEntry extends MarketSnapshot {
   stale: boolean;
@@ -105,12 +106,8 @@ let coinbaseWs: WebSocket | null = null;
 
 function buildCoinbaseWsJwt(): string | null {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
-  if (!keyName || !privateKey) return null;
-  const raw = privateKey.replace(/\\n/g, '\n');
-  const b64 = raw.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '');
-  const lines = b64.match(/.{1,64}/g) ?? [];
-  const pem = `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+  const pem = getCoinbasePem();
+  if (!keyName || !pem) return null;
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = randomBytes(16).toString('hex');

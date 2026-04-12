@@ -1,6 +1,9 @@
 import type { PriceFeed, MarketSnapshot, OrderBook } from '@b1dz/core';
 import { createSign, randomBytes } from 'node:crypto';
 import { getSnapshot } from './ws-price-cache.js';
+import { getCoinbasePem } from './coinbase-pem.js';
+
+const coinbasePemCached = getCoinbasePem();
 
 const BASE = 'https://api.coinbase.com';
 
@@ -10,12 +13,8 @@ function base64url(buf: Buffer): string {
 
 function buildJwt(method: string, path: string): string | null {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
-  if (!keyName || !privateKey) return null;
-  const raw = privateKey.replace(/\\n/g, '\n');
-  const b64 = raw.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '');
-  const lines = b64.match(/.{1,64}/g) ?? [];
-  const pem = `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+  const pem = coinbasePemCached;
+  if (!keyName || !pem) return null;
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = randomBytes(16).toString('hex');

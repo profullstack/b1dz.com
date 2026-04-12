@@ -16,21 +16,12 @@ const BASE = 'https://api.coinbase.com';
 export const MAX_POSITION_USD = 100;
 export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 
+import { getCoinbasePem } from './coinbase-pem.js';
+
 function getKeys() {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
-  if (!keyName || !privateKey) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
-  // Reconstruct PEM from potentially mangled env var (Railway breaks lines)
-  const raw = privateKey.replace(/\\n/g, '\n');
-  const b64 = raw.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '');
-  const lines = b64.match(/.{1,64}/g) ?? [];
-  const pem = `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
-  // Validate PEM can be parsed
-  try {
-    createSign('SHA256').sign({ key: pem, dsaEncoding: 'ieee-p1363' });
-  } catch {
-    // Key is valid but signing empty string fails — that's OK
-  }
+  const pem = getCoinbasePem();
+  if (!keyName || !pem) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
   return { keyName, pem };
 }
 
