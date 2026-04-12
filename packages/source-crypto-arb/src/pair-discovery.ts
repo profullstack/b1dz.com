@@ -13,8 +13,8 @@ import { createSign, randomBytes } from 'node:crypto';
 import { getCoinbasePem } from './feeds/coinbase-pem.js';
 import { fetchJson } from './feeds/http.js';
 
-const MIN_VOLUME_USD = 250_000; // $250k minimum combined 24h volume
-const MIN_MARKET_CAP_USD = 50_000_000; // $50M minimum market cap
+const MIN_VOLUME_USD = 100_000; // $100k minimum combined 24h volume
+const MIN_MARKET_CAP_USD = 10_000_000; // $10M minimum market cap
 const MIN_EXCHANGES = 2;
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 
