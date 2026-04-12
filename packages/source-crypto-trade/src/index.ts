@@ -498,10 +498,19 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
       }
 
-      // Buy
+      // Buy — check actual available balance first
       const price = meta.snap.ask;
-      // Use 99.50 to avoid floating point rounding hitting the $100 limit
-      const volume = Math.min(MAX_POSITION_USD - 0.50, 99.50) / price;
+      let availableUsd = 99.50;
+      try {
+        const { getBalance: getKrakenBal } = await import('@b1dz/source-crypto-arb');
+        const bal = await getKrakenBal();
+        availableUsd = Math.min(parseFloat(bal.ZUSD ?? '0') * 0.995, 99.50); // 0.5% buffer for fees
+        if (availableUsd < 5) {
+          console.log(`[trade] insufficient funds: $${availableUsd.toFixed(2)} available`);
+          return { ok: false, message: `insufficient funds ($${availableUsd.toFixed(2)})` };
+        }
+      } catch {}
+      const volume = availableUsd / price;
 
       console.log(`[trade] EXECUTE BUY ${pair}: vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {

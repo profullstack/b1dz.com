@@ -5,15 +5,22 @@
  */
 
 export function getCoinbasePem(): string | null {
-  // Try base64-encoded key first (Railway-safe, no line-breaking issues)
+  // Option 1: Raw key content as base64 (shortest, Railway-safe)
+  const ecKeyB64 = process.env.COINBASE_EC_KEY_B64;
+  if (ecKeyB64 && ecKeyB64.length > 10) {
+    const cleaned = ecKeyB64.replace(/\s/g, '');
+    const lines = cleaned.match(/.{1,64}/g) ?? [];
+    return `-----BEGIN EC PRIVATE KEY-----\n${lines.join('\n')}\n-----END EC PRIVATE KEY-----\n`;
+  }
+
+  // Option 2: Full PEM as base64
   const b64Key = process.env.COINBASE_API_PRIVATE_KEY_B64;
   if (b64Key && b64Key.length > 10) {
-    // Strip any whitespace/newlines Railway might inject
     const cleaned = b64Key.replace(/\s/g, '');
     return Buffer.from(cleaned, 'base64').toString('utf8');
   }
 
-  // Fall back to raw PEM (works locally)
+  // Option 3: Raw PEM string (works locally)
   const privateKey = process.env.COINBASE_API_PRIVATE_KEY;
   if (!privateKey) return null;
 
