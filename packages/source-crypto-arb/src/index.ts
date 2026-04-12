@@ -25,6 +25,7 @@ import { getActivePairs } from './pair-discovery.js';
 export { getActivePairs } from './pair-discovery.js';
 
 const MAX_POSITION_USD = 100;
+const SUPPORTED_TRADE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase']);
 
 // Feeds — Gemini and Binance.US included for price comparison even if we can't trade on them
 const FEEDS: PriceFeed[] = [new GeminiFeed(), new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
@@ -98,6 +99,9 @@ export const cryptoArbSource: Source<ArbItem> = {
   evaluate(item): Opportunity | null {
     const arb = bestArb(item.snapshots);
     if (!arb) return null;
+    if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
+      return null;
+    }
     // Sized at 1 unit for now — real impl computes max safe size from order book depth
     const size = 1;
     const costNow = arb.buyPrice * size;
@@ -122,9 +126,7 @@ export const cryptoArbSource: Source<ArbItem> = {
   },
   async act(opp): Promise<ActionResult> {
     const arb = opp.metadata as unknown as ArbResult & { size: number };
-    const supported = ['kraken', 'binance-us', 'coinbase'];
-
-    if (!supported.includes(arb.buyExchange) || !supported.includes(arb.sellExchange)) {
+    if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
       return { ok: false, message: `unsupported exchange (${arb.buyExchange}/${arb.sellExchange})`, permanent: true };
     }
 

@@ -13,13 +13,13 @@ const snap = (exchange: string, bid: number, ask: number): MarketSnapshot => ({
 
 describe('cryptoArbSource.evaluate', () => {
   it('emits an opportunity when a positive-net spread exists', () => {
-    // Buy on binance-us at 100, sell on gemini at 110 → ~10% spread, well over fees
+    // Buy on binance-us at 100, sell on kraken at 110 → ~10% spread, well over fees
     const opp = cryptoArbSource.evaluate(
-      { pair: 'BTC-USD', snapshots: [snap('gemini', 110, 111), snap('binance-us', 99, 100)] },
+      { pair: 'BTC-USD', snapshots: [snap('kraken', 110, 111), snap('binance-us', 99, 100)] },
       { state: {} } as never,
     );
     expect(opp).not.toBeNull();
-    expect(opp!.metadata).toMatchObject({ buyExchange: 'binance-us', sellExchange: 'gemini' });
+    expect(opp!.metadata).toMatchObject({ buyExchange: 'binance-us', sellExchange: 'kraken' });
     expect(opp!.projectedProfit).toBeGreaterThan(0);
   });
 
