@@ -522,9 +522,9 @@ function DashboardInner() {
         content={balLines.join('\n')} />
 
       <box label={logTab === 'activity' ? ' Activity ' : ' Logs '} top={2 + posH + row1H + row2H + row3H} left={0} width="100%"
-        height={`100%-${3 + posH + row1H + row2H + row3H}`}
+        height={`100%-${2 + posH + row1H + row2H + row3H}`}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
-        style={{ border: { fg: 'gray' } }}
+        style={{ border: { fg: 'gray' }, bg: 'black', fg: 'white' }}
         content={footerLines.join('\n') || (logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...')} />
     </>
   );

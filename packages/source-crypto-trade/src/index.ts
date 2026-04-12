@@ -343,6 +343,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         for (const pair of PAIRS) {
           const snap = await feed.snapshot(pair);
           if (!snap) continue;
+          if (!isFinite(snap.bid) || !isFinite(snap.ask) || snap.bid <= 0 || snap.ask <= 0) continue;
           const histKey = `${exchange}:${pair}`;
           const hist = histories.get(histKey) ?? [];
           hist.push(snap);

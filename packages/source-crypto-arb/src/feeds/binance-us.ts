@@ -31,13 +31,18 @@ export class BinanceUsFeed implements PriceFeed {
       const t = await fetchJson<BinanceBookTicker>(
         `${BASE}/api/v3/ticker/bookTicker?symbol=${symbol}`,
       );
+      const bid = parseFloat(t.bidPrice);
+      const ask = parseFloat(t.askPrice);
+      const bidSize = parseFloat(t.bidQty);
+      const askSize = parseFloat(t.askQty);
+      if (!isFinite(bid) || !isFinite(ask) || bid <= 0 || ask <= 0) return null;
       return {
         exchange: this.exchange,
         pair,
-        bid: parseFloat(t.bidPrice),
-        ask: parseFloat(t.askPrice),
-        bidSize: parseFloat(t.bidQty),
-        askSize: parseFloat(t.askQty),
+        bid,
+        ask,
+        bidSize,
+        askSize,
         ts: Date.now(),
       };
     } catch {

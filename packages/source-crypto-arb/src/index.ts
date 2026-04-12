@@ -59,13 +59,14 @@ function bestArb(snaps: MarketSnapshot[]): ArbResult | null {
   for (const buyer of snaps) {
     for (const seller of snaps) {
       if (buyer.exchange === seller.exchange) continue;
+      if (!isFinite(buyer.ask) || !isFinite(seller.bid) || buyer.ask <= 0 || seller.bid <= 0) continue;
       // Buy at buyer's ask, sell at seller's bid
       const buyFee = TAKER_FEES[buyer.exchange] ?? 0.005;
       const sellFee = TAKER_FEES[seller.exchange] ?? 0.005;
       const grossPerUnit = seller.bid - buyer.ask;
       const fees = buyer.ask * buyFee + seller.bid * sellFee;
       const netPerUnit = grossPerUnit - fees;
-      if (netPerUnit <= 0) continue;
+      if (!isFinite(netPerUnit) || netPerUnit <= 0) continue;
       const result: ArbResult = {
         pair: buyer.pair,
         buyExchange: buyer.exchange,
@@ -75,6 +76,7 @@ function bestArb(snaps: MarketSnapshot[]): ArbResult | null {
         spreadPct: (grossPerUnit / buyer.ask) * 100,
         netPerUnit,
       };
+      if (!isFinite(result.spreadPct)) continue;
       if (!best || result.netPerUnit > best.netPerUnit) best = result;
     }
   }
@@ -129,6 +131,16 @@ export const cryptoArbSource: Source<ArbItem> = {
     if (!SUPPORTED_TRADE_EXCHANGES.has(arb.buyExchange) || !SUPPORTED_TRADE_EXCHANGES.has(arb.sellExchange)) {
       return { ok: false, message: `unsupported exchange (${arb.buyExchange}/${arb.sellExchange})`, permanent: true };
     }
+    if (
+      !isFinite(arb.buyPrice)
+      || !isFinite(arb.sellPrice)
+      || !isFinite(arb.size)
+      || arb.buyPrice <= 0
+      || arb.sellPrice <= 0
+      || arb.size <= 0
+    ) {
+      return { ok: false, message: 'invalid arb quote', permanent: true };
+    }
 
     // Size to stay within $100
     const maxVolume = MAX_POSITION_USD / arb.buyPrice;
@@ -139,7 +151,7 @@ export const cryptoArbSource: Source<ArbItem> = {
     const sellFee = revenue * (TAKER_FEES[arb.sellExchange] ?? 0.005);
     const netProfit = revenue - cost - buyFee - sellFee;
 
-    if (netProfit <= 0) {
+    if (!isFinite(netProfit) || netProfit <= 0) {
       console.log(`[arb] SKIP ${opp.title}: net profit $${netProfit.toFixed(4)} <= 0`);
       return { ok: false, message: `not profitable after fees ($${netProfit.toFixed(4)})` };
     }

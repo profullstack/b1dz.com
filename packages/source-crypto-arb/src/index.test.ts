@@ -39,4 +39,12 @@ describe('cryptoArbSource.evaluate', () => {
     );
     expect(opp).toBeNull();
   });
+
+  it('returns null when a quote contains NaN', () => {
+    const opp = cryptoArbSource.evaluate(
+      { pair: 'BTC-USD', snapshots: [snap('kraken', 110, 111), snap('binance-us', Number.NaN, Number.NaN)] },
+      { state: {} } as never,
+    );
+    expect(opp).toBeNull();
+  });
 });
