@@ -71,7 +71,8 @@ export const cryptoArbWorker: SourceWorker = {
         cachedCoinbaseBalance = await getCoinbaseBalance();
         console.log('b1dzd: coinbase balance:', Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)');
       } catch (e) {
-        console.error(`b1dzd: coinbase balance error: ${(e as Error).message}`);
+        const err = e as Error & { cause?: Error };
+        console.error(`b1dzd: coinbase balance error: ${err.message}${err.cause ? ' cause: ' + err.cause.message : ''}`);
       }
     }
 

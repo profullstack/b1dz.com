@@ -307,10 +307,18 @@ function DashboardInner() {
   }
 
   // Balances — simple per-exchange summary
-  const krakenNameMap: Record<string, string> = { ZUSD: 'USD', XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE' };
+  const krakenNameMap: Record<string, string> = {
+    ZUSD: 'USD', XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE',
+    XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR',
+    XLTC: 'LTC', XADA: 'ADA', XSOL: 'SOL',
+  };
   const priceOf: Record<string, number> = {};
   for (const p of prices) {
-    if (p.exchange === 'kraken' && p.bid > 0) priceOf[p.pair.split('-')[0]] = p.bid;
+    if (p.bid > 0) {
+      const base = p.pair.split('-')[0];
+      // Keep the first price we see (prefer kraken)
+      if (!priceOf[base]) priceOf[base] = p.bid;
+    }
   }
 
   // Helper: extract cash + crypto from a balance map
