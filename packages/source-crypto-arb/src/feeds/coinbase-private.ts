@@ -79,7 +79,10 @@ async function coinbasePrivate<T>(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 200)}`);
+    // Log JWT payload for debugging (no secrets — just timestamps and URI)
+    const parts = jwt.split('.');
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+    throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uris?.[0]}`);
   }
   const data = (await res.json()) as T & { error?: string; message?: string };
   return data;

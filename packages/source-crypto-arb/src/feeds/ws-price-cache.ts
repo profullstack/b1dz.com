@@ -66,6 +66,11 @@ function connectKraken(pairs: string[]) {
         symbol: krakenPairs,
       },
     }));
+    // Keepalive ping every 30s
+    const pingTimer = setInterval(() => {
+      if (krakenWs?.readyState === WebSocket.OPEN) krakenWs.ping();
+      else clearInterval(pingTimer);
+    }, 30000);
   });
 
   krakenWs.on('message', (raw) => {
@@ -136,6 +141,10 @@ function connectCoinbase(pairs: string[]) {
       channel: 'ticker',
       ...(jwt ? { jwt } : {}),
     }));
+    const pingTimer = setInterval(() => {
+      if (coinbaseWs?.readyState === WebSocket.OPEN) coinbaseWs.ping();
+      else clearInterval(pingTimer);
+    }, 30000);
   });
 
   coinbaseWs.on('message', (raw) => {
@@ -183,6 +192,10 @@ function connectBinance(pairs: string[]) {
 
   binanceWs.on('open', () => {
     console.log('[ws] binance.us connected');
+    const pingTimer = setInterval(() => {
+      if (binanceWs?.readyState === WebSocket.OPEN) binanceWs.ping();
+      else clearInterval(pingTimer);
+    }, 30000);
   });
 
   binanceWs.on('message', (raw) => {
