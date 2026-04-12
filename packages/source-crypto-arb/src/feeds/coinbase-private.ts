@@ -18,6 +18,16 @@ export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 
 import { getCoinbasePem } from './coinbase-pem.js';
 
+export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid: boolean; hasPem: boolean } {
+  const keyName = process.env.COINBASE_API_KEY_NAME ?? '';
+  const pem = getCoinbasePem();
+  return {
+    hasKeyName: keyName.length > 0,
+    keyNameLooksValid: /^organizations\/[^/]+\/apiKeys\/[^/]+$/.test(keyName),
+    hasPem: !!pem,
+  };
+}
+
 function getKeys() {
   const keyName = process.env.COINBASE_API_KEY_NAME;
   const pem = getCoinbasePem();
@@ -85,13 +95,13 @@ async function coinbasePrivate<T>(
       if (!res.ok) {
         const text = await res.text();
         if ((res.status === 429 || res.status >= 500) && attempt < retries - 1) {
-          lastErr = new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 80)}`);
+          lastErr = new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 500)}`);
           await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
           continue;
         }
         const parts = jwt.split('.');
         const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uri}`);
+        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 1000)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uri}`);
       }
       return (await res.json()) as T & { error?: string; message?: string };
     } catch (e) {

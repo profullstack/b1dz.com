@@ -2,7 +2,7 @@ import type { SourceWorker, UserContext } from '../types.js';
 import {
   cryptoArbSource,
   KrakenFeed, BinanceUsFeed, CoinbaseFeed,
-  getBalance, getBinanceBalance, getCoinbaseBalance,
+  getBalance, getBinanceBalance, getCoinbaseBalance, getCoinbaseAuthDebug,
   getTradeHistory, getOpenOrders,
   getActivePairs,
   subscribeWs, wsCacheSize, setWsLogger,
@@ -68,12 +68,16 @@ export const cryptoArbWorker: SourceWorker = {
         logActivity(`[binance] ✗ Unable to connect: ${(e as Error).message.slice(0, 80)}`);
       }
       try {
+        const coinbaseAuth = getCoinbaseAuthDebug();
+        if (!coinbaseAuth.hasKeyName || !coinbaseAuth.keyNameLooksValid || !coinbaseAuth.hasPem) {
+          logActivity(`[coinbase] auth debug: hasKeyName=${coinbaseAuth.hasKeyName} keyNameLooksValid=${coinbaseAuth.keyNameLooksValid} hasPem=${coinbaseAuth.hasPem}`);
+        }
         cachedCoinbaseBalance = await getCoinbaseBalance();
         logActivity(`[coinbase] balance: ${Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`);
       } catch (e) {
         const err = e as Error & { cause?: Error };
         const detail = err.cause ? ` (${err.cause.message})` : '';
-        logActivity(`[coinbase] ✗ Unable to connect: ${err.message.slice(0, 80)}${detail}`);
+        logActivity(`[coinbase] ✗ Unable to connect: ${err.message.slice(0, 500)}${detail}`);
       }
     }
 
