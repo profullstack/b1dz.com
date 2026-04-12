@@ -187,3 +187,22 @@ export async function getOpenOrders(symbol?: string): Promise<OrderResult[]> {
   if (symbol) params.symbol = symbol;
   return binancePrivate<OrderResult[]>('GET', '/api/v3/openOrders', params);
 }
+
+export interface BinanceTrade {
+  id: number;
+  symbol: string;
+  price: string;
+  qty: string;
+  quoteQty: string;
+  commission: string;
+  commissionAsset: string;
+  time: number;
+  isBuyer: boolean;
+}
+
+export async function getRecentTrades(symbol: string, limit = 100): Promise<BinanceTrade[]> {
+  return binancePrivate<BinanceTrade[]>('GET', '/api/v3/myTrades', {
+    symbol,
+    limit: String(limit),
+  });
+}

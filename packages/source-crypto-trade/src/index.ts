@@ -22,6 +22,8 @@ import {
   getBalance as getKrakenBalance,
   getCoinbaseBalance,
   getBinanceBalance,
+  getCoinbaseFills,
+  getBinanceTrades,
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
@@ -131,104 +133,162 @@ let tradePollCount = 0;
 /** Whether we've hydrated from exchange APIs yet. */
 let hydrated = false;
 
+const STABLES = new Set(['ZUSD', 'USDC', 'USDT', 'USD', 'BUSD']);
+const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
+  XXBT: 'BTC-USD',
+  XETH: 'ETH-USD',
+  XZEC: 'ZEC-USD',
+  XXRP: 'XRP-USD',
+  XXLM: 'XLM-USD',
+  XXMR: 'XMR-USD',
+  XXDG: 'DOGE-USD',
+};
+
+function restorePosition(
+  exchange: string,
+  pair: string,
+  volume: number,
+  entryPrice: number,
+  entryTime: number,
+  reason: string,
+) {
+  openPositions.set(`${exchange}:${pair}`, {
+    pair,
+    exchange,
+    entryPrice,
+    volume,
+    entryTime,
+    highWaterMark: entryPrice,
+  });
+  exchangesHoldingCrypto.add(exchange);
+  console.log(`[trade] RESTORED from exchange: ${exchange}:${pair} ${volume} @ $${entryPrice.toFixed(2)} (${reason})`);
+}
+
+function findNonStableHoldings(balance: Record<string, string>): { asset: string; amount: number }[] {
+  const holdings: { asset: string; amount: number }[] = [];
+  for (const [asset, value] of Object.entries(balance)) {
+    const amount = parseFloat(value);
+    if (!isFinite(amount) || amount <= 0.0001 || STABLES.has(asset)) continue;
+    holdings.push({ asset, amount });
+  }
+  return holdings;
+}
+
+function krakenPairForAsset(asset: string): string {
+  return KRAKEN_ASSET_TO_PAIR[asset] ?? `${asset}-USD`;
+}
+
+async function hydrateKrakenPositions(): Promise<void> {
+  const { getBalance, getTradeHistory } = await import('@b1dz/source-crypto-arb');
+  const balance = await getBalance();
+  const tradeHistory = await getTradeHistory();
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on kraken — blocking new kraken trades until resolved`);
+
+  const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
+  for (const holding of holdings) {
+    const pair = krakenPairForAsset(holding.asset);
+    const base = pair.replace('-USD', '');
+    const buyTrade = trades.find((trade) => {
+      if (trade.type !== 'buy') return false;
+      const tradePair = trade.pair.toUpperCase();
+      return tradePair.includes(base.toUpperCase()) && tradePair.includes('USD');
+    });
+    if (!buyTrade) {
+      console.log(`[trade] holding kraken:${pair}=${holding.amount} but no buy trade found in history`);
+      continue;
+    }
+    const entryPrice = parseFloat(buyTrade.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('kraken', pair, holding.amount, entryPrice, buyTrade.time * 1000, 'from trade history');
+  }
+
+  // Preserve the existing daily P/L reconstruction from Kraken fills.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayTs = todayStart.getTime() / 1000;
+  const todayTrades = trades.filter((trade) => trade.time >= todayTs);
+  const buysByPair = new Map<string, { cost: number; fee: number }>();
+  let todayPnl = 0;
+  for (const trade of [...todayTrades].reverse()) {
+    const cost = parseFloat(trade.cost);
+    const fee = parseFloat(trade.fee);
+    if (trade.type === 'buy') {
+      buysByPair.set(trade.pair, { cost, fee });
+    } else if (trade.type === 'sell') {
+      const buy = buysByPair.get(trade.pair);
+      if (!buy) continue;
+      todayPnl += (cost - buy.cost) - fee - buy.fee;
+      buysByPair.delete(trade.pair);
+    }
+  }
+  dailyPnl = todayPnl;
+  if (todayTrades.length > 0) {
+    console.log(`[trade] today: ${todayTrades.length} kraken trades, realized P/L: $${dailyPnl.toFixed(2)}, ${openPositions.size} open positions`);
+  }
+}
+
+async function hydrateCoinbasePositions(): Promise<void> {
+  const balance = await getCoinbaseBalance();
+  const fills = (await getCoinbaseFills()).sort((a, b) => Date.parse(b.trade_time) - Date.parse(a.trade_time));
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on coinbase — blocking new coinbase trades until resolved`);
+  exchangesHoldingCrypto.add('coinbase');
+
+  for (const holding of holdings) {
+    const pair = `${holding.asset}-USD`;
+    const buyFill = fills.find((fill) => fill.side.toUpperCase() === 'BUY' && fill.product_id === pair);
+    if (!buyFill) {
+      console.log(`[trade] holding coinbase:${pair}=${holding.amount} but no buy fill found in history`);
+      continue;
+    }
+    const entryPrice = parseFloat(buyFill.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('coinbase', pair, holding.amount, entryPrice, Date.parse(buyFill.trade_time), 'from fill history');
+  }
+}
+
+async function hydrateBinancePositions(): Promise<void> {
+  const balance = await getBinanceBalance();
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on binance-us — blocking new binance-us trades until resolved`);
+  exchangesHoldingCrypto.add('binance-us');
+
+  for (const holding of holdings) {
+    const pair = `${holding.asset}-USD`;
+    const symbol = pair.replace('-', '');
+    const trades = (await getBinanceTrades(symbol)).sort((a, b) => b.time - a.time);
+    const buyTrade = trades.find((trade) => trade.isBuyer);
+    if (!buyTrade) {
+      console.log(`[trade] holding binance-us:${pair}=${holding.amount} but no buy trade found in history`);
+      continue;
+    }
+    const entryPrice = parseFloat(buyTrade.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('binance-us', pair, holding.amount, entryPrice, buyTrade.time, 'from trade history');
+  }
+}
+
 /**
- * Reconstruct positions from EXCHANGE data (source of truth).
- * Checks Kraken balance for non-USD holdings and recent trade history
- * to figure out what we're holding and at what entry price.
+ * Reconstruct positions from exchange data (source of truth).
  */
 async function hydrateFromExchange() {
   if (hydrated) return;
   hydrated = true;
 
   try {
-    const { getBalance, getTradeHistory } = await import('@b1dz/source-crypto-arb');
-    const balance = await getBalance();
-    const tradeHistory = await getTradeHistory();
-
-    // Find non-trivial crypto holdings (not USD/stablecoins)
-    const stables = new Set(['ZUSD', 'USDC', 'USDT', 'USD']);
-    const holdings: { asset: string; amount: number }[] = [];
-    for (const [asset, val] of Object.entries(balance)) {
-      const amount = parseFloat(val);
-      if (amount > 0.0001 && !stables.has(asset)) {
-        holdings.push({ asset, amount });
-      }
-    }
-
-    if (holdings.length === 0) {
+    exchangesHoldingCrypto.clear();
+    await hydrateKrakenPositions();
+    await hydrateCoinbasePositions();
+    await hydrateBinancePositions();
+    if (openPositions.size === 0 && exchangesHoldingCrypto.size === 0) {
       console.log('[trade] no crypto holdings found — starting clean');
-      exchangesHoldingCrypto.clear();
-      return;
-    }
-    // We're holding crypto on Kraken — block new trades on Kraken until resolved
-    exchangesHoldingCrypto.add('kraken');
-    console.log(`[trade] found ${holdings.length} crypto holdings on kraken — blocking new kraken trades until resolved`);
-
-    // Map Kraken asset names to pair names
-    const assetToPair: Record<string, string> = { XXBT: 'BTC-USD', XETH: 'ETH-USD', XZEC: 'ZEC-USD', XXRP: 'XRP-USD', XXLM: 'XLM-USD', XXMR: 'XMR-USD', XXDG: 'DOGE-USD' };
-    // Any asset not in the map — use asset name directly
-    for (const [asset] of Object.entries(balance)) {
-      if (!assetToPair[asset] && !stables.has(asset)) {
-        assetToPair[asset] = `${asset}-USD`;
-      }
-    }
-
-    // Look through recent trades to find the entry price for each holding
-    const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
-
-    for (const h of holdings) {
-      const pair = assetToPair[h.asset];
-      if (!pair) continue;
-      const base = pair.replace('-USD', '');
-
-      // Find the most recent BUY trade for this pair — match flexibly
-      const buyTrade = trades.find((t) => {
-        if (t.type !== 'buy') return false;
-        const tp = t.pair.toUpperCase();
-        return tp.includes(base.toUpperCase()) && tp.includes('USD');
-      });
-
-      const entryPrice = buyTrade ? parseFloat(buyTrade.price) : 0;
-      const entryTime = buyTrade ? buyTrade.time * 1000 : Date.now();
-
-      if (entryPrice > 0) {
-        openPositions.set(`kraken:${pair}`, {
-          pair,
-          exchange: 'kraken',
-          entryPrice,
-          volume: h.amount,
-          entryTime,
-          highWaterMark: entryPrice,
-        });
-        console.log(`[trade] RESTORED from exchange: ${pair} ${h.amount} @ $${entryPrice.toFixed(2)} (${buyTrade ? 'from trade history' : 'unknown entry'})`);
-      } else {
-        console.log(`[trade] holding ${pair}=${h.amount} but no buy trade found in history — can't determine entry`);
-      }
-    }
-
-    // Calculate today's realized P/L — only matched buy+sell round-trips
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayTs = todayStart.getTime() / 1000;
-    const todayTrades = trades.filter((t) => t.time >= todayTs);
-    const buysByPair = new Map<string, { cost: number; fee: number }>();
-    let todayPnl = 0;
-    for (const t of [...todayTrades].reverse()) { // oldest first
-      const cost = parseFloat(t.cost);
-      const fee = parseFloat(t.fee);
-      if (t.type === 'buy') {
-        buysByPair.set(t.pair, { cost, fee });
-      } else if (t.type === 'sell') {
-        const buy = buysByPair.get(t.pair);
-        if (buy) {
-          todayPnl += (cost - buy.cost) - fee - buy.fee;
-          buysByPair.delete(t.pair);
-        }
-      }
-    }
-    dailyPnl = todayPnl;
-    if (todayTrades.length > 0) {
-      console.log(`[trade] today: ${todayTrades.length} trades, realized P/L: $${dailyPnl.toFixed(2)}, ${openPositions.size} open positions`);
     }
   } catch (e) {
     console.error(`[trade] exchange hydration failed: ${(e as Error).message}`);
