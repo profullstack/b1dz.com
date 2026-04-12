@@ -5,7 +5,7 @@
  * compatible with the built-in fetch().
  */
 
-const PROXIED_HOSTS = ['api.binance.us'];
+const PROXIED_HOSTS = ['api.binance.us', 'api.coinbase.com'];
 
 let cachedProxyUrl: string | null | undefined;
 
