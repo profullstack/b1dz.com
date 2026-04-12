@@ -262,7 +262,7 @@ function DashboardInner() {
       : `{cyan-fg}${positions.length} positions{/}`;
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  realized:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
   const tabsText = logTab === 'activity'
     ? ' {black-fg}{green-bg} Activity {/} {white-fg} Logs {/}'
     : ' {white-fg} Activity {/} {black-fg}{cyan-bg} Logs {/}';
