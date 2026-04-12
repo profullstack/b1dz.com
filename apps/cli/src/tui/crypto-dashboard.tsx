@@ -63,8 +63,8 @@ interface ArbState {
 }
 
 interface TradeStatusData {
-  positions: { exchange: string; pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string }[];
-  position: { pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
@@ -132,6 +132,15 @@ function safeCount(...values: unknown[]): number {
     }
   }
   return 0;
+}
+
+function formatUsdPrice(value: number): string {
+  if (!Number.isFinite(value)) return '-';
+  if (Math.abs(value) >= 1000) return value.toFixed(2);
+  if (Math.abs(value) >= 1) return value.toFixed(2);
+  if (Math.abs(value) >= 0.1) return value.toFixed(4);
+  if (Math.abs(value) >= 0.01) return value.toFixed(5);
+  return value.toFixed(6);
 }
 
 // Wrap the whole component in error handling so bad data doesn't crash React
@@ -295,18 +304,9 @@ function DashboardInner() {
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [];
   for (const pos of positions) {
-    const currentPrice = prices.find((pr) => {
-      const base = pos.pair.split('-')[0];
-      return pr.exchange === pos.exchange && pr.pair === pos.pair;
-    })?.bid ?? prices.find((pr) => {
-      const base = pos.pair.split('-')[0];
-      return pr.pair.includes(base);
-    })?.bid ?? 0;
-    const pnlPct = currentPrice > 0 ? ((currentPrice - pos.entryPrice) / pos.entryPrice * 100) : 0;
-    const pnlUsd = currentPrice > 0 ? (currentPrice - pos.entryPrice) * pos.volume : 0;
-    const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
+    const pnlColor = pos.pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
     const exColor = pos.exchange === 'kraken' ? '{cyan-fg}' : pos.exchange === 'coinbase' ? '{magenta-fg}' : '{yellow-fg}';
-    posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${pos.entryPrice.toFixed(2)}  ${pnlColor}${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)}){/}  stop:$${pos.stopPrice.toFixed(2)}  ${pos.elapsed}`);
+    posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${formatUsdPrice(pos.entryPrice)}  now:$${formatUsdPrice(pos.currentPrice)}  ${pnlColor}${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(2)}% ($${pos.pnlUsd.toFixed(2)}){/}  stop:$${formatUsdPrice(pos.stopPrice)}  ${pos.elapsed}`);
   }
   if (posLines.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
@@ -319,7 +319,7 @@ function DashboardInner() {
     const kr = prices.find((p) => p.pair === pair && p.exchange === 'kraken');
     const cb = prices.find((p) => p.pair === pair && p.exchange === 'coinbase');
     const bn = prices.find((p) => p.pair === pair && p.exchange === 'binance-us');
-    const fmt = (v?: number) => v ? `$${v.toFixed(2)}`.padStart(14) : '           -  ';
+    const fmt = (v?: number) => v ? `$${formatUsdPrice(v)}`.padStart(14) : '           -  ';
     priceLines.push(` ${pair.padEnd(16)} ${fmt(kr?.bid)}  ${fmt(cb?.bid)}  ${fmt(bn?.bid)}`);
   }
   if (!daemonOnline) priceLines.push('', ' {red-fg}Daemon offline — waiting for data...{/red-fg}');
@@ -388,7 +388,7 @@ function DashboardInner() {
     if (positions.length > 0) {
       sigLines.push(` {bold}POSITIONS:{/} ${positions.length}`);
       for (const p of positions.slice(0, 3)) {
-        sigLines.push(`  ${p.exchange}:${p.pair} entry:$${p.entryPrice.toFixed(2)} stop:$${p.stopPrice.toFixed(2)} time:${p.elapsed}`);
+        sigLines.push(`  ${p.exchange}:${p.pair} entry:$${formatUsdPrice(p.entryPrice)} now:$${formatUsdPrice(p.currentPrice)} stop:$${formatUsdPrice(p.stopPrice)} time:${p.elapsed}`);
       }
     } else {
       sigLines.push(` {white-fg}No open position — scanning for entry...{/white-fg}`);
@@ -446,7 +446,7 @@ function DashboardInner() {
     return holdings.map((h) => {
       if (h.isStable) return `${h.amount.toFixed(2)} ${h.asset} ($${h.usdValue.toFixed(2)})`;
       return h.unitPrice > 0 && h.usdValue > 0.01
-        ? `${h.amount.toFixed(4)} ${h.asset} @ $${h.unitPrice.toFixed(2)} ($${h.usdValue.toFixed(2)})`
+        ? `${h.amount.toFixed(4)} ${h.asset} @ $${formatUsdPrice(h.unitPrice)} ($${h.usdValue.toFixed(2)})`
         : `${h.amount.toFixed(4)} ${h.asset}`;
     }).join(' + ');
   }

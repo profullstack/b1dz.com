@@ -224,28 +224,8 @@ async function hydrateKrakenPositions(): Promise<void> {
     restorePosition('kraken', pair, holding.amount, entryPrice, buyTrade.time * 1000, 'from trade history');
   }
 
-  // Preserve the existing daily P/L reconstruction from Kraken fills.
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayTs = todayStart.getTime() / 1000;
-  const todayTrades = trades.filter((trade) => trade.time >= todayTs);
-  const buysByPair = new Map<string, { cost: number; fee: number }>();
-  let todayPnl = 0;
-  for (const trade of [...todayTrades].reverse()) {
-    const cost = parseFloat(trade.cost);
-    const fee = parseFloat(trade.fee);
-    if (trade.type === 'buy') {
-      buysByPair.set(trade.pair, { cost, fee });
-    } else if (trade.type === 'sell') {
-      const buy = buysByPair.get(trade.pair);
-      if (!buy) continue;
-      todayPnl += (cost - buy.cost) - fee - buy.fee;
-      buysByPair.delete(trade.pair);
-    }
-  }
-  dailyPnl = todayPnl;
-  if (todayTrades.length > 0) {
-    console.log(`[trade] today: ${todayTrades.length} kraken trades, realized P/L: $${dailyPnl.toFixed(2)}, ${openPositions.size} open positions`);
+  if (trades.length > 0) {
+    console.log(`[trade] hydrated ${trades.length} kraken trades, ${openPositions.size} open positions`);
   }
 }
 
@@ -329,12 +309,15 @@ function restorePersistedTradeState(state: Record<string, unknown> | undefined) 
   if (restoredTradeState) return;
   restoredTradeState = true;
   const tradeState = (state?.tradeState as Record<string, unknown> | undefined) ?? {};
-  const savedDailyPnl = tradeState.dailyPnl;
   const savedDailyPnlDate = tradeState.dailyPnlDate;
-  if (typeof savedDailyPnl === 'number') dailyPnl = savedDailyPnl;
   if (typeof savedDailyPnlDate === 'string') dailyPnlDate = savedDailyPnlDate;
   const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
   closedTrades.splice(0, closedTrades.length, ...savedClosedTrades);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  dailyPnl = closedTrades
+    .filter((trade) => trade.exitTime >= todayStart.getTime())
+    .reduce((sum, trade) => sum + trade.netPnl, 0);
 }
 
 /** Serialize positions/cooldowns/dailyPnl for persistence. */
@@ -363,8 +346,8 @@ function isDailyLossLimitHit(): boolean {
 
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
-  positions: { exchange: string; pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string }[];
-  position: { pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
@@ -377,15 +360,27 @@ export interface TradeStatus {
 
 export function getTradeStatus(): TradeStatus {
   resetDailyPnlIfNeeded();
-  const positions = [...openPositions.values()].map((pos) => ({
-    exchange: pos.exchange,
-    pair: pos.pair,
-    entryPrice: pos.entryPrice,
-    volume: pos.volume,
-    pnlPct: 0,
-    stopPrice: trailingStopPrice(pos),
-    elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
-  }));
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const trackedDailyPnl = closedTrades
+    .filter((trade) => trade.exitTime >= todayStart.getTime())
+    .reduce((sum, trade) => sum + trade.netPnl, 0);
+  const positions = [...openPositions.values()].map((pos) => {
+    const currentPrice = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1)?.bid ?? pos.entryPrice;
+    const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+    const pnlUsd = (currentPrice - pos.entryPrice) * pos.volume;
+    return {
+      exchange: pos.exchange,
+      pair: pos.pair,
+      entryPrice: pos.entryPrice,
+      currentPrice,
+      volume: pos.volume,
+      pnlPct,
+      pnlUsd,
+      stopPrice: trailingStopPrice(pos),
+      elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+    };
+  });
   const pos = positions[0] ?? null;
   const cooldowns: { pair: string; remainingSec: number }[] = [];
   for (const [pair, exitTime] of lastExitAt) {
@@ -410,8 +405,8 @@ export function getTradeStatus(): TradeStatus {
   return {
     positions,
     position: pos,
-    dailyPnl,
-    dailyLossLimitHit: isDailyLossLimitHit(),
+    dailyPnl: trackedDailyPnl,
+    dailyLossLimitHit: trackedDailyPnl <= -DAILY_LOSS_LIMIT_USD,
     cooldowns,
     eligiblePairs: lastEligiblePairs.length,
     observedPairs: new Set([...histories.keys()].map((key) => key.split(':').slice(1).join(':'))).size,
@@ -652,8 +647,6 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const fee = meta.snap.bid * pos.volume * feeRate;
           const grossPnl = (meta.snap.bid - pos.entryPrice) * pos.volume;
           const netPnl = grossPnl - fee;
-          resetDailyPnlIfNeeded();
-          dailyPnl += netPnl;
           closedTrades.push({
             exchange,
             pair,
@@ -668,6 +661,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             netPnl,
           });
           while (closedTrades.length > 100) closedTrades.shift();
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          dailyPnl = closedTrades
+            .filter((trade) => trade.exitTime >= todayStart.getTime())
+            .reduce((sum, trade) => sum + trade.netPnl, 0);
           openPositions.delete(posKey);
           const stillHolding = [...openPositions.values()].some((p) => p.exchange === exchange);
           if (!stillHolding) exchangesHoldingCrypto.delete(exchange);
