@@ -42,27 +42,33 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
   if (!proxyUrl) return fetch(url, init);
 
   // Use curl through proxy — most reliable approach
-  const { execSync } = await import('node:child_process');
+  const { execFileSync } = await import('node:child_process');
   const method = init?.method ?? 'GET';
   const headers = init?.headers as Record<string, string> | undefined;
-
-  let cmd = `curl -s -x "${proxyUrl}" --max-time 15 -X ${method}`;
+  const args = ['-s', '-x', proxyUrl, '--max-time', '15', '-X', method];
   if (headers) {
     for (const [k, v] of Object.entries(headers)) {
-      cmd += ` -H "${k}: ${v}"`;
+      args.push('-H', `${k}: ${v}`);
     }
   }
   if (init?.body) {
-    cmd += ` -d '${init.body}'`;
+    args.push('-d', String(init.body));
   }
-  cmd += ` "${url}"`;
+  args.push(url);
 
   try {
-    const stdout = execSync(cmd, { encoding: 'utf8', timeout: 20000 });
+    const stdout = execFileSync('curl', args, { encoding: 'utf8', timeout: 20000 });
     return new Response(stdout, { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e) {
     const host = new URL(url).host;
-    console.error(`[proxy] ✗ ${host} failed: ${(e as Error).message?.slice(0, 60)}`);
+    const err = e as Error & { stderr?: string | Buffer };
+    const stderr = typeof err.stderr === 'string'
+      ? err.stderr.trim()
+      : Buffer.isBuffer(err.stderr)
+        ? err.stderr.toString('utf8').trim()
+        : '';
+    const detail = stderr || err.message || 'unknown proxy error';
+    console.error(`[proxy] ✗ ${host} failed: ${detail.slice(0, 120)}`);
     return new Response(JSON.stringify({ error: `proxy fetch failed for ${host}` }), { status: 502, headers: { 'content-type': 'application/json' } });
   }
 }
