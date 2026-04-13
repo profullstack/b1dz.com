@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { subscribeWs, getAllSnapshots, normalizePair } from '@b1dz/source-crypto-arb';
+import { subscribeWs, getWsSnapshot, normalizePair } from '@b1dz/source-crypto-arb';
 import { aggregateBars, TIMEFRAME_TO_MS } from './timeframeAggregator.js';
 
 const COINBASE_GRANULARITY = {
@@ -121,7 +121,8 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
   subscribeWs([pair]);
   let stopped = false;
   let lastSeen = 0;
-  let lastPublished = 0;
+  let lastPublishedTs = 0;
+  let lastPublishedPrice = null;
 
   const emitStatus = (status) => {
     if (!stopped) onStatus?.(status);
@@ -131,16 +132,24 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
 
   const timer = setInterval(() => {
     if (stopped) return;
-    const snapshots = getAllSnapshots(pair);
-    const snap = snapshots.find((entry) => entry.exchange === exchange) ?? snapshots[0] ?? null;
-    if (snap?.ts && snap.ts > lastPublished) {
-      lastPublished = snap.ts;
+    const snap = getWsSnapshot(exchange, pair);
+    const bid = Number(snap?.bid);
+    const ask = Number(snap?.ask);
+    const price = Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0
+      ? (bid + ask) / 2
+      : Number.isFinite(bid) && bid > 0
+        ? bid
+        : ask;
+
+    if (snap?.ts && Number.isFinite(price) && (snap.ts > lastPublishedTs || price !== lastPublishedPrice)) {
+      lastPublishedTs = snap.ts;
+      lastPublishedPrice = price;
       lastSeen = Date.now();
       emitStatus('live');
       onTick?.({
         time: snap.ts,
-        price: Number.isFinite(snap.bid) && snap.bid > 0 ? snap.bid : snap.ask,
-        exchange: snap.exchange,
+        price,
+        exchange,
         pair,
       });
       return;
