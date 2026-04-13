@@ -21,6 +21,8 @@ interface CacheEntry extends MarketSnapshot {
 const cache = new Map<string, CacheEntry>(); // key: "exchange:pair"
 const subscribedPairs = new Set<string>();
 let initialized = false;
+const krakenSubscribedSymbols = new Set<string>();
+const coinbaseSubscribedPairs = new Set<string>();
 
 let wsLogger: ((msg: string) => void) | null = null;
 export function setWsLogger(fn: ((msg: string) => void) | null) { wsLogger = fn; }
@@ -59,22 +61,31 @@ function setPrice(exchange: string, pair: string, bid: number, ask: number, bidS
 
 let krakenWs: WebSocket | null = null;
 
+function subscribeKrakenPairs(ws: WebSocket, pairs: string[]) {
+  const nextSymbols = pairs
+    .map((p) => normalizePair(p, 'kraken'))
+    .filter((symbol) => !krakenSubscribedSymbols.has(symbol));
+  if (nextSymbols.length === 0) return;
+  for (const symbol of nextSymbols) krakenSubscribedSymbols.add(symbol);
+  ws.send(JSON.stringify({
+    method: 'subscribe',
+    params: {
+      channel: 'ticker',
+      symbol: nextSymbols,
+    },
+  }));
+}
+
 function connectKraken(pairs: string[]) {
   if (krakenWs) return;
-  const krakenPairs = pairs.map((p) => normalizePair(p, 'kraken'));
   const ws = new WebSocket('wss://ws.kraken.com/v2');
   krakenWs = ws;
 
   ws.on('open', () => {
     if (krakenWs !== ws) return;
+    krakenSubscribedSymbols.clear();
     wsLog('[ws] kraken connected');
-    ws.send(JSON.stringify({
-      method: 'subscribe',
-      params: {
-        channel: 'ticker',
-        symbol: krakenPairs,
-      },
-    }));
+    subscribeKrakenPairs(ws, pairs);
     // Keepalive ping every 30s
     const pingTimer = setInterval(() => {
       if (krakenWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
@@ -107,6 +118,7 @@ function connectKraken(pairs: string[]) {
     wsLog('[ws] ✗ kraken disconnected, reconnecting in 5s...');
     if (krakenWs === ws) {
       krakenWs = null;
+      krakenSubscribedSymbols.clear();
       setTimeout(() => connectKraken(pairs), 5000);
     }
   });
@@ -120,6 +132,22 @@ function connectKraken(pairs: string[]) {
 
 let coinbaseWs: WebSocket | null = null;
 
+function subscribeCoinbasePairs(ws: WebSocket, pairs: string[]) {
+  const nextPairs = pairs.filter((pair) => !coinbaseSubscribedPairs.has(pair));
+  if (nextPairs.length === 0) return;
+  for (const pair of nextPairs) coinbaseSubscribedPairs.add(pair);
+  ws.send(JSON.stringify({
+    type: 'subscribe',
+    product_ids: nextPairs,
+    channel: 'ticker',
+  }));
+  ws.send(JSON.stringify({
+    type: 'subscribe',
+    product_ids: nextPairs,
+    channel: 'heartbeats',
+  }));
+}
+
 function connectCoinbase(pairs: string[]) {
   if (coinbaseWs) return;
   const ws = new WebSocket('wss://advanced-trade-ws.coinbase.com');
@@ -127,17 +155,9 @@ function connectCoinbase(pairs: string[]) {
 
   ws.on('open', () => {
     if (coinbaseWs !== ws) return;
+    coinbaseSubscribedPairs.clear();
     wsLog('[ws] coinbase connected');
-    ws.send(JSON.stringify({
-      type: 'subscribe',
-      product_ids: pairs,
-      channel: 'ticker',
-    }));
-    ws.send(JSON.stringify({
-      type: 'subscribe',
-      product_ids: pairs,
-      channel: 'heartbeats',
-    }));
+    subscribeCoinbasePairs(ws, pairs);
     const pingTimer = setInterval(() => {
       if (coinbaseWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
@@ -170,6 +190,7 @@ function connectCoinbase(pairs: string[]) {
     wsLog(`[ws] ✗ coinbase disconnected (${code}${why ? ` ${why}` : ''}), reconnecting in 5s...`);
     if (coinbaseWs === ws) {
       coinbaseWs = null;
+      coinbaseSubscribedPairs.clear();
       setTimeout(() => connectCoinbase(pairs), 5000);
     }
   });
@@ -241,16 +262,21 @@ export function subscribe(pairs: string[]) {
 
   for (const p of newPairs) subscribedPairs.add(p);
   const allPairs = [...subscribedPairs];
+  if (!initialized) {
+    wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
+    connectKraken(allPairs);
+    connectCoinbase(allPairs);
+    initialized = true;
+    return;
+  }
 
-  // Reconnect with updated pair list
-  if (krakenWs) { krakenWs.close(); krakenWs = null; }
-  if (coinbaseWs) { coinbaseWs.close(); coinbaseWs = null; }
-  if (binanceWs) { binanceWs.close(); binanceWs = null; }
-
-  // Binance.US blocks datacenter IPs — WS won't work, use REST polling via proxy instead
-  wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
-  connectKraken(allPairs);
-  connectCoinbase(allPairs);
+  if (newPairs.length > 0) {
+    wsLog(`[ws] subscribing to ${newPairs.length} new pair${newPairs.length === 1 ? '' : 's'} (${subscribedPairs.size} total)`);
+  }
+  if (krakenWs?.readyState === WebSocket.OPEN) subscribeKrakenPairs(krakenWs, newPairs);
+  else connectKraken(allPairs);
+  if (coinbaseWs?.readyState === WebSocket.OPEN) subscribeCoinbasePairs(coinbaseWs, newPairs);
+  else connectCoinbase(allPairs);
   initialized = true;
 }
 

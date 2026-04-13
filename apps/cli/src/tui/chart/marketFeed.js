@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { subscribeWs, getWsSnapshot, normalizePair, KrakenFeed, CoinbaseFeed, BinanceUsFeed } from '@b1dz/source-crypto-arb';
+import { subscribeWs, getWsSnapshot, normalizePair } from '@b1dz/source-crypto-arb';
 import { aggregateBars, TIMEFRAME_TO_MS } from './timeframeAggregator.js';
 
 const COINBASE_GRANULARITY = {
@@ -39,12 +39,6 @@ function chooseCoinbaseFetchTimeframe(timeframe) {
   if (timeframe === '1w') return { fetchTimeframe: '1d', aggregate: '1w' };
   return { fetchTimeframe: timeframe, aggregate: null };
 }
-
-const PUBLIC_FEEDS = {
-  kraken: new KrakenFeed(),
-  coinbase: new CoinbaseFeed(),
-  'binance-us': new BinanceUsFeed(),
-};
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -123,14 +117,12 @@ export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 1
   return [];
 }
 
-export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000, fallbackPollMs = 1500 }) {
+export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000 }) {
   subscribeWs([pair]);
   let stopped = false;
   let lastSeen = 0;
   let lastPublishedTs = 0;
   let lastPublishedPrice = null;
-  let lastFallbackPoll = 0;
-  let fallbackInFlight = false;
 
   const emitStatus = (status) => {
     if (!stopped) onStatus?.(status);
@@ -167,20 +159,6 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
     const snap = getWsSnapshot(exchange, pair);
     if (publishSnapshot(snap)) {
       return;
-    }
-    const feed = PUBLIC_FEEDS[exchange];
-    if (feed && !fallbackInFlight && Date.now() - lastFallbackPoll >= fallbackPollMs) {
-      fallbackInFlight = true;
-      lastFallbackPoll = Date.now();
-      void feed.snapshot(pair)
-        .then((fallbackSnap) => {
-          if (stopped) return;
-          publishSnapshot(fallbackSnap);
-        })
-        .catch(() => {})
-        .finally(() => {
-          fallbackInFlight = false;
-        });
     }
     if (!lastSeen) {
       emitStatus('reconnecting');
