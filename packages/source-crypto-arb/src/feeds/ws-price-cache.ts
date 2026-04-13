@@ -13,8 +13,6 @@
 import { WebSocket } from 'ws';
 import type { MarketSnapshot } from '@b1dz/core';
 import { normalizePair } from './pairs.js';
-import { createSign, randomBytes } from 'node:crypto';
-import { getCoinbasePem } from './coinbase-pem.js';
 
 interface CacheEntry extends MarketSnapshot {
   stale: boolean;
@@ -122,24 +120,6 @@ function connectKraken(pairs: string[]) {
 
 let coinbaseWs: WebSocket | null = null;
 
-function buildCoinbaseWsJwt(): string | null {
-  const keyName = process.env.COINBASE_API_KEY_NAME;
-  const pem = getCoinbasePem();
-  if (!keyName || !pem) return null;
-
-  const now = Math.floor(Date.now() / 1000);
-  const nonce = randomBytes(16).toString('hex');
-  const b64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-  const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
-  const payload = { sub: keyName, iss: 'cdp', aud: 'https://api.coinbase.com', nbf: now - 60, exp: now + 300 };
-  const segs = [b64url(Buffer.from(JSON.stringify(header))), b64url(Buffer.from(JSON.stringify(payload)))];
-  const input = segs.join('.');
-  const sign = createSign('SHA256');
-  sign.update(input);
-  return input + '.' + b64url(sign.sign({ key: pem, dsaEncoding: 'ieee-p1363' }));
-}
-
 function connectCoinbase(pairs: string[]) {
   if (coinbaseWs) return;
   const ws = new WebSocket('wss://advanced-trade-ws.coinbase.com');
@@ -148,12 +128,15 @@ function connectCoinbase(pairs: string[]) {
   ws.on('open', () => {
     if (coinbaseWs !== ws) return;
     wsLog('[ws] coinbase connected');
-    const jwt = buildCoinbaseWsJwt();
     ws.send(JSON.stringify({
       type: 'subscribe',
       product_ids: pairs,
       channel: 'ticker',
-      ...(jwt ? { jwt } : {}),
+    }));
+    ws.send(JSON.stringify({
+      type: 'subscribe',
+      product_ids: pairs,
+      channel: 'heartbeats',
     }));
     const pingTimer = setInterval(() => {
       if (coinbaseWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
@@ -182,8 +165,9 @@ function connectCoinbase(pairs: string[]) {
     } catch {}
   });
 
-  ws.on('close', () => {
-    wsLog('[ws] ✗ coinbase disconnected, reconnecting in 5s...');
+  ws.on('close', (code, reason) => {
+    const why = reason?.toString()?.trim();
+    wsLog(`[ws] ✗ coinbase disconnected (${code}${why ? ` ${why}` : ''}), reconnecting in 5s...`);
     if (coinbaseWs === ws) {
       coinbaseWs = null;
       setTimeout(() => connectCoinbase(pairs), 5000);
