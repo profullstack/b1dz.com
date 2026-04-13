@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { subscribeWs, getWsSnapshot, normalizePair } from '@b1dz/source-crypto-arb';
+import { subscribeWs, getWsSnapshot, normalizePair, KrakenFeed, CoinbaseFeed, BinanceUsFeed } from '@b1dz/source-crypto-arb';
 import { aggregateBars, TIMEFRAME_TO_MS } from './timeframeAggregator.js';
 
 const COINBASE_GRANULARITY = {
@@ -39,6 +39,12 @@ function chooseCoinbaseFetchTimeframe(timeframe) {
   if (timeframe === '1w') return { fetchTimeframe: '1d', aggregate: '1w' };
   return { fetchTimeframe: timeframe, aggregate: null };
 }
+
+const PUBLIC_FEEDS = {
+  kraken: new KrakenFeed(),
+  coinbase: new CoinbaseFeed(),
+  'binance-us': new BinanceUsFeed(),
+};
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -117,22 +123,21 @@ export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 1
   return [];
 }
 
-export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000 }) {
+export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000, fallbackPollMs = 1500 }) {
   subscribeWs([pair]);
   let stopped = false;
   let lastSeen = 0;
   let lastPublishedTs = 0;
   let lastPublishedPrice = null;
+  let lastFallbackPoll = 0;
+  let fallbackInFlight = false;
 
   const emitStatus = (status) => {
     if (!stopped) onStatus?.(status);
   };
 
-  emitStatus('reconnecting');
-
-  const timer = setInterval(() => {
-    if (stopped) return;
-    const snap = getWsSnapshot(exchange, pair);
+  const publishSnapshot = (snap) => {
+    if (!snap) return false;
     const bid = Number(snap?.bid);
     const ask = Number(snap?.ask);
     const price = Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0
@@ -140,19 +145,42 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
       : Number.isFinite(bid) && bid > 0
         ? bid
         : ask;
+    if (!(snap?.ts && Number.isFinite(price))) return false;
+    if (!(snap.ts > lastPublishedTs || price !== lastPublishedPrice)) return false;
+    lastPublishedTs = snap.ts;
+    lastPublishedPrice = price;
+    lastSeen = Date.now();
+    emitStatus('live');
+    onTick?.({
+      time: snap.ts,
+      price,
+      exchange,
+      pair,
+    });
+    return true;
+  };
 
-    if (snap?.ts && Number.isFinite(price) && (snap.ts > lastPublishedTs || price !== lastPublishedPrice)) {
-      lastPublishedTs = snap.ts;
-      lastPublishedPrice = price;
-      lastSeen = Date.now();
-      emitStatus('live');
-      onTick?.({
-        time: snap.ts,
-        price,
-        exchange,
-        pair,
-      });
+  emitStatus('reconnecting');
+
+  const timer = setInterval(() => {
+    if (stopped) return;
+    const snap = getWsSnapshot(exchange, pair);
+    if (publishSnapshot(snap)) {
       return;
+    }
+    const feed = PUBLIC_FEEDS[exchange];
+    if (feed && !fallbackInFlight && Date.now() - lastFallbackPoll >= fallbackPollMs) {
+      fallbackInFlight = true;
+      lastFallbackPoll = Date.now();
+      void feed.snapshot(pair)
+        .then((fallbackSnap) => {
+          if (stopped) return;
+          publishSnapshot(fallbackSnap);
+        })
+        .catch(() => {})
+        .finally(() => {
+          fallbackInFlight = false;
+        });
     }
     if (!lastSeen) {
       emitStatus('reconnecting');
