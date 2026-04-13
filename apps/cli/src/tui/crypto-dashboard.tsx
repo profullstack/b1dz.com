@@ -366,6 +366,34 @@ function DashboardInner() {
   const openOrders = arbState?.openOrders ?? [];
   const signals = tradeState?.signals ?? [];
   const closedTrades = tradeState?.tradeState?.closedTrades ?? [];
+  const krakenNameMap: Record<string, string> = {
+    ZUSD: 'USD', XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE',
+    XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR',
+    XLTC: 'LTC', XADA: 'ADA', XSOL: 'SOL',
+  };
+  const stablecoins = new Set(['USD', 'USDC', 'USDT']);
+
+  const priceOf: Record<string, number> = {};
+  for (const p of prices) {
+    if (p.bid > 0) {
+      const base = p.pair.split('-')[0];
+      if (!priceOf[base]) priceOf[base] = p.bid;
+    }
+  }
+
+  function parseBal(bal: Record<string, string>, nameMap?: Record<string, string>) {
+    const holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[] = [];
+    for (const [k, v] of Object.entries(bal)) {
+      const name = nameMap?.[k] ?? k;
+      const val = parseFloat(v);
+      if (val < 0.0001) continue;
+      const isStable = stablecoins.has(name);
+      const unitPrice = isStable ? 1 : (priceOf[name] ?? 0);
+      const usdValue = val * unitPrice;
+      holdings.push({ asset: name, amount: val, isStable, unitPrice, usdValue });
+    }
+    return holdings;
+  }
 
   const btc = prices.find((p) => p.pair === 'BTC-USD' && p.exchange === 'kraken')?.bid;
   const eth = prices.find((p) => p.pair === 'ETH-USD' && p.exchange === 'kraken')?.bid;
@@ -373,6 +401,9 @@ function DashboardInner() {
   // Trade status from daemon
   const ts = tradeState?.tradeStatus;
   const positions = ts?.positions ?? (ts?.position ? [{ exchange: 'kraken', ...ts.position }] : []);
+  const krakenHoldings = parseBal(krakenBal, krakenNameMap);
+  const binanceHoldings = parseBal(binanceBal);
+  const coinbaseHoldings = parseBal(coinbaseBal);
   const observedPairFallback = ts ? new Set(Object.keys(ts.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':'))).size : 0;
   const eligiblePairs = safeCount(ts?.eligiblePairs, ts?.pairsScanned, observedPairFallback);
   const observedPairs = safeCount(ts?.observedPairs, observedPairFallback, ts?.pairsScanned);
@@ -389,18 +420,45 @@ function DashboardInner() {
     totalFees += t.fee;
   }
 
+  const displayedPositions = [...positions];
+  const seenTracked = new Set(positions.map((pos) => `${pos.exchange}:${pos.pair}`));
+  for (const [exchange, holdings] of [
+    ['kraken', krakenHoldings],
+    ['coinbase', coinbaseHoldings],
+    ['binance-us', binanceHoldings],
+  ] as const) {
+    for (const holding of holdings) {
+      if (holding.isStable) continue;
+      const pair = `${holding.asset}-USD`;
+      const key = `${exchange}:${pair}`;
+      if (seenTracked.has(key)) continue;
+      displayedPositions.push({
+        exchange,
+        pair,
+        entryPrice: 0,
+        currentPrice: holding.unitPrice,
+        volume: holding.amount,
+        pnlPct: 0,
+        pnlUsd: 0,
+        stopPrice: 0,
+        elapsed: 'holding',
+      });
+      seenTracked.add(key);
+    }
+  }
+
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
-  const posStr = positions.length === 0
+  const posStr = displayedPositions.length === 0
     ? '{white-fg}no position{/}'
-    : positions.length === 1
-      ? `{cyan-fg}${positions[0].exchange}:${positions[0].pair}{/}`
-      : `{cyan-fg}${positions.length} positions{/}`;
+    : displayedPositions.length === 1
+      ? `{cyan-fg}${displayedPositions[0].exchange}:${displayedPositions[0].pair}{/}`
+      : `{cyan-fg}${displayedPositions.length} positions{/}`;
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
-    ...positions.map((pos) => pos.pair),
+    ...displayedPositions.map((pos) => pos.pair),
     ...Object.keys(ts?.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':')),
     ...prices.map((price) => price.pair),
     ...closedTrades.map((trade) => trade.pair),
@@ -433,10 +491,14 @@ function DashboardInner() {
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [];
-  for (const pos of positions) {
+  for (const pos of displayedPositions) {
     const pnlColor = pos.pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
     const exColor = pos.exchange === 'kraken' ? '{cyan-fg}' : pos.exchange === 'coinbase' ? '{magenta-fg}' : '{yellow-fg}';
-    posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${formatUsdPrice(pos.entryPrice)}  now:$${formatUsdPrice(pos.currentPrice)}  ${pnlColor}${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(2)}% ($${pos.pnlUsd.toFixed(2)}){/}  stop:$${formatUsdPrice(pos.stopPrice)}  ${pos.elapsed}`);
+    if (pos.entryPrice > 0) {
+      posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${formatUsdPrice(pos.entryPrice)}  now:$${formatUsdPrice(pos.currentPrice)}  ${pnlColor}${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(2)}% ($${pos.pnlUsd.toFixed(2)}){/}  stop:$${formatUsdPrice(pos.stopPrice)}  ${pos.elapsed}`);
+    } else {
+      posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)}  now:$${formatUsdPrice(pos.currentPrice)}  {white-fg}untracked holding{/white-fg}`);
+    }
   }
   if (posLines.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
@@ -519,40 +581,6 @@ function DashboardInner() {
   }
 
   // Balances — simple per-exchange summary
-  const krakenNameMap: Record<string, string> = {
-    ZUSD: 'USD', XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE',
-    XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR',
-    XLTC: 'LTC', XADA: 'ADA', XSOL: 'SOL',
-  };
-  const priceOf: Record<string, number> = {};
-  for (const p of prices) {
-    if (p.bid > 0) {
-      const base = p.pair.split('-')[0];
-      // Keep the first price we see (prefer kraken)
-      if (!priceOf[base]) priceOf[base] = p.bid;
-    }
-  }
-
-  // Helper: extract all non-zero holdings from a balance map
-  const stablecoins = new Set(['USD', 'USDC', 'USDT']);
-  function parseBal(bal: Record<string, string>, nameMap?: Record<string, string>) {
-    const holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[] = [];
-    for (const [k, v] of Object.entries(bal)) {
-      const name = nameMap?.[k] ?? k;
-      const val = parseFloat(v);
-      if (val < 0.0001) continue;
-      const isStable = stablecoins.has(name);
-      const unitPrice = isStable ? 1 : (priceOf[name] ?? 0);
-      const usdValue = val * unitPrice;
-      holdings.push({ asset: name, amount: val, isStable, unitPrice, usdValue });
-    }
-    return holdings;
-  }
-
-  const krakenHoldings = parseBal(krakenBal, krakenNameMap);
-  const binanceHoldings = parseBal(binanceBal);
-  const coinbaseHoldings = parseBal(coinbaseBal);
-
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
   const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings);
 
