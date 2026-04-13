@@ -591,6 +591,33 @@ function restorePersistedTradeState(state: Record<string, unknown> | undefined) 
   if (restoredTradeState) return;
   restoredTradeState = true;
   const tradeState = (state?.tradeState as Record<string, unknown> | undefined) ?? {};
+  const savedPositions = Array.isArray(tradeState.positions) ? tradeState.positions as Position[] : [];
+  openPositions.clear();
+  for (const pos of savedPositions) {
+    if (
+      !pos
+      || typeof pos.exchange !== 'string'
+      || typeof pos.pair !== 'string'
+      || !Number.isFinite(pos.entryPrice)
+      || !Number.isFinite(pos.volume)
+      || !Number.isFinite(pos.entryTime)
+    ) continue;
+    openPositions.set(`${pos.exchange}:${pos.pair}`, {
+      pair: pos.pair,
+      exchange: pos.exchange,
+      entryPrice: pos.entryPrice,
+      volume: pos.volume,
+      entryTime: pos.entryTime,
+      highWaterMark: Number.isFinite(pos.highWaterMark) ? pos.highWaterMark : pos.entryPrice,
+      strategyId: pos.strategyId,
+    });
+  }
+  lastExitAt.clear();
+  const savedExits = Array.isArray(tradeState.exits) ? tradeState.exits as { pair: string; at: number }[] : [];
+  for (const exit of savedExits) {
+    if (!exit || typeof exit.pair !== 'string' || !Number.isFinite(exit.at)) continue;
+    lastExitAt.set(exit.pair, exit.at);
+  }
   const savedDailyPnlDate = tradeState.dailyPnlDate;
   if (typeof savedDailyPnlDate === 'string') dailyPnlDate = savedDailyPnlDate;
   const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
