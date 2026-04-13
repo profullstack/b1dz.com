@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 
-export default function SignupPage() {
+export default function SignupPage(): JSX.Element {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

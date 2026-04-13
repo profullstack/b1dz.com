@@ -1,4 +1,4 @@
-export function TuiScreenshot() {
+export function TuiScreenshot(): JSX.Element {
   return (
     <div className="bg-black rounded-xl border border-zinc-700 p-1 font-mono text-[11px] leading-tight overflow-hidden shadow-2xl">
       {/* Title bar */}

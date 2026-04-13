@@ -16,7 +16,7 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRootEnv, Runner, AlertBus, type Source, type Storage } from '@b1dz/core';
+import { loadRootEnv, Runner, AlertBus, type Source, type Storage, getB1dzVersion } from '@b1dz/core';
 loadRootEnv();
 import { JsonStorage } from '@b1dz/storage-json';
 import { SupabaseStorage } from '@b1dz/storage-supabase';
@@ -153,6 +153,7 @@ requireAuth();
 if (source === 'tui') {
   const env = isProd ? 'production' : 'development';
   console.log('b1dz tui starting...');
+  console.log(`  Version:    ${getB1dzVersion()}`);
   console.log(`  Env:        ${env}`);
   console.log(`  API:        ${process.env.B1DZ_API_URL || 'not set'}`);
   console.log(`  User:       ${currentUser()?.email ?? 'not logged in'}`);

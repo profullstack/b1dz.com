@@ -22,6 +22,13 @@ import {
   getBalance as getKrakenBalance,
   getCoinbaseBalance,
   getBinanceBalance,
+  getCoinbaseFills,
+  getBinanceTrades,
+  getBinanceTradingRules,
+  hasBinanceTradingSymbol,
+  hasCoinbaseTradingProduct,
+  hasKrakenTradingPair,
+  getKrakenPairMinVolume,
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
@@ -81,6 +88,7 @@ const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes (was 10)
 
 /** Max daily loss before halting trades. */
 const DAILY_LOSS_LIMIT_USD = 5;
+const WARMUP_TICKS = 20;
 
 // ─── State ─────────────────────────────────────────────────────
 
@@ -102,22 +110,45 @@ interface Position {
   volume: number;
   entryTime: number;
   highWaterMark: number; // highest price seen since entry
+  strategyId?: string;
 }
 const openPositions = new Map<string, Position>();
+interface PendingLiquidation {
+  exchange: string;
+  pair: string;
+  volume: number;
+  discoveredAt: number;
+}
+const pendingLiquidations = new Map<string, PendingLiquidation>();
+
+export interface ClosedTrade {
+  exchange: string;
+  pair: string;
+  strategyId: string;
+  entryPrice: number;
+  exitPrice: number;
+  volume: number;
+  entryTime: number;
+  exitTime: number;
+  grossPnl: number;
+  fee: number;
+  netPnl: number;
+}
+
+const closedTrades: ClosedTrade[] = [];
+let restoredTradeState = false;
 
 /** One position per exchange — check if THIS exchange already has a position. */
 function hasPositionOnExchange(exchange: string): boolean {
   for (const pos of openPositions.values()) {
     if (pos.exchange === exchange) return true;
   }
-  return exchangesHoldingCrypto.has(exchange);
+  return false;
 }
 
-/** Set by hydration — exchanges that have non-trivial crypto holdings. */
-const exchangesHoldingCrypto = new Set<string>();
-
-/** Pending buy — set in evaluate(), cleared in act(). Prevents multiple buys in same tick. */
+/** Pending buy — set in evaluate(), cleared at the next poll. Prevents multiple buys in one scan pass. */
 let pendingBuyExchange: string | null = null;
+const attemptedExchangeActions = new Set<string>();
 
 /** Timestamp of last trade close per pair. */
 const lastExitAt = new Map<string, number>();
@@ -125,113 +156,508 @@ const lastExitAt = new Map<string, number>();
 /** Cumulative realized P/L for today. */
 let dailyPnl = 0;
 let dailyPnlDate = new Date().toDateString();
+let tradePollCount = 0;
+let lastEligiblePairs: string[] = [];
+let lastQuoteBalanceRefresh = 0;
 
 /** Whether we've hydrated from exchange APIs yet. */
-let hydrated = false;
+const hydratedExchanges = new Set<string>();
+let krakenHydrationBlockedUntil = 0;
+const KRAKEN_HYDRATION_LOCKOUT_MS = 15 * 60_000;
+const QUOTE_BALANCE_REFRESH_MS = 60_000;
+const MIN_SPENDABLE_QUOTE_USD = 5;
+const DUST_USD_THRESHOLD = 1;
+const spendableQuoteBalances: Record<string, Record<string, number>> = {
+  kraken: {},
+  coinbase: {},
+  'binance-us': {},
+};
+const minExecutableUsdByMarket = new Map<string, number>();
 
-/**
- * Reconstruct positions from EXCHANGE data (source of truth).
- * Checks Kraken balance for non-USD holdings and recent trade history
- * to figure out what we're holding and at what entry price.
- */
-async function hydrateFromExchange() {
-  if (hydrated) return;
-  hydrated = true;
+const STABLES = new Set(['ZUSD', 'USDC', 'USDT', 'USD', 'BUSD']);
+const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
+  XXBT: 'BTC-USD',
+  XETH: 'ETH-USD',
+  XZEC: 'ZEC-USD',
+  XXRP: 'XRP-USD',
+  XXLM: 'XLM-USD',
+  XXMR: 'XMR-USD',
+  XXDG: 'DOGE-USD',
+};
+const KRAKEN_BASE_ALIASES: Record<string, string[]> = {
+  BTC: ['XXBT', 'XBT', 'BTC'],
+  ETH: ['XETH', 'ETH'],
+  DOGE: ['XXDG', 'XDG', 'DOGE'],
+  ZEC: ['XZEC', 'ZEC'],
+  XRP: ['XXRP', 'XRP'],
+  XLM: ['XXLM', 'XLM'],
+  XMR: ['XXMR', 'XMR'],
+  LTC: ['XLTC', 'LTC'],
+  ADA: ['XADA', 'ADA'],
+  SOL: ['XSOL', 'SOL'],
+};
+
+function restorePosition(
+  exchange: string,
+  pair: string,
+  volume: number,
+  entryPrice: number,
+  entryTime: number,
+  reason: string,
+) {
+  openPositions.set(`${exchange}:${pair}`, {
+    pair,
+    exchange,
+    entryPrice,
+    volume,
+    entryTime,
+    highWaterMark: entryPrice,
+  });
+  pendingLiquidations.delete(`${exchange}:${pair}`);
+  console.log(`[trade] RESTORED from exchange: ${exchange}:${pair} ${volume} @ $${entryPrice.toFixed(2)} (${reason})`);
+}
+
+function rememberLiquidation(exchange: string, pair: string, volume: number, reason: string) {
+  const key = `${exchange}:${pair}`;
+  pendingLiquidations.set(key, {
+    exchange,
+    pair,
+    volume,
+    discoveredAt: Date.now(),
+  });
+  console.log(`[trade] MARK LIQUIDATE ${exchange}:${pair} ${volume.toFixed(8)} (${reason})`);
+}
+
+function findNonStableHoldings(balance: Record<string, string>): { asset: string; amount: number }[] {
+  const holdings: { asset: string; amount: number }[] = [];
+  for (const [asset, value] of Object.entries(balance)) {
+    const amount = parseFloat(value);
+    if (!isFinite(amount) || amount <= 0.0001 || STABLES.has(asset)) continue;
+    holdings.push({ asset, amount });
+  }
+  return holdings;
+}
+
+function krakenPairForAsset(asset: string): string {
+  return KRAKEN_ASSET_TO_PAIR[asset] ?? `${asset}-USD`;
+}
+
+function quoteAssetForPair(pair: string): string {
+  return pair.split('-')[1]?.toUpperCase() ?? 'USD';
+}
+
+function baseAssetForPair(pair: string): string {
+  return pair.split('-')[0]?.toUpperCase() ?? pair;
+}
+
+function krakenQuoteBalanceKey(quoteAsset: string): string {
+  switch (quoteAsset) {
+    case 'USD':
+      return 'ZUSD';
+    default:
+      return quoteAsset;
+  }
+}
+
+function currentPositionOnExchange(exchange: string): Position | null {
+  for (const pos of openPositions.values()) {
+    if (pos.exchange === exchange) return pos;
+  }
+  return null;
+}
+
+function currentLiquidationOnExchange(exchange: string): PendingLiquidation | null {
+  for (const liquidation of pendingLiquidations.values()) {
+    if (liquidation.exchange === exchange) return liquidation;
+  }
+  return null;
+}
+
+function latestSnapshotFor(exchange: string, pair: string): MarketSnapshot | null {
+  return histories.get(`${exchange}:${pair}`)?.at(-1) ?? null;
+}
+
+function clearTrackedPosition(posKey: string, exchange: string) {
+  openPositions.delete(posKey);
+}
+
+async function actualBaseBalanceFor(exchange: string, pair: string): Promise<number> {
+  const base = baseAssetForPair(pair);
+  if (exchange === 'kraken') {
+    const bal = await getKrakenBalance();
+    for (const alias of KRAKEN_BASE_ALIASES[base] ?? [base]) {
+      const amount = parseFloat(bal[alias] ?? '0');
+      if (amount > 0) return amount;
+    }
+    return 0;
+  }
+  if (exchange === 'coinbase') {
+    const bal = await getCoinbaseBalance();
+    return Math.max(0, parseFloat(bal[base] ?? '0'));
+  }
+  if (exchange === 'binance-us') {
+    const bal = await getBinanceBalance();
+    return Math.max(0, parseFloat(bal[base] ?? '0'));
+  }
+  return 0;
+}
+
+function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): Opportunity | null {
+  const current = currentPositionOnExchange(item.exchange);
+  if (!current || current.pair === item.pair) return null;
+  if (sig.side !== 'buy' || sig.strength < 0.85) return null;
+
+  const currentSnap = latestSnapshotFor(item.exchange, current.pair);
+  if (!currentSnap) return null;
+
+  const pnlPct = (currentSnap.bid - current.entryPrice) / current.entryPrice;
+  const elapsedMs = Date.now() - current.entryTime;
+  if (elapsedMs < 60_000 && pnlPct > -0.002) return null;
+  if (pnlPct >= TAKE_PROFIT_PCT * 0.75) return null;
+
+  const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+  const fee = currentSnap.bid * current.volume * feeRate;
+  const grossPnl = (currentSnap.bid - current.entryPrice) * current.volume;
+  const netPnl = grossPnl - fee;
+  const exitReason = `rotate to ${item.pair}: ${sig.reason}`;
+  attemptedExchangeActions.add(item.exchange);
+  console.log(`[trade] ROTATE ${item.exchange}:${current.pair} -> ${item.pair} gross=$${grossPnl.toFixed(4)} net=$${netPnl.toFixed(4)} sig=${sig.strength.toFixed(2)}`);
+  return {
+    id: `crypto-trade:${item.exchange}:${current.pair}:rotate-sell:${Date.now()}`,
+    sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
+    externalId: `${current.pair}:rotate-sell:${Date.now()}`,
+    title: `SELL ${current.pair} @ ${currentSnap.bid.toFixed(2)} — ${exitReason}`,
+    category: 'crypto-trade',
+    costNow: 0,
+    projectedReturn: currentSnap.bid * current.volume,
+    projectedProfit: netPnl,
+    confidence: Math.max(0.8, sig.strength),
+    metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: sig.strength, reason: exitReason }, snap: currentSnap, position: current },
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+async function refreshSpendableQuoteBalances(): Promise<void> {
+  if (Date.now() - lastQuoteBalanceRefresh < QUOTE_BALANCE_REFRESH_MS) return;
+  lastQuoteBalanceRefresh = Date.now();
 
   try {
-    const { getBalance, getTradeHistory } = await import('@b1dz/source-crypto-arb');
-    const balance = await getBalance();
-    const tradeHistory = await getTradeHistory();
-
-    // Find non-trivial crypto holdings (not USD/stablecoins)
-    const stables = new Set(['ZUSD', 'USDC', 'USDT', 'USD']);
-    const holdings: { asset: string; amount: number }[] = [];
-    for (const [asset, val] of Object.entries(balance)) {
-      const amount = parseFloat(val);
-      if (amount > 0.0001 && !stables.has(asset)) {
-        holdings.push({ asset, amount });
-      }
-    }
-
-    if (holdings.length === 0) {
-      console.log('[trade] no crypto holdings found — starting clean');
-      exchangesHoldingCrypto.clear();
-      return;
-    }
-    // We're holding crypto on Kraken — block new trades on Kraken until resolved
-    exchangesHoldingCrypto.add('kraken');
-    console.log(`[trade] found ${holdings.length} crypto holdings on kraken — blocking new kraken trades until resolved`);
-
-    // Map Kraken asset names to pair names
-    const assetToPair: Record<string, string> = { XXBT: 'BTC-USD', XETH: 'ETH-USD', XZEC: 'ZEC-USD', XXRP: 'XRP-USD', XXLM: 'XLM-USD', XXMR: 'XMR-USD', XXDG: 'DOGE-USD' };
-    // Any asset not in the map — use asset name directly
-    for (const [asset] of Object.entries(balance)) {
-      if (!assetToPair[asset] && !stables.has(asset)) {
-        assetToPair[asset] = `${asset}-USD`;
-      }
-    }
-
-    // Look through recent trades to find the entry price for each holding
-    const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
-
-    for (const h of holdings) {
-      const pair = assetToPair[h.asset];
-      if (!pair) continue;
-      const base = pair.replace('-USD', '');
-
-      // Find the most recent BUY trade for this pair — match flexibly
-      const buyTrade = trades.find((t) => {
-        if (t.type !== 'buy') return false;
-        const tp = t.pair.toUpperCase();
-        return tp.includes(base.toUpperCase()) && tp.includes('USD');
-      });
-
-      const entryPrice = buyTrade ? parseFloat(buyTrade.price) : 0;
-      const entryTime = buyTrade ? buyTrade.time * 1000 : Date.now();
-
-      if (entryPrice > 0) {
-        openPositions.set(pair, {
-          pair,
-          exchange: 'kraken',
-          entryPrice,
-          volume: h.amount,
-          entryTime,
-          highWaterMark: entryPrice,
-        });
-        console.log(`[trade] RESTORED from exchange: ${pair} ${h.amount} @ $${entryPrice.toFixed(2)} (${buyTrade ? 'from trade history' : 'unknown entry'})`);
-      } else {
-        console.log(`[trade] holding ${pair}=${h.amount} but no buy trade found in history — can't determine entry`);
-      }
-    }
-
-    // Calculate today's realized P/L — only matched buy+sell round-trips
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayTs = todayStart.getTime() / 1000;
-    const todayTrades = trades.filter((t) => t.time >= todayTs);
-    const buysByPair = new Map<string, { cost: number; fee: number }>();
-    let todayPnl = 0;
-    for (const t of [...todayTrades].reverse()) { // oldest first
-      const cost = parseFloat(t.cost);
-      const fee = parseFloat(t.fee);
-      if (t.type === 'buy') {
-        buysByPair.set(t.pair, { cost, fee });
-      } else if (t.type === 'sell') {
-        const buy = buysByPair.get(t.pair);
-        if (buy) {
-          todayPnl += (cost - buy.cost) - fee - buy.fee;
-          buysByPair.delete(t.pair);
-        }
-      }
-    }
-    dailyPnl = todayPnl;
-    if (todayTrades.length > 0) {
-      console.log(`[trade] today: ${todayTrades.length} trades, realized P/L: $${dailyPnl.toFixed(2)}, ${openPositions.size} open positions`);
-    }
+    const bal = await getKrakenBalance();
+    spendableQuoteBalances.kraken = {
+      USD: parseFloat(bal.ZUSD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
   } catch (e) {
-    console.error(`[trade] exchange hydration failed: ${(e as Error).message}`);
-    // Fall back — start clean, daemon will pick up on next trade
+    spendableQuoteBalances.kraken = {};
+    const msg = (e as Error).message;
+    if (msg.includes('Temporary lockout')) {
+      krakenHydrationBlockedUntil = Math.max(krakenHydrationBlockedUntil, Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS);
+    }
   }
+
+  try {
+    const bal = await getCoinbaseBalance();
+    spendableQuoteBalances.coinbase = {
+      USD: parseFloat(bal.USD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch {
+    spendableQuoteBalances.coinbase = {};
+  }
+
+  try {
+    const bal = await getBinanceBalance();
+    spendableQuoteBalances['binance-us'] = {
+      USD: parseFloat(bal.USD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch {
+    spendableQuoteBalances['binance-us'] = {};
+  }
+}
+
+function spendableQuoteFor(exchange: string, pair: string): number {
+  const quoteAsset = quoteAssetForPair(pair);
+  let spendable = Math.max(0, spendableQuoteBalances[exchange]?.[quoteAsset] ?? 0);
+  if (quoteAsset === 'USD' && spendable < MIN_SPENDABLE_QUOTE_USD) {
+    spendable += Math.max(0, spendableQuoteBalances[exchange]?.USDC ?? 0);
+    spendable += Math.max(0, spendableQuoteBalances[exchange]?.USDT ?? 0);
+  }
+  return spendable;
+}
+
+async function refreshMarketMinimums(pairs: string[]): Promise<void> {
+  const uniquePairs = [...new Set(pairs)];
+  for (const pair of uniquePairs) {
+    const priceCandidates = TRADE_FEEDS
+      .map(({ exchange }) => Number(histories.get(`${exchange}:${pair}`)?.at(-1)?.ask))
+      .filter((price): price is number => Number.isFinite(price) && price > 0);
+    const referencePrice = priceCandidates[0] ?? 0;
+
+    if (referencePrice > 0) {
+      const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      const krakenMinVolume = await getKrakenPairMinVolume(krakenPair);
+      if (Number.isFinite(krakenMinVolume) && krakenMinVolume && krakenMinVolume > 0) {
+        minExecutableUsdByMarket.set(`kraken:${pair}`, krakenMinVolume * referencePrice);
+      }
+
+      const binanceSymbol = pair.replace('-', '');
+      const binanceRules = await getBinanceTradingRules(binanceSymbol);
+      if (binanceRules) {
+        const minQtyUsd = binanceRules.minQty ? binanceRules.minQty * referencePrice : 0;
+        const minNotionalUsd = binanceRules.minNotional ?? 0;
+        const minUsd = Math.max(minQtyUsd, minNotionalUsd);
+        if (minUsd > 0) minExecutableUsdByMarket.set(`binance-us:${pair}`, minUsd);
+      }
+    }
+  }
+}
+
+async function maybeAutoConvertBinanceQuote(targetQuote: string, neededQuote: number): Promise<number> {
+  const bal = await getBinanceBalance();
+  let direct = parseFloat(bal[targetQuote] ?? '0') * 0.995;
+  if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
+
+  const conversionPaths: Record<string, Array<{ from: string; symbol: string }>> = {
+    USD: [
+      { from: 'USDC', symbol: 'USDCUSD' },
+      { from: 'USDT', symbol: 'USDTUSD' },
+    ],
+    USDC: [
+      { from: 'USD', symbol: 'USDUSDC' },
+      { from: 'USDT', symbol: 'USDTUSDC' },
+    ],
+    USDT: [
+      { from: 'USD', symbol: 'USDUSDT' },
+      { from: 'USDC', symbol: 'USDCUSDT' },
+    ],
+  };
+
+  for (const path of conversionPaths[targetQuote] ?? []) {
+    const sourceFree = parseFloat(bal[path.from] ?? '0') * 0.995;
+    if (sourceFree < MIN_SPENDABLE_QUOTE_USD) continue;
+    if (!(await hasBinanceTradingSymbol(path.symbol))) continue;
+    const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
+    console.log(`[trade] AUTO-CONVERT binance-us ${path.from}->${targetQuote} via ${path.symbol} qty=${convertQty.toFixed(8)}`);
+    await placeBinanceOrder({ symbol: path.symbol, side: 'SELL', type: 'MARKET', quantity: convertQty.toFixed(8) });
+    const refreshed = await getBinanceBalance();
+    direct = parseFloat(refreshed[targetQuote] ?? '0') * 0.995;
+    if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
+  }
+
+  return Math.min(direct, 99.50);
+}
+
+async function maybeAutoConvertCoinbaseQuote(targetQuote: string, neededQuote: number): Promise<number> {
+  const bal = await getCoinbaseBalance();
+  let direct = parseFloat(bal[targetQuote] ?? '0') * 0.995;
+  if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
+  if (targetQuote !== 'USD') return Math.min(direct, 99.50);
+
+  for (const source of ['USDC', 'USDT']) {
+    const sourceFree = parseFloat(bal[source] ?? '0') * 0.995;
+    if (sourceFree < MIN_SPENDABLE_QUOTE_USD) continue;
+    const productId = `${source}-USD`;
+    if (!(await hasCoinbaseTradingProduct(productId))) continue;
+    const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
+    console.log(`[trade] AUTO-CONVERT coinbase ${source}->USD via ${productId} qty=${convertQty.toFixed(8)}`);
+    await placeCoinbaseOrder({ productId, side: 'SELL', size: convertQty.toFixed(8) });
+    const refreshed = await getCoinbaseBalance();
+    direct = parseFloat(refreshed.USD ?? '0') * 0.995;
+    if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
+  }
+
+  return Math.min(direct, 99.50);
+}
+
+async function maybeAutoConvertKrakenQuote(targetQuote: string, neededQuote: number): Promise<number> {
+  const bal = await getKrakenBalance();
+  let direct = parseFloat(bal[krakenQuoteBalanceKey(targetQuote)] ?? '0') * 0.995;
+  if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
+  if (targetQuote !== 'USD') return Math.min(direct, 99.50);
+
+  const conversionPairs = [
+    { source: 'USDC', pair: 'USDCUSD' },
+    { source: 'USDT', pair: 'USDTUSD' },
+  ];
+  for (const path of conversionPairs) {
+    const sourceFree = parseFloat(bal[path.source] ?? '0') * 0.995;
+    if (sourceFree < MIN_SPENDABLE_QUOTE_USD) continue;
+    if (!(await hasKrakenTradingPair(path.pair))) continue;
+    const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
+    console.log(`[trade] AUTO-CONVERT kraken ${path.source}->USD via ${path.pair} qty=${convertQty.toFixed(8)}`);
+    await placeKrakenOrder({ pair: path.pair, type: 'sell', ordertype: 'market', volume: convertQty.toFixed(8) });
+    const refreshed = await getKrakenBalance();
+    direct = parseFloat(refreshed.ZUSD ?? '0') * 0.995;
+    if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
+  }
+
+  return Math.min(direct, 99.50);
+}
+
+async function hydrateKrakenPositions(): Promise<void> {
+  if (Date.now() < krakenHydrationBlockedUntil) {
+    throw new Error(`Kraken hydration backoff ${Math.ceil((krakenHydrationBlockedUntil - Date.now()) / 1000)}s remaining`);
+  }
+  const { getBalance, getTradeHistory } = await import('@b1dz/source-crypto-arb');
+  let balance: Record<string, string>;
+  let tradeHistory: Awaited<ReturnType<typeof getTradeHistory>>;
+  try {
+    balance = await getBalance();
+    tradeHistory = await getTradeHistory();
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes('Temporary lockout')) {
+      krakenHydrationBlockedUntil = Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS;
+    }
+    throw e;
+  }
+  krakenHydrationBlockedUntil = 0;
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on kraken`);
+
+  const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
+  for (const holding of holdings) {
+    const pair = krakenPairForAsset(holding.asset);
+    const base = pair.replace('-USD', '');
+    const buyTrade = trades.find((trade) => {
+      if (trade.type !== 'buy') return false;
+      const tradePair = trade.pair.toUpperCase();
+      return tradePair.includes(base.toUpperCase()) && tradePair.includes('USD');
+    });
+    if (!buyTrade) {
+      console.log(`[trade] holding kraken:${pair}=${holding.amount} but no buy trade found in history`);
+      rememberLiquidation('kraken', pair, holding.amount, 'no buy trade found');
+      continue;
+    }
+    const entryPrice = parseFloat(buyTrade.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('kraken', pair, holding.amount, entryPrice, buyTrade.time * 1000, 'from trade history');
+  }
+
+  if (trades.length > 0) {
+    console.log(`[trade] hydrated ${trades.length} kraken trades, ${openPositions.size} open positions`);
+  }
+}
+
+async function hydrateCoinbasePositions(): Promise<void> {
+  const balance = await getCoinbaseBalance();
+  const fills = (await getCoinbaseFills(200)).sort((a, b) => Date.parse(b.trade_time) - Date.parse(a.trade_time));
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on coinbase`);
+
+  for (const holding of holdings) {
+    const pair = `${holding.asset}-USD`;
+    const buyFill = fills.find((fill) => fill.side.toUpperCase() === 'BUY' && fill.product_id === pair);
+    if (!buyFill) {
+      console.log(`[trade] holding coinbase:${pair}=${holding.amount} but no buy fill found in history`);
+      rememberLiquidation('coinbase', pair, holding.amount, 'no buy fill found');
+      continue;
+    }
+    const entryPrice = parseFloat(buyFill.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('coinbase', pair, holding.amount, entryPrice, Date.parse(buyFill.trade_time), 'from fill history');
+  }
+}
+
+async function hydrateBinancePositions(): Promise<void> {
+  const balance = await getBinanceBalance();
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on binance-us`);
+
+  for (const holding of holdings) {
+    const pair = `${holding.asset}-USD`;
+    const symbol = pair.replace('-', '');
+    const trades = (await getBinanceTrades(symbol, 1000)).sort((a, b) => b.time - a.time);
+    const buyTrade = trades.find((trade) => trade.isBuyer);
+    if (!buyTrade) {
+      console.log(`[trade] holding binance-us:${pair}=${holding.amount} but no buy trade found in history`);
+      rememberLiquidation('binance-us', pair, holding.amount, 'no buy trade found');
+      continue;
+    }
+    const entryPrice = parseFloat(buyTrade.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('binance-us', pair, holding.amount, entryPrice, buyTrade.time, 'from trade history');
+  }
+}
+
+/**
+ * Reconstruct positions from exchange data (source of truth).
+ */
+async function hydrateFromExchange() {
+  if (hydratedExchanges.size === 3) return;
+
+  const steps: Array<{ exchange: string; fn: () => Promise<void> }> = [
+    { exchange: 'kraken', fn: hydrateKrakenPositions },
+    { exchange: 'coinbase', fn: hydrateCoinbasePositions },
+    { exchange: 'binance-us', fn: hydrateBinancePositions },
+  ];
+
+  for (const step of steps) {
+    if (hydratedExchanges.has(step.exchange)) continue;
+    try {
+      await step.fn();
+      hydratedExchanges.add(step.exchange);
+    } catch (e) {
+      console.error(`[trade] ${step.exchange} hydration failed: ${(e as Error).message}`);
+    }
+  }
+
+  if (hydratedExchanges.size === steps.length && openPositions.size === 0) {
+    console.log('[trade] no crypto holdings found — starting clean');
+  }
+}
+
+function restorePersistedTradeState(state: Record<string, unknown> | undefined) {
+  if (restoredTradeState) return;
+  restoredTradeState = true;
+  const tradeState = (state?.tradeState as Record<string, unknown> | undefined) ?? {};
+  const savedPositions = Array.isArray(tradeState.positions) ? tradeState.positions as Position[] : [];
+  openPositions.clear();
+  for (const pos of savedPositions) {
+    if (
+      !pos
+      || typeof pos.exchange !== 'string'
+      || typeof pos.pair !== 'string'
+      || !Number.isFinite(pos.entryPrice)
+      || !Number.isFinite(pos.volume)
+      || !Number.isFinite(pos.entryTime)
+    ) continue;
+    openPositions.set(`${pos.exchange}:${pos.pair}`, {
+      pair: pos.pair,
+      exchange: pos.exchange,
+      entryPrice: pos.entryPrice,
+      volume: pos.volume,
+      entryTime: pos.entryTime,
+      highWaterMark: Number.isFinite(pos.highWaterMark) ? pos.highWaterMark : pos.entryPrice,
+      strategyId: pos.strategyId,
+    });
+  }
+  lastExitAt.clear();
+  const savedExits = Array.isArray(tradeState.exits) ? tradeState.exits as { pair: string; at: number }[] : [];
+  for (const exit of savedExits) {
+    if (!exit || typeof exit.pair !== 'string' || !Number.isFinite(exit.at)) continue;
+    lastExitAt.set(exit.pair, exit.at);
+  }
+  const savedDailyPnlDate = tradeState.dailyPnlDate;
+  if (typeof savedDailyPnlDate === 'string') dailyPnlDate = savedDailyPnlDate;
+  const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
+  closedTrades.splice(0, closedTrades.length, ...savedClosedTrades);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  dailyPnl = closedTrades
+    .filter((trade) => trade.exitTime >= todayStart.getTime())
+    .reduce((sum, trade) => sum + trade.netPnl, 0);
 }
 
 /** Serialize positions/cooldowns/dailyPnl for persistence. */
@@ -241,6 +667,7 @@ export function serializeTradeState(): Record<string, unknown> {
     exits: [...lastExitAt.entries()].map(([pair, at]) => ({ pair, at })),
     dailyPnl,
     dailyPnlDate,
+    closedTrades,
   };
 }
 
@@ -259,18 +686,44 @@ function isDailyLossLimitHit(): boolean {
 
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
-  position: { pair: string; entryPrice: number; volume: number; pnlPct: number; stopPrice: number; elapsed: string } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyLossLimitHit: boolean;
   cooldowns: { pair: string; remainingSec: number }[];
-  pairsScanned: number;
+  eligiblePairs: number;
+  observedPairs: number;
   ticksPerPair: Record<string, number>;
+  exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
 }
 
 export function getTradeStatus(): TradeStatus {
   resetDailyPnlIfNeeded();
-  const pos = openPositions.size > 0 ? [...openPositions.values()][0] : null;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const trackedDailyPnl = closedTrades
+    .filter((trade) => trade.exitTime >= todayStart.getTime())
+    .reduce((sum, trade) => sum + trade.netPnl, 0);
+  const positions = [...openPositions.values()]
+    .map((pos) => {
+      const currentPrice = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1)?.bid ?? pos.entryPrice;
+      const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+      const pnlUsd = (currentPrice - pos.entryPrice) * pos.volume;
+      return {
+        exchange: pos.exchange,
+        pair: pos.pair,
+        entryPrice: pos.entryPrice,
+        currentPrice,
+        volume: pos.volume,
+        pnlPct,
+        pnlUsd,
+        stopPrice: trailingStopPrice(pos),
+        elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+      };
+    })
+    .filter((pos) => (pos.currentPrice * pos.volume) >= DUST_USD_THRESHOLD);
+  const pos = positions[0] ?? null;
   const cooldowns: { pair: string; remainingSec: number }[] = [];
   for (const [pair, exitTime] of lastExitAt) {
     const remaining = Math.max(0, COOLDOWN_MS - (Date.now() - exitTime));
@@ -278,21 +731,25 @@ export function getTradeStatus(): TradeStatus {
   }
   const ticksPerPair: Record<string, number> = {};
   for (const [pair, hist] of histories) ticksPerPair[pair] = hist.length;
+  const exchangeStates = TRADE_FEEDS.map(({ exchange }) => {
+    const openCount = positions.filter((p) => p.exchange === exchange).length;
+    const histEntries = [...histories.entries()].filter(([key]) => key.startsWith(`${exchange}:`));
+    const readyPairs = histEntries.filter(([, hist]) => hist.length >= WARMUP_TICKS).length;
+    const warmingPairs = histEntries.filter(([, hist]) => hist.length > 0 && hist.length < WARMUP_TICKS).length;
+    const blockedReason = openCount > 0 ? 'open position' : null;
+    return { exchange, readyPairs, warmingPairs, openPositions: openCount, blockedReason };
+  });
 
   return {
-    position: pos ? {
-      pair: pos.pair,
-      entryPrice: pos.entryPrice,
-      volume: pos.volume,
-      pnlPct: 0, // will be filled by caller with current price
-      stopPrice: trailingStopPrice(pos),
-      elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
-    } : null,
-    dailyPnl,
-    dailyLossLimitHit: isDailyLossLimitHit(),
+    positions,
+    position: pos,
+    dailyPnl: trackedDailyPnl,
+    dailyLossLimitHit: trackedDailyPnl <= -DAILY_LOSS_LIMIT_USD,
     cooldowns,
-    pairsScanned: histories.size,
+    eligiblePairs: lastEligiblePairs.length,
+    observedPairs: new Set([...histories.keys()].map((key) => key.split(':').slice(1).join(':'))).size,
     ticksPerPair,
+    exchangeStates,
     lastSignal: null,
   };
 }
@@ -333,16 +790,23 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     pollIntervalMs: 5000,
 
     async poll(ctx) {
+      restorePersistedTradeState(ctx.state);
       // Restore positions from exchange APIs on first tick (source of truth)
       await hydrateFromExchange();
+      await refreshSpendableQuoteBalances();
+      pendingBuyExchange = null;
+      attemptedExchangeActions.clear();
+      tradePollCount++;
 
       const PAIRS = await getActivePairs();
+      lastEligiblePairs = [...PAIRS];
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
       for (const { feed, exchange } of TRADE_FEEDS) {
         for (const pair of PAIRS) {
           const snap = await feed.snapshot(pair);
           if (!snap) continue;
+          if (!isFinite(snap.bid) || !isFinite(snap.ask) || snap.bid <= 0 || snap.ask <= 0) continue;
           const histKey = `${exchange}:${pair}`;
           const hist = histories.get(histKey) ?? [];
           hist.push(snap);
@@ -357,17 +821,28 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             pos.highWaterMark = snap.bid;
           }
 
-          // Log current state (only every 5th tick to reduce noise)
-          if (hist.length % 5 === 0) {
-            if (pos) {
-              const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
-              const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
-              console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
-            } else {
-              console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ticks=${hist.length}`);
-            }
+          // Keep raw logs useful: positions every tick, warmup checkpoints,
+          // and occasional readiness markers. Strategy-specific [multi]/[scalp]
+          // logs carry the actual assessment feed.
+          if (pos) {
+            const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
+            const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
+            console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} pos:${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(3)}% stop:${stopPct >= 0 ? '+' : ''}${stopPct.toFixed(3)}%`);
+          } else if (hist.length < WARMUP_TICKS && [1, 5, 10, 15, WARMUP_TICKS - 1].includes(hist.length)) {
+            console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} warming ${hist.length}/${WARMUP_TICKS}`);
+          } else if (hist.length === WARMUP_TICKS || hist.length % 20 === 0) {
+            console.log(`[trade] ${exchange}:${pair} $${snap.bid.toFixed(2)} ready ticks=${hist.length}`);
           }
         }
+      }
+      await refreshMarketMinimums(PAIRS);
+      if (tradePollCount % 4 === 0) {
+        const status = getTradeStatus();
+        const summary = status.exchangeStates.map((s) => {
+          const state = s.blockedReason ? `blocked:${s.blockedReason}` : (s.warmingPairs > 0 ? 'warming' : 'ready');
+          return `${s.exchange}=${state} ready=${s.readyPairs} warming=${s.warmingPairs} open=${s.openPositions}`;
+        }).join(' | ');
+        console.log(`[trade] status ${summary}`);
       }
       return items;
     },
@@ -406,6 +881,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
 
         if (exitReason) {
+          attemptedExchangeActions.add(item.exchange);
           const sellFee = item.snap.bid * pos.volume * KRAKEN_TAKER_FEE;
           const grossPnl = (item.snap.bid - pos.entryPrice) * pos.volume;
           const netPnl = grossPnl - sellFee;
@@ -428,6 +904,27 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null; // hold position
       }
 
+      // ── Liquidate untracked holdings before opening a fresh position ──
+      const liquidation = pendingLiquidations.get(posKey);
+      if (liquidation && !currentPositionOnExchange(item.exchange)) {
+        attemptedExchangeActions.add(item.exchange);
+        console.log(`[trade] LIQUIDATE ${item.exchange}:${item.pair} untracked volume=${liquidation.volume.toFixed(8)}`);
+        return {
+          id: `crypto-trade:${item.exchange}:${item.pair}:liquidate:${Date.now()}`,
+          sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
+          externalId: `${item.pair}:liquidate:${Date.now()}`,
+          title: `SELL ${item.pair} @ ${item.snap.bid.toFixed(2)} — liquidate untracked holding`,
+          category: 'crypto-trade',
+          costNow: 0,
+          projectedReturn: item.snap.bid * liquidation.volume,
+          projectedProfit: 0,
+          confidence: 1,
+          metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: 1, reason: 'liquidate untracked holding' }, snap: item.snap, liquidation },
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+      }
+
       // ── Check entries ──
 
       // Daily loss limit
@@ -446,17 +943,30 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       // One position per exchange
       const tradeExchange = item.exchange;
-      if (hasPositionOnExchange(tradeExchange)) return null;
+      if (attemptedExchangeActions.has(tradeExchange)) return null;
       if (pendingBuyExchange === tradeExchange) return null;
-
-      // Already have a position for this pair on this exchange
-      const posKey2 = `${tradeExchange}:${item.pair}`;
-      if (openPositions.has(posKey2)) return null;
+      if (currentLiquidationOnExchange(tradeExchange)) return null;
 
       // Run strategy
       const sig = activeStrategy.evaluate(item.snap, item.history);
       if (!sig || sig.side !== 'buy') return null;
       if (sig.strength < 0.7) return null;
+
+      // Already have a position for this pair on this exchange
+      const posKey2 = `${tradeExchange}:${item.pair}`;
+      if (openPositions.has(posKey2)) return null;
+
+      if (hasPositionOnExchange(tradeExchange)) {
+        return maybeRotatePosition(item, sig, strategyId);
+      }
+
+      // Skip actionable entries when the exchange does not have enough spendable
+      // quote balance for this market.
+      const spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
+      if (spendableQuote < MIN_SPENDABLE_QUOTE_USD) return null;
+      const spendBudget = Math.min(spendableQuote, MAX_POSITION_USD) * 0.98;
+      const minExecutableUsd = minExecutableUsdByMarket.get(`${tradeExchange}:${item.pair}`) ?? 0;
+      if (minExecutableUsd > 0 && spendBudget < minExecutableUsd) return null;
 
       // Check profitability: need to clear round-trip fees with take-profit
       const roundTripFee = 2 * KRAKEN_TAKER_FEE; // 0.52%
@@ -469,6 +979,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const price = item.snap.ask;
       // Lock immediately so no other pair triggers in this tick
       pendingBuyExchange = tradeExchange;
+      attemptedExchangeActions.add(tradeExchange);
       console.log(`[trade] ENTRY SIGNAL ${item.pair} @ $${price.toFixed(2)}: ${sig.reason} (str=${sig.strength.toFixed(2)})`);
       return {
         id: `crypto-trade:${item.exchange}:${item.pair}:buy:${Date.now()}`,
@@ -487,74 +998,128 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     },
 
     async act(opp): Promise<ActionResult> {
-      const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position };
+      const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position; strategy?: string; liquidation?: PendingLiquidation };
       const pair = meta.snap.pair;
       const exchange = meta.snap.exchange;
-      pendingBuyExchange = null;
 
       if (meta.signal.side === 'sell') {
+        if (meta.liquidation) {
+          const liquidationKey = `${exchange}:${pair}`;
+          try {
+            const availableBase = await actualBaseBalanceFor(exchange, pair);
+            const sellVolume = Math.min(meta.liquidation.volume, availableBase * 0.995);
+            if (!Number.isFinite(sellVolume) || sellVolume <= 0 || sellVolume * meta.snap.bid < 0.01) {
+              pendingLiquidations.delete(liquidationKey);
+              return { ok: false, message: `cleared stale ${pair} liquidation on ${exchange} (no sellable balance)` };
+            }
+            let txInfo = '';
+            if (exchange === 'kraken') {
+              const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+              const result = await placeKrakenOrder({ pair: krakenPair, type: 'sell', ordertype: 'market', volume: sellVolume.toFixed(8) });
+              txInfo = `${result.descr.order} txid=${result.txid}`;
+            } else if (exchange === 'coinbase') {
+              const result = await placeCoinbaseOrder({ productId: pair, side: 'SELL', size: sellVolume.toFixed(8) });
+              txInfo = `orderId=${result.order_id}`;
+            } else if (exchange === 'binance-us') {
+              const symbol = pair.replace('-', '');
+              const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
+              txInfo = `orderId=${result.orderId}`;
+            }
+            pendingLiquidations.delete(liquidationKey);
+            console.log(`[trade] LIQUIDATED ${exchange}:${pair} ${txInfo}`);
+            return { ok: true, message: `liquidated ${sellVolume.toFixed(8)} on ${exchange}` };
+          } catch (e) {
+            const msg = (e as Error).message;
+            if (msg.includes('below minQty') || msg.includes('MIN_NOTIONAL')) {
+              pendingLiquidations.delete(liquidationKey);
+            }
+            console.error(`[trade] LIQUIDATION FAILED ${exchange}: ${msg}`);
+            return { ok: false, message: msg };
+          }
+        }
         const posKey = `${exchange}:${pair}`;
         const pos = openPositions.get(posKey);
         if (!pos) return { ok: false, message: 'no open position to sell' };
         try {
+          const availableBase = await actualBaseBalanceFor(exchange, pair);
+          const sellVolume = Math.min(pos.volume, availableBase * 0.995);
+          if (!Number.isFinite(sellVolume) || sellVolume <= 0 || sellVolume * meta.snap.bid < 0.01) {
+            clearTrackedPosition(posKey, exchange);
+            return { ok: false, message: `cleared stale ${pair} position on ${exchange} (no sellable balance)` };
+          }
           let txInfo = '';
           if (exchange === 'kraken') {
             const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
-            const result = await placeKrakenOrder({ pair: krakenPair, type: 'sell', ordertype: 'market', volume: pos.volume.toFixed(8) });
+            const result = await placeKrakenOrder({ pair: krakenPair, type: 'sell', ordertype: 'market', volume: sellVolume.toFixed(8) });
             txInfo = `${result.descr.order} txid=${result.txid}`;
           } else if (exchange === 'coinbase') {
-            const result = await placeCoinbaseOrder({ productId: pair, side: 'SELL', size: pos.volume.toFixed(8) });
+            const result = await placeCoinbaseOrder({ productId: pair, side: 'SELL', size: sellVolume.toFixed(8) });
             txInfo = `orderId=${result.order_id}`;
           } else if (exchange === 'binance-us') {
             const symbol = pair.replace('-', '');
-            const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: pos.volume.toFixed(8) });
+            const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
             txInfo = `orderId=${result.orderId}`;
           }
           const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
-          const fee = meta.snap.bid * pos.volume * feeRate;
-          const grossPnl = (meta.snap.bid - pos.entryPrice) * pos.volume;
+          const fee = meta.snap.bid * sellVolume * feeRate;
+          const grossPnl = (meta.snap.bid - pos.entryPrice) * sellVolume;
           const netPnl = grossPnl - fee;
-          resetDailyPnlIfNeeded();
-          dailyPnl += netPnl;
-          openPositions.delete(posKey);
-          const stillHolding = [...openPositions.values()].some((p) => p.exchange === exchange);
-          if (!stillHolding) exchangesHoldingCrypto.delete(exchange);
+          closedTrades.push({
+            exchange,
+            pair,
+            strategyId: pos.strategyId ?? 'restored',
+            entryPrice: pos.entryPrice,
+            exitPrice: meta.snap.bid,
+            volume: sellVolume,
+            entryTime: pos.entryTime,
+            exitTime: Date.now(),
+            grossPnl,
+            fee,
+            netPnl,
+          });
+          while (closedTrades.length > 100) closedTrades.shift();
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          dailyPnl = closedTrades
+            .filter((trade) => trade.exitTime >= todayStart.getTime())
+            .reduce((sum, trade) => sum + trade.netPnl, 0);
+          clearTrackedPosition(posKey, exchange);
           lastExitAt.set(`${exchange}:${pair}`, Date.now());
           console.log(`[trade] SOLD ${exchange}:${pair} ${txInfo} net=$${netPnl.toFixed(4)} dayPnL=$${dailyPnl.toFixed(2)}`);
-          return { ok: true, message: `sold ${pos.volume.toFixed(8)} on ${exchange} net=$${netPnl.toFixed(4)}` };
+          return { ok: true, message: `sold ${sellVolume.toFixed(8)} on ${exchange} net=$${netPnl.toFixed(4)}` };
         } catch (e) {
-          console.error(`[trade] SELL FAILED ${exchange}: ${(e as Error).message}`);
-          return { ok: false, message: (e as Error).message };
+          const msg = (e as Error).message;
+          if (msg.includes('below minQty')) {
+            clearTrackedPosition(posKey, exchange);
+          }
+          console.error(`[trade] SELL FAILED ${exchange}: ${msg}`);
+          return { ok: false, message: msg };
         }
       }
 
       // Buy — check available balance on the target exchange
       const price = meta.snap.ask;
-      let availableUsd = 0;
+      const quoteAsset = quoteAssetForPair(pair);
+      let availableQuote = 0;
       try {
         if (exchange === 'kraken') {
-          const bal = await getKrakenBalance();
-          availableUsd = Math.min(parseFloat(bal.ZUSD ?? '0') * 0.995, 99.50);
+          availableQuote = await maybeAutoConvertKrakenQuote(quoteAsset, MAX_POSITION_USD);
         } else if (exchange === 'coinbase') {
-          const bal = await getCoinbaseBalance();
-          availableUsd = Math.min(
-            (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0')) * 0.995,
-            99.50,
-          );
+          availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
         } else if (exchange === 'binance-us') {
-          const bal = await getBinanceBalance();
-          availableUsd = Math.min(
-            (parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0') + parseFloat(bal.USDT ?? '0')) * 0.995,
-            99.50,
-          );
+          availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
         }
       } catch {}
-      if (availableUsd < 5) {
-        return { ok: false, message: `insufficient funds on ${exchange} ($${availableUsd.toFixed(2)})` };
+      if (availableQuote < 5) {
+        return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
-      const volume = availableUsd / price;
+      const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * 0.98;
+      if (spendBudget < 5) {
+        return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
+      }
+      const volume = spendBudget / price;
 
-      console.log(`[trade] EXECUTE BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
+      console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {
         let txInfo = '';
         if (exchange === 'kraken') {
@@ -570,7 +1135,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           txInfo = `orderId=${result.orderId}`;
         }
         const posKey = `${exchange}:${pair}`;
-        openPositions.set(posKey, { pair, exchange, entryPrice: price, volume, entryTime: Date.now(), highWaterMark: price });
+        openPositions.set(posKey, {
+          pair,
+          exchange,
+          entryPrice: price,
+          volume,
+          entryTime: Date.now(),
+          highWaterMark: price,
+          strategyId: meta.strategy ?? 'composite',
+        });
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
         return { ok: true, message: `bought ${volume.toFixed(8)} on ${exchange} @ ${price.toFixed(2)}` };
       } catch (e) {

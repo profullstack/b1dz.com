@@ -3,7 +3,7 @@ import Image from 'next/image';
 import { TuiScreenshot } from './components/tui-screenshot';
 import { DashboardMock } from './components/dashboard-mock';
 
-export default function LandingPage() {
+export default function LandingPage(): JSX.Element {
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
       {/* Nav */}
@@ -36,6 +36,9 @@ export default function LandingPage() {
             Learn more
           </Link>
         </div>
+        <p className="mt-8 max-w-3xl mx-auto text-sm md:text-base italic text-zinc-500">
+          “If you don't find a way to make money while you sleep, you will work until you die.” -- Warren Buffet
+        </p>
       </section>
 
       {/* Terminal Screenshot */}
@@ -131,7 +134,7 @@ export default function LandingPage() {
   );
 }
 
-function FeatureCard({ title, desc, icon }: { title: string; desc: string; icon: string }) {
+function FeatureCard({ title, desc, icon }: { title: string; desc: string; icon: string }): JSX.Element {
   const icons: Record<string, string> = {
     chart: '📊', brain: '🧠', shield: '🛡️', arrows: '🔄', search: '🔍', devices: '📱',
   };

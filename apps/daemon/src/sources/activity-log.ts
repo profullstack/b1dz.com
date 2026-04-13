@@ -8,22 +8,45 @@ interface LogEntry {
   text: string;
 }
 
-const MAX_ENTRIES = 100;
-const buffer: LogEntry[] = [];
-let lastText = '';
+const MAX_ACTIVITY_ENTRIES = 100;
+const MAX_RAW_ENTRIES = 2000;
+const ACTIVITY_BUFFER_KEY = 'activity';
+const RAW_BUFFER_KEY = 'raw';
+const buffers = new Map<string, LogEntry[]>();
+const lastTextByBuffer = new Map<string, string>();
 
 // Store original console.log to avoid recursion when console.log is overridden
 const _origLog = console.log.bind(console);
 
-export function logActivity(text: string) {
-  // Deduplicate consecutive identical messages
-  if (text === lastText) return;
-  lastText = text;
+function push(kind: string, source: string, text: string) {
+  const key = `${kind}:${source}`;
+  if (kind === ACTIVITY_BUFFER_KEY) {
+    if (text === lastTextByBuffer.get(key)) return;
+    lastTextByBuffer.set(key, text);
+  }
+  const buffer = buffers.get(key) ?? [];
   buffer.push({ at: new Date().toISOString(), text });
-  while (buffer.length > MAX_ENTRIES) buffer.shift();
+  const limit = kind === RAW_BUFFER_KEY ? MAX_RAW_ENTRIES : MAX_ACTIVITY_ENTRIES;
+  while (buffer.length > limit) buffer.shift();
+  buffers.set(key, buffer);
+}
+
+export function logActivity(text: string, source = 'shared') {
+  // Deduplicate consecutive identical messages
+  push(ACTIVITY_BUFFER_KEY, source, text);
+  push(RAW_BUFFER_KEY, source, text);
   _origLog(text);
 }
 
-export function getActivityLog(): LogEntry[] {
-  return [...buffer];
+export function logRaw(text: string, source = 'shared') {
+  push(RAW_BUFFER_KEY, source, text);
+  _origLog(text);
+}
+
+export function getActivityLog(source = 'shared'): LogEntry[] {
+  return [...(buffers.get(`${ACTIVITY_BUFFER_KEY}:${source}`) ?? [])];
+}
+
+export function getRawLog(source = 'shared'): LogEntry[] {
+  return [...(buffers.get(`${RAW_BUFFER_KEY}:${source}`) ?? [])];
 }

@@ -14,8 +14,8 @@ FROM node:22-bookworm-slim AS base
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     NEXT_TELEMETRY_DISABLED=1
-# Install curl for the Binance.US proxy (uses curl via child_process)
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install curl for the Binance.US proxy and redis-server for shared runtime cache.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates redis-server && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
 
 # ---- deps ----
@@ -66,6 +66,6 @@ ENV NODE_ENV=production
 # v3
 COPY --from=build /app /app
 EXPOSE 8080
-# Start both web API and daemon in one container
-# Railway sets PORT=8080, next start reads PORT automatically
-CMD ["pnpm", "start"]
+# Start both web API and daemon under a small supervisor so if either dies,
+# the container exits and Railway/Docker can restart it.
+CMD ["bash", "./scripts/start-railway.sh"]

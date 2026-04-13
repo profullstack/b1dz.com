@@ -13,8 +13,6 @@
 import { WebSocket } from 'ws';
 import type { MarketSnapshot } from '@b1dz/core';
 import { normalizePair } from './pairs.js';
-import { createSign, randomBytes } from 'node:crypto';
-import { getCoinbasePem } from './coinbase-pem.js';
 
 interface CacheEntry extends MarketSnapshot {
   stale: boolean;
@@ -23,13 +21,39 @@ interface CacheEntry extends MarketSnapshot {
 const cache = new Map<string, CacheEntry>(); // key: "exchange:pair"
 const subscribedPairs = new Set<string>();
 let initialized = false;
+const krakenSubscribedSymbols = new Set<string>();
+const coinbaseSubscribedPairs = new Set<string>();
+const binanceSubscribedSymbols = new Set<string>();
+let binanceRequestId = 1;
 
 let wsLogger: ((msg: string) => void) | null = null;
-export function setWsLogger(fn: (msg: string) => void) { wsLogger = fn; }
-function wsLog(msg: string) { wsLogger?.(msg); console.log(msg); }
+export function setWsLogger(fn: ((msg: string) => void) | null) { wsLogger = fn; }
+function wsLog(msg: string) {
+  if (wsLogger) {
+    wsLogger(msg);
+    return;
+  }
+  console.log(msg);
+}
 
 function cacheKey(exchange: string, pair: string): string {
   return `${exchange}:${pair}`;
+}
+
+function websocketSymbol(exchange: string, pair: string): string {
+  if (exchange === 'kraken') {
+    const [base, quote] = pair.split('-');
+    return `${base.toUpperCase()}/${quote.toUpperCase()}`;
+  }
+  return normalizePair(pair, exchange);
+}
+
+function currentCanonicalPair(exchange: string, symbol: string): string | null {
+  for (const pair of subscribedPairs) {
+    const normalized = websocketSymbol(exchange, pair);
+    if (symbol === normalized || symbol?.includes(normalized)) return pair;
+  }
+  return null;
 }
 
 export function getSnapshot(exchange: string, pair: string): MarketSnapshot | null {
@@ -55,38 +79,48 @@ function setPrice(exchange: string, pair: string, bid: number, ask: number, bidS
 
 let krakenWs: WebSocket | null = null;
 
+function subscribeKrakenPairs(ws: WebSocket, pairs: string[]) {
+  const nextSymbols = pairs
+    .map((p) => websocketSymbol('kraken', p))
+    .filter((symbol) => !krakenSubscribedSymbols.has(symbol));
+  if (nextSymbols.length === 0) return;
+  for (const symbol of nextSymbols) krakenSubscribedSymbols.add(symbol);
+  ws.send(JSON.stringify({
+    method: 'subscribe',
+    params: {
+      channel: 'ticker',
+      symbol: nextSymbols,
+    },
+  }));
+}
+
 function connectKraken(pairs: string[]) {
   if (krakenWs) return;
-  const krakenPairs = pairs.map((p) => normalizePair(p, 'kraken'));
+  const ws = new WebSocket('wss://ws.kraken.com/v2');
+  krakenWs = ws;
 
-  krakenWs = new WebSocket('wss://ws.kraken.com/v2');
-
-  krakenWs.on('open', () => {
+  ws.on('open', () => {
+    if (krakenWs !== ws) return;
+    krakenSubscribedSymbols.clear();
     wsLog('[ws] kraken connected');
-    krakenWs!.send(JSON.stringify({
-      method: 'subscribe',
-      params: {
-        channel: 'ticker',
-        symbol: krakenPairs,
-      },
-    }));
+    subscribeKrakenPairs(ws, [...subscribedPairs]);
     // Keepalive ping every 30s
     const pingTimer = setInterval(() => {
-      if (krakenWs?.readyState === WebSocket.OPEN) krakenWs.ping();
+      if (krakenWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
     }, 30000);
   });
 
-  krakenWs.on('message', (raw) => {
+  ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
+      if (msg.method === 'subscribe' && msg.success === false) {
+        wsLog(`[ws] ✗ kraken subscribe failed: ${msg.error ?? 'unknown error'}`);
+        return;
+      }
       if (msg.channel === 'ticker' && msg.type === 'update' && msg.data) {
         for (const tick of msg.data) {
-          // Find canonical pair from kraken symbol
-          const pair = pairs.find((p) => {
-            const norm = normalizePair(p, 'kraken');
-            return tick.symbol === norm || tick.symbol?.includes(norm);
-          });
+          const pair = currentCanonicalPair('kraken', tick.symbol);
           if (pair && tick.bid !== undefined && tick.ask !== undefined) {
             setPrice('kraken', pair,
               parseFloat(tick.bid), parseFloat(tick.ask),
@@ -98,13 +132,16 @@ function connectKraken(pairs: string[]) {
     } catch {}
   });
 
-  krakenWs.on('close', () => {
+  ws.on('close', () => {
     wsLog('[ws] ✗ kraken disconnected, reconnecting in 5s...');
-    krakenWs = null;
-    setTimeout(() => connectKraken(pairs), 5000);
+    if (krakenWs === ws) {
+      krakenWs = null;
+      krakenSubscribedSymbols.clear();
+      setTimeout(() => connectKraken([...subscribedPairs]), 5000);
+    }
   });
 
-  krakenWs.on('error', (e) => {
+  ws.on('error', (e) => {
     wsLog(`[ws] ✗ kraken error: ${e.message}`);
   });
 }
@@ -113,47 +150,45 @@ function connectKraken(pairs: string[]) {
 
 let coinbaseWs: WebSocket | null = null;
 
-function buildCoinbaseWsJwt(): string | null {
-  const keyName = process.env.COINBASE_API_KEY_NAME;
-  const pem = getCoinbasePem();
-  if (!keyName || !pem) return null;
-
-  const now = Math.floor(Date.now() / 1000);
-  const nonce = randomBytes(16).toString('hex');
-  const b64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-  const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
-  const payload = { sub: keyName, iss: 'cdp', aud: 'https://api.coinbase.com', nbf: now - 60, exp: now + 300 };
-  const segs = [b64url(Buffer.from(JSON.stringify(header))), b64url(Buffer.from(JSON.stringify(payload)))];
-  const input = segs.join('.');
-  const sign = createSign('SHA256');
-  sign.update(input);
-  return input + '.' + b64url(sign.sign({ key: pem, dsaEncoding: 'ieee-p1363' }));
+function subscribeCoinbasePairs(ws: WebSocket, pairs: string[]) {
+  const nextPairs = pairs.filter((pair) => !coinbaseSubscribedPairs.has(pair));
+  if (nextPairs.length === 0) return;
+  for (const pair of nextPairs) coinbaseSubscribedPairs.add(pair);
+  ws.send(JSON.stringify({
+    type: 'subscribe',
+    product_ids: nextPairs,
+    channel: 'ticker',
+  }));
+  ws.send(JSON.stringify({
+    type: 'subscribe',
+    product_ids: nextPairs,
+    channel: 'heartbeats',
+  }));
 }
 
 function connectCoinbase(pairs: string[]) {
   if (coinbaseWs) return;
+  const ws = new WebSocket('wss://advanced-trade-ws.coinbase.com');
+  coinbaseWs = ws;
 
-  coinbaseWs = new WebSocket('wss://advanced-trade-ws.coinbase.com');
-
-  coinbaseWs.on('open', () => {
+  ws.on('open', () => {
+    if (coinbaseWs !== ws) return;
+    coinbaseSubscribedPairs.clear();
     wsLog('[ws] coinbase connected');
-    const jwt = buildCoinbaseWsJwt();
-    coinbaseWs!.send(JSON.stringify({
-      type: 'subscribe',
-      product_ids: pairs,
-      channel: 'ticker',
-      ...(jwt ? { jwt } : {}),
-    }));
+    subscribeCoinbasePairs(ws, [...subscribedPairs]);
     const pingTimer = setInterval(() => {
-      if (coinbaseWs?.readyState === WebSocket.OPEN) coinbaseWs.ping();
+      if (coinbaseWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
     }, 30000);
   });
 
-  coinbaseWs.on('message', (raw) => {
+  ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
+      if (msg.type === 'error') {
+        wsLog(`[ws] ✗ coinbase error: ${msg.message ?? msg.reason ?? 'unknown error'}`);
+        return;
+      }
       if (msg.channel === 'ticker' && msg.events) {
         for (const event of msg.events) {
           if (event.type === 'update' && event.tickers) {
@@ -172,13 +207,17 @@ function connectCoinbase(pairs: string[]) {
     } catch {}
   });
 
-  coinbaseWs.on('close', () => {
-    wsLog('[ws] ✗ coinbase disconnected, reconnecting in 5s...');
-    coinbaseWs = null;
-    setTimeout(() => connectCoinbase(pairs), 5000);
+  ws.on('close', (code, reason) => {
+    const why = reason?.toString()?.trim();
+    wsLog(`[ws] ✗ coinbase disconnected (${code}${why ? ` ${why}` : ''}), reconnecting in 5s...`);
+    if (coinbaseWs === ws) {
+      coinbaseWs = null;
+      coinbaseSubscribedPairs.clear();
+      setTimeout(() => connectCoinbase([...subscribedPairs]), 5000);
+    }
   });
 
-  coinbaseWs.on('error', (e) => {
+  ws.on('error', (e) => {
     wsLog(`[ws] ✗ coinbase error: ${e.message}`);
   });
 }
@@ -187,28 +226,46 @@ function connectCoinbase(pairs: string[]) {
 
 let binanceWs: WebSocket | null = null;
 
+function subscribeBinancePairs(ws: WebSocket, pairs: string[]) {
+  const nextSymbols = pairs
+    .map((p) => `${normalizePair(p, 'binance-us').toLowerCase()}@bookTicker`)
+    .filter((symbol) => !binanceSubscribedSymbols.has(symbol));
+  if (nextSymbols.length === 0) return;
+  for (const symbol of nextSymbols) binanceSubscribedSymbols.add(symbol);
+  ws.send(JSON.stringify({
+    method: 'SUBSCRIBE',
+    params: nextSymbols,
+    id: binanceRequestId++,
+  }));
+}
+
 function connectBinance(pairs: string[]) {
   if (binanceWs) return;
-  const streams = pairs.map((p) => `${normalizePair(p, 'binance-us').toLowerCase()}@bookTicker`);
-  const url = `wss://stream.binance.us:9443/stream?streams=${streams.join('/')}`;
+  const url = 'wss://stream.binance.us:9443/ws';
+  const ws = new WebSocket(url);
+  binanceWs = ws;
 
-  binanceWs = new WebSocket(url);
-
-  binanceWs.on('open', () => {
+  ws.on('open', () => {
+    if (binanceWs !== ws) return;
+    binanceSubscribedSymbols.clear();
     wsLog('[ws] binance.us connected');
+    subscribeBinancePairs(ws, [...subscribedPairs]);
     const pingTimer = setInterval(() => {
-      if (binanceWs?.readyState === WebSocket.OPEN) binanceWs.ping();
+      if (binanceWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
     }, 30000);
   });
 
-  binanceWs.on('message', (raw) => {
+  ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      const data = msg.data;
+      if (msg.id && msg.result === null && msg.error) {
+        wsLog(`[ws] ✗ binance.us subscribe failed: ${msg.error.msg ?? msg.error.message ?? 'unknown error'}`);
+        return;
+      }
+      const data = msg.data ?? msg;
       if (data?.s && data?.b && data?.a) {
-        // Find canonical pair from binance symbol
-        const pair = pairs.find((p) => normalizePair(p, 'binance-us') === data.s);
+        const pair = currentCanonicalPair('binance-us', data.s);
         if (pair) {
           setPrice('binance-us', pair,
             parseFloat(data.b), parseFloat(data.a),
@@ -219,13 +276,16 @@ function connectBinance(pairs: string[]) {
     } catch {}
   });
 
-  binanceWs.on('close', () => {
+  ws.on('close', () => {
     wsLog('[ws] ✗ binance.us disconnected, reconnecting in 5s...');
-    binanceWs = null;
-    setTimeout(() => connectBinance(pairs), 5000);
+    if (binanceWs === ws) {
+      binanceWs = null;
+      binanceSubscribedSymbols.clear();
+      setTimeout(() => connectBinance([...subscribedPairs]), 5000);
+    }
   });
 
-  binanceWs.on('error', (e) => {
+  ws.on('error', (e) => {
     wsLog(`[ws] ✗ binance.us error: ${e.message}`);
   });
 }
@@ -242,16 +302,24 @@ export function subscribe(pairs: string[]) {
 
   for (const p of newPairs) subscribedPairs.add(p);
   const allPairs = [...subscribedPairs];
+  if (!initialized) {
+    wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase + binance.us`);
+    connectKraken(allPairs);
+    connectCoinbase(allPairs);
+    connectBinance(allPairs);
+    initialized = true;
+    return;
+  }
 
-  // Reconnect with updated pair list
-  if (krakenWs) { krakenWs.close(); krakenWs = null; }
-  if (coinbaseWs) { coinbaseWs.close(); coinbaseWs = null; }
-  if (binanceWs) { binanceWs.close(); binanceWs = null; }
-
-  // Binance.US blocks datacenter IPs — WS won't work, use REST polling via proxy instead
-  wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
-  connectKraken(allPairs);
-  connectCoinbase(allPairs);
+  if (newPairs.length > 0) {
+    wsLog(`[ws] subscribing to ${newPairs.length} new pair${newPairs.length === 1 ? '' : 's'} (${subscribedPairs.size} total)`);
+  }
+  if (krakenWs?.readyState === WebSocket.OPEN) subscribeKrakenPairs(krakenWs, newPairs);
+  else connectKraken(allPairs);
+  if (coinbaseWs?.readyState === WebSocket.OPEN) subscribeCoinbasePairs(coinbaseWs, newPairs);
+  else connectCoinbase(allPairs);
+  if (binanceWs?.readyState === WebSocket.OPEN) subscribeBinancePairs(binanceWs, newPairs);
+  else connectBinance(allPairs);
   initialized = true;
 }
 

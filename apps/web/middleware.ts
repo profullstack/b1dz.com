@@ -3,14 +3,17 @@
  * gates non-public routes. Lifted from the official @supabase/ssr docs.
  */
 import { NextResponse, type NextRequest } from 'next/server';
+import { getB1dzVersion } from '@b1dz/core';
 import { createServerClient } from '@supabase/ssr';
 
 // API routes self-authenticate via Bearer header or cookie, so the
 // middleware doesn't gate them. /login + /signup are always public.
 const PUBLIC_PATHS = ['/login', '/signup', '/auth', '/api', '/manifest.webmanifest', '/sw.js'];
+let loggedVersion = false;
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
+  const version = getB1dzVersion();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -36,9 +39,16 @@ export async function middleware(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = '/login';
     url.searchParams.set('next', path);
-    return NextResponse.redirect(url);
+    const redirect = NextResponse.redirect(url);
+    redirect.headers.set('x-b1dz-version', version);
+    return redirect;
   }
 
+  response.headers.set('x-b1dz-version', version);
+  if (!loggedVersion) {
+    console.log(`[api] version ${version}`);
+    loggedVersion = true;
+  }
   return response;
 }
 

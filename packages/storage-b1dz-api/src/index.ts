@@ -32,6 +32,8 @@ export class B1dzApiStorage implements Storage {
   private baseUrl: string;
   private tokens: Tokens;
   private onRefresh?: (tokens: Tokens) => void | Promise<void>;
+  private apiVersion: string | null = null;
+  private refreshInFlight: Promise<boolean> | null = null;
 
   constructor(opts: B1dzApiStorageOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
@@ -39,21 +41,54 @@ export class B1dzApiStorage implements Storage {
     this.onRefresh = opts.onRefresh;
   }
 
+  private captureVersion(res: Response) {
+    const version = res.headers.get('x-b1dz-version');
+    if (version) this.apiVersion = version;
+  }
+
+  getApiVersion(): string | null {
+    return this.apiVersion;
+  }
+
+  private accessTokenExpiresSoon(): boolean {
+    try {
+      const [, payload] = this.tokens.accessToken.split('.');
+      if (!payload) return false;
+      const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
+      if (!json.exp) return false;
+      return json.exp <= Math.floor(Date.now() / 1000) + 30;
+    } catch {
+      return false;
+    }
+  }
+
   private async refresh(): Promise<boolean> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = (async () => {
     const res = await fetch(`${this.baseUrl}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ refresh_token: this.tokens.refreshToken }),
     });
+    this.captureVersion(res);
     if (!res.ok) return false;
     const { session } = await res.json() as { session?: { access_token: string; refresh_token: string } };
     if (!session) return false;
     this.tokens = { accessToken: session.access_token, refreshToken: session.refresh_token };
     if (this.onRefresh) await this.onRefresh(this.tokens);
     return true;
+    })();
+    try {
+      return await this.refreshInFlight;
+    } finally {
+      this.refreshInFlight = null;
+    }
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    if (this.accessTokenExpiresSoon()) {
+      await this.refresh();
+    }
     const exec = async () => fetch(`${this.baseUrl}${path}`, {
       method,
       headers: {
@@ -63,9 +98,13 @@ export class B1dzApiStorage implements Storage {
       body: body == null ? undefined : JSON.stringify(body),
     });
     let res = await exec();
+    this.captureVersion(res);
     if (res.status === 401) {
       const refreshed = await this.refresh();
-      if (refreshed) res = await exec();
+      if (refreshed) {
+        res = await exec();
+        this.captureVersion(res);
+      }
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');

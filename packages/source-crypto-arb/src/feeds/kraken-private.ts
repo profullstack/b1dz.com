@@ -10,12 +10,16 @@
 import { createHash, createHmac } from 'node:crypto';
 
 const BASE = 'https://api.kraken.com';
+const ASSET_PAIR_CACHE_TTL_MS = 5 * 60_000;
 
 /** Hard ceiling — refuse any order where cost > $100. */
 export const MAX_POSITION_USD = 100;
 
 /** Kraken taker fee (0.26%). */
 export const KRAKEN_TAKER_FEE = 0.0026;
+let assetPairsFetchedAt = 0;
+let tradablePairs = new Set<string>();
+let assetPairMeta = new Map<string, { altname?: string; status?: string; ordermin?: string }>();
 
 // Monotonic nonce: microsecond timestamp, guaranteed to increase even
 // when multiple requests fire in the same millisecond.
@@ -80,6 +84,37 @@ async function krakenPrivate<T>(path: string, params: Record<string, string> = {
 
 // ─── Public API ───────────────────────────────────────────────
 
+async function syncAssetPairs(force = false): Promise<void> {
+  if (!force && Date.now() - assetPairsFetchedAt < ASSET_PAIR_CACHE_TTL_MS && tradablePairs.size > 0) return;
+  const res = await fetch(`${BASE}/0/public/AssetPairs`);
+  if (!res.ok) throw new Error(`Kraken /0/public/AssetPairs: ${res.status} ${res.statusText}`);
+  const data = (await res.json()) as { error: string[]; result: Record<string, { altname?: string; status?: string; ordermin?: string }> };
+  if (data.error?.length) throw new Error(`Kraken /0/public/AssetPairs: ${data.error.join(', ')}`);
+  assetPairMeta = new Map(Object.entries(data.result ?? {}));
+  tradablePairs = new Set(
+    Object.entries(data.result ?? {})
+      .filter(([, pair]) => !pair.status || pair.status === 'online')
+      .flatMap(([id, pair]) => [id, pair.altname].filter((v): v is string => !!v)),
+  );
+  assetPairsFetchedAt = Date.now();
+}
+
+export async function hasTradingPair(pair: string): Promise<boolean> {
+  await syncAssetPairs();
+  return tradablePairs.has(pair);
+}
+
+export async function getPairMinVolume(pair: string): Promise<number | null> {
+  await syncAssetPairs();
+  for (const [id, meta] of assetPairMeta.entries()) {
+    if (id === pair || meta.altname === pair) {
+      const minVolume = parseFloat(meta.ordermin ?? '');
+      return Number.isFinite(minVolume) && minVolume > 0 ? minVolume : null;
+    }
+  }
+  return null;
+}
+
 export async function getBalance(): Promise<Record<string, string>> {
   return krakenPrivate<Record<string, string>>('/0/private/Balance');
 }
@@ -99,9 +134,14 @@ export interface OrderResult {
 }
 
 export async function placeOrder(opts: OrderOpts): Promise<OrderResult> {
+  const minVolume = await getPairMinVolume(opts.pair);
+  const vol = parseFloat(opts.volume);
+  if (minVolume != null && Number.isFinite(vol) && vol < minVolume) {
+    throw new Error(`Kraken ${opts.pair}: volume ${vol} below minimum ${minVolume}`);
+  }
+
   // Safety: estimate cost and refuse if > MAX_POSITION_USD
   const price = opts.price ? parseFloat(opts.price) : 0;
-  const vol = parseFloat(opts.volume);
   if (price > 0 && vol * price > MAX_POSITION_USD) {
     throw new Error(`Order cost $${(vol * price).toFixed(2)} exceeds $${MAX_POSITION_USD} limit`);
   }

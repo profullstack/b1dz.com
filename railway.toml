@@ -3,6 +3,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "bash -c 'pnpm daemon & pnpm --filter @b1dz/web start'"
+startCommand = "bash ./scripts/start-railway.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

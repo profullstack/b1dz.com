@@ -12,11 +12,24 @@
 import { createSign, randomBytes } from 'node:crypto';
 
 const BASE = 'https://api.coinbase.com';
+const PRODUCT_CACHE_TTL_MS = 5 * 60_000;
 
 export const MAX_POSITION_USD = 100;
 export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 
 import { getCoinbasePem } from './coinbase-pem.js';
+let productFetchedAt = 0;
+let tradableProducts = new Set<string>();
+
+export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid: boolean; hasPem: boolean } {
+  const keyName = process.env.COINBASE_API_KEY_NAME ?? '';
+  const pem = getCoinbasePem();
+  return {
+    hasKeyName: keyName.length > 0,
+    keyNameLooksValid: /^organizations\/[^/]+\/apiKeys\/[^/]+$/.test(keyName),
+    hasPem: !!pem,
+  };
+}
 
 function getKeys() {
   const keyName = process.env.COINBASE_API_KEY_NAME;
@@ -42,10 +55,9 @@ function buildJwt(method: string, path: string): string {
   const payload = {
     sub: keyName,
     iss: 'cdp',
-    aud: 'https://api.coinbase.com',
-    nbf: now - 60,
-    exp: now + 300,
-    uris: [uri],
+    nbf: now,
+    exp: now + 120,
+    uri,
   };
 
   const segments = [
@@ -86,13 +98,13 @@ async function coinbasePrivate<T>(
       if (!res.ok) {
         const text = await res.text();
         if ((res.status === 429 || res.status >= 500) && attempt < retries - 1) {
-          lastErr = new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 80)}`);
+          lastErr = new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 500)}`);
           await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
           continue;
         }
         const parts = jwt.split('.');
         const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 100)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uris?.[0]}`);
+        throw new Error(`Coinbase ${path}: ${res.status} ${text.slice(0, 1000)} jwt:exp=${payload.exp} nbf=${payload.nbf} uri=${payload.uri}`);
       }
       return (await res.json()) as T & { error?: string; message?: string };
     } catch (e) {
@@ -120,12 +132,42 @@ interface AccountsResponse {
   accounts: CoinbaseAccount[];
 }
 
+interface CoinbaseProduct {
+  product_id: string;
+  trading_disabled?: boolean;
+  is_disabled?: boolean;
+  cancel_only?: boolean;
+  auction_mode?: boolean;
+}
+
+interface CoinbaseProductsResponse {
+  products?: CoinbaseProduct[];
+}
+
+async function syncProducts(force = false): Promise<void> {
+  if (!force && Date.now() - productFetchedAt < PRODUCT_CACHE_TTL_MS && tradableProducts.size > 0) return;
+  const data = await coinbasePrivate<CoinbaseProductsResponse>('GET', '/api/v3/brokerage/products?limit=250');
+  tradableProducts = new Set(
+    (data.products ?? [])
+      .filter((p) => p?.product_id && p.trading_disabled !== true && p.is_disabled !== true && p.cancel_only !== true && p.auction_mode !== true)
+      .map((p) => p.product_id),
+  );
+  productFetchedAt = Date.now();
+}
+
+export async function hasTradingProduct(productId: string): Promise<boolean> {
+  await syncProducts();
+  return tradableProducts.has(productId);
+}
+
 export async function getBalance(): Promise<Record<string, string>> {
   const data = await coinbasePrivate<AccountsResponse>('GET', '/api/v3/brokerage/accounts?limit=50');
   const result: Record<string, string> = {};
   for (const acct of data.accounts) {
-    const val = parseFloat(acct.available_balance.value);
-    if (val > 0) result[acct.currency] = acct.available_balance.value;
+    const available = parseFloat(acct.available_balance.value);
+    const hold = parseFloat(acct.hold.value);
+    const total = available + hold;
+    if (total > 0) result[acct.currency] = total.toFixed(8);
   }
   return result;
 }
@@ -195,10 +237,10 @@ export async function getOpenOrders(): Promise<CoinbaseOrder[]> {
   return data.orders ?? [];
 }
 
-export async function getRecentFills(): Promise<{ trade_id: string; product_id: string; side: string; price: string; size: string; commission: string; trade_time: string }[]> {
+export async function getRecentFills(limit = 200): Promise<{ trade_id: string; product_id: string; side: string; price: string; size: string; commission: string; trade_time: string }[]> {
   const data = await coinbasePrivate<{ fills: { trade_id: string; product_id: string; side: string; price: string; size: string; commission: string; trade_time: string }[] }>(
     'GET',
-    '/api/v3/brokerage/orders/historical/fills?limit=20',
+    `/api/v3/brokerage/orders/historical/fills?limit=${limit}`,
   );
   return data.fills ?? [];
 }

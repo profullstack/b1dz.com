@@ -36,6 +36,34 @@ pnpm dev:web   # Next.js dashboard
 pnpm dev:cli   # daemon
 ```
 
+## TUI Chart
+
+The crypto TUI now includes a realtime OHLC chart pane backed by exchange
+websocket data plus public candle bootstrap.
+
+Controls:
+
+- `1` = `1m`
+- `2` = `5m`
+- `3` = `15m`
+- `4` = `1h`
+- `5` = `4h`
+- `6` = `1d`
+- `7` = `1w`
+- `,` / `.` = previous / next chart pair
+
+Module usage example:
+
+```jsx
+<RealtimeOHLCChartContainer
+  pair="BTC-USD"
+  exchange="kraken"
+  timeframe="5m"
+  positions={positions}
+  closedTrades={closedTrades}
+/>
+```
+
 ## Migration plan (lifting dealdash)
 
 1. Move `~/src/dealdash/dealdash.ts` API helpers into `packages/source-dealdash/src/api.ts`
@@ -48,3 +76,11 @@ pnpm dev:cli   # daemon
 8. Swap `storage-json` for a `storage-supabase` package
 
 The whole project lives at `~/src/b1dz.com`.
+
+## Crypto TODO
+
+- Inventory-aware spot scanner: alert only when the user already has token inventory on the sell venue and stable balance on the buy venue.
+- Per-token thresholds for small accounts: net edge after fees, min notional, and size caps.
+- Inventory rebalance guidance: flag when one venue has become cash-heavy or token-heavy after repeated arb rounds.
+- Executable depth sizing: use real order book depth, not only top-of-book price, before auto-firing cross-exchange spot arb.
+- Per-exchange market-rule normalization: cache and enforce lot size, min notional, quantity increments, and price tick rules across Binance, Kraken, and Coinbase before order placement.

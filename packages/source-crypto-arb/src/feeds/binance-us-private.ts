@@ -12,6 +12,9 @@ import { createHmac } from 'node:crypto';
 import { proxyFetch } from './proxy.js';
 
 const BASE = 'https://api.binance.us';
+const SERVER_TIME_TTL_MS = 60_000;
+const DEFAULT_RECV_WINDOW_MS = '15000';
+const EXCHANGE_INFO_TTL_MS = 5 * 60_000;
 
 /** Hard ceiling — refuse any order where cost > $100. */
 export const MAX_POSITION_USD = 100;
@@ -30,6 +33,145 @@ function sign(queryString: string, secret: string): string {
   return createHmac('sha256', secret).update(queryString).digest('hex');
 }
 
+let serverTimeOffsetMs = 0;
+let serverTimeFetchedAt = 0;
+let exchangeInfoFetchedAt = 0;
+let exchangeInfoBySymbol = new Map<string, BinanceSymbolInfo>();
+
+async function syncServerTime(force = false): Promise<void> {
+  if (!force && Date.now() - serverTimeFetchedAt < SERVER_TIME_TTL_MS) return;
+
+  const res = await proxyFetch(`${BASE}/api/v3/time`);
+  if (!res.ok) throw new Error(`Binance /api/v3/time: ${res.status} ${res.statusText}`);
+  const data = (await res.json()) as { serverTime?: number };
+  if (!data.serverTime) throw new Error('Binance /api/v3/time: missing serverTime');
+
+  serverTimeOffsetMs = data.serverTime - Date.now();
+  serverTimeFetchedAt = Date.now();
+}
+
+interface BinanceSymbolFilter {
+  filterType: string;
+  minQty?: string;
+  maxQty?: string;
+  stepSize?: string;
+  minPrice?: string;
+  maxPrice?: string;
+  tickSize?: string;
+  minNotional?: string;
+}
+
+interface BinanceSymbolInfo {
+  symbol: string;
+  status: string;
+  filters: BinanceSymbolFilter[];
+}
+
+interface BinanceExchangeInfo {
+  symbols: BinanceSymbolInfo[];
+}
+
+export async function hasTradingSymbol(symbol: string): Promise<boolean> {
+  await syncExchangeInfo();
+  return exchangeInfoBySymbol.get(symbol.toUpperCase())?.status === 'TRADING';
+}
+
+export interface BinanceTradingRules {
+  minQty: number | null;
+  minNotional: number | null;
+}
+
+export async function getTradingRules(symbol: string): Promise<BinanceTradingRules | null> {
+  await syncExchangeInfo();
+  const info = exchangeInfoBySymbol.get(symbol.toUpperCase());
+  if (!info) return null;
+  const lotSize = info.filters.find((f) => f.filterType === 'LOT_SIZE');
+  const minNotionalFilter = info.filters.find((f) => f.filterType === 'MIN_NOTIONAL');
+  const minQty = parseFloat(lotSize?.minQty ?? '');
+  const minNotional = parseFloat(minNotionalFilter?.minNotional ?? '');
+  return {
+    minQty: Number.isFinite(minQty) && minQty > 0 ? minQty : null,
+    minNotional: Number.isFinite(minNotional) && minNotional > 0 ? minNotional : null,
+  };
+}
+
+async function syncExchangeInfo(force = false): Promise<void> {
+  if (!force && Date.now() - exchangeInfoFetchedAt < EXCHANGE_INFO_TTL_MS && exchangeInfoBySymbol.size > 0) return;
+  const res = await proxyFetch(`${BASE}/api/v3/exchangeInfo`);
+  if (!res.ok) throw new Error(`Binance /api/v3/exchangeInfo: ${res.status} ${res.statusText}`);
+  const data = (await res.json()) as BinanceExchangeInfo;
+  const next = new Map<string, BinanceSymbolInfo>();
+  for (const symbol of data.symbols ?? []) {
+    if (!symbol?.symbol) continue;
+    next.set(symbol.symbol.toUpperCase(), symbol);
+  }
+  exchangeInfoBySymbol = next;
+  exchangeInfoFetchedAt = Date.now();
+}
+
+function decimalPlaces(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed.includes('.')) return 0;
+  return trimmed.split('.')[1]!.replace(/0+$/, '').length;
+}
+
+function floorToStep(value: number, step: string): number {
+  const places = decimalPlaces(step);
+  const scale = 10 ** places;
+  const scaledValue = Math.floor((value + 1e-12) * scale);
+  const scaledStep = Math.max(1, Math.round(parseFloat(step) * scale));
+  return Math.floor(scaledValue / scaledStep) * scaledStep / scale;
+}
+
+function trimDecimals(value: number, places: number): string {
+  return value.toFixed(places).replace(/\.?0+$/, '');
+}
+
+async function normalizeOrderParams(opts: OrderOpts): Promise<OrderOpts> {
+  await syncExchangeInfo();
+  const symbolInfo = exchangeInfoBySymbol.get(opts.symbol.toUpperCase());
+  if (!symbolInfo) return opts;
+
+  const lotSize = symbolInfo.filters.find((f) => f.filterType === 'LOT_SIZE');
+  const priceFilter = symbolInfo.filters.find((f) => f.filterType === 'PRICE_FILTER');
+  const minNotionalFilter = symbolInfo.filters.find((f) => f.filterType === 'MIN_NOTIONAL');
+
+  let quantity = parseFloat(opts.quantity);
+  if (!isFinite(quantity) || quantity <= 0) {
+    throw new Error(`Binance ${opts.symbol}: invalid quantity ${opts.quantity}`);
+  }
+
+  if (lotSize?.stepSize) {
+    quantity = floorToStep(quantity, lotSize.stepSize);
+  }
+  if (lotSize?.minQty && quantity < parseFloat(lotSize.minQty)) {
+    throw new Error(`Binance ${opts.symbol}: quantity ${quantity} below minQty ${lotSize.minQty}`);
+  }
+
+  let price = opts.price;
+  if (price && priceFilter?.tickSize) {
+    const adjustedPrice = floorToStep(parseFloat(price), priceFilter.tickSize);
+    price = trimDecimals(adjustedPrice, decimalPlaces(priceFilter.tickSize));
+  }
+
+  if (price && minNotionalFilter?.minNotional) {
+    const notional = quantity * parseFloat(price);
+    if (notional < parseFloat(minNotionalFilter.minNotional)) {
+      throw new Error(`Binance ${opts.symbol}: notional $${notional.toFixed(2)} below minNotional ${minNotionalFilter.minNotional}`);
+    }
+  }
+
+  return {
+    ...opts,
+    quantity: trimDecimals(quantity, lotSize?.stepSize ? decimalPlaces(lotSize.stepSize) : 8),
+    ...(price ? { price } : {}),
+  };
+}
+
+function binanceTimestamp(): string {
+  return Math.round(Date.now() + serverTimeOffsetMs).toString();
+}
+
 async function binancePrivate<T>(
   method: 'GET' | 'POST' | 'DELETE',
   path: string,
@@ -41,10 +183,12 @@ async function binancePrivate<T>(
 
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      await syncServerTime(attempt > 0);
+
       // Fresh timestamp + signature for each attempt
       const p = { ...params };
-      p.timestamp = (Date.now() - 1000).toString();
-      p.recvWindow = '10000';
+      p.timestamp = binanceTimestamp();
+      p.recvWindow = DEFAULT_RECV_WINDOW_MS;
 
       const qs = new URLSearchParams(p).toString();
       const signature = sign(qs, secret);
@@ -66,9 +210,16 @@ async function binancePrivate<T>(
       const data = (await res.json()) as T & { code?: number; msg?: string };
       if (!res.ok || data.code) {
         const err = new Error(`Binance ${path}: ${data.code ?? res.status} ${data.msg ?? res.statusText}`);
+        if (data.code === -1021) {
+          await syncServerTime(true);
+        }
         if ((res.status === 429 || res.status >= 500 || data.code === -1003) && attempt < retries - 1) {
           lastErr = err;
           await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+          continue;
+        }
+        if (data.code === -1021 && attempt < retries - 1) {
+          lastErr = err;
           continue;
         }
         throw err;
@@ -102,7 +253,9 @@ export async function getBalance(): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   for (const b of info.balances) {
     const free = parseFloat(b.free);
-    if (free > 0) result[b.asset] = b.free;
+    const locked = parseFloat(b.locked);
+    const total = free + locked;
+    if (total > 0) result[b.asset] = total.toFixed(8);
   }
   return result;
 }
@@ -128,23 +281,24 @@ export interface OrderResult {
 }
 
 export async function placeOrder(opts: OrderOpts): Promise<OrderResult> {
+  const normalized = await normalizeOrderParams(opts);
   // Safety: estimate cost and refuse if > MAX_POSITION_USD
-  const price = opts.price ? parseFloat(opts.price) : 0;
-  const qty = parseFloat(opts.quantity);
+  const price = normalized.price ? parseFloat(normalized.price) : 0;
+  const qty = parseFloat(normalized.quantity);
   if (price > 0 && qty * price > MAX_POSITION_USD) {
     throw new Error(`Order cost $${(qty * price).toFixed(2)} exceeds $${MAX_POSITION_USD} limit`);
   }
 
   const params: Record<string, string> = {
-    symbol: opts.symbol,
-    side: opts.side,
-    type: opts.type,
-    quantity: opts.quantity,
+    symbol: normalized.symbol,
+    side: normalized.side,
+    type: normalized.type,
+    quantity: normalized.quantity,
   };
-  if (opts.type === 'LIMIT') {
-    if (!opts.price) throw new Error('price required for LIMIT orders');
-    params.price = opts.price;
-    params.timeInForce = opts.timeInForce ?? 'GTC';
+  if (normalized.type === 'LIMIT') {
+    if (!normalized.price) throw new Error('price required for LIMIT orders');
+    params.price = normalized.price;
+    params.timeInForce = normalized.timeInForce ?? 'GTC';
   }
 
   return binancePrivate<OrderResult>('POST', '/api/v3/order', params);
@@ -154,4 +308,23 @@ export async function getOpenOrders(symbol?: string): Promise<OrderResult[]> {
   const params: Record<string, string> = {};
   if (symbol) params.symbol = symbol;
   return binancePrivate<OrderResult[]>('GET', '/api/v3/openOrders', params);
+}
+
+export interface BinanceTrade {
+  id: number;
+  symbol: string;
+  price: string;
+  qty: string;
+  quoteQty: string;
+  commission: string;
+  commissionAsset: string;
+  time: number;
+  isBuyer: boolean;
+}
+
+export async function getRecentTrades(symbol: string, limit = 100): Promise<BinanceTrade[]> {
+  return binancePrivate<BinanceTrade[]>('GET', '/api/v3/myTrades', {
+    symbol,
+    limit: String(limit),
+  });
 }

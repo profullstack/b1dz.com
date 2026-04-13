@@ -4,6 +4,7 @@
  * DELETE /api/storage/:collection/:key  → delete
  */
 import type { NextRequest } from 'next/server';
+import { deleteRuntimeSourceState, getRuntimeSourceState, setRuntimeSourceState, stripLiveSourceState } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
 import { COLLECTION_TABLES } from '@/lib/storage-tables';
 
@@ -21,9 +22,23 @@ export async function GET(req: NextRequest, { params }: Ctx) {
   const { collection, key } = await params;
   const t = resolve(collection);
   if (!t) return Response.json({ error: `unknown collection: ${collection}` }, { status: 404 });
+  if (collection === 'source-state') {
+    const cached = await getRuntimeSourceState<Record<string, unknown>>(auth.userId, key);
+    if (cached) {
+      console.log(`[api] source-state/${key} runtime-cache hit user=${auth.userId.slice(0, 8)}`);
+      return Response.json({ value: cached });
+    }
+    console.log(`[api] source-state/${key} runtime-cache miss user=${auth.userId.slice(0, 8)}`);
+  }
   const { data, error } = await auth.client.from(t.table).select('payload').eq(t.pk, key).maybeSingle();
   if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ value: data?.payload ?? null });
+  const value = collection === 'source-state'
+    ? stripLiveSourceState<Record<string, unknown>>(data?.payload as Record<string, unknown> | null)
+    : (data?.payload ?? null);
+  if (collection === 'source-state') {
+    console.log(`[api] source-state/${key} persisted fallback user=${auth.userId.slice(0, 8)} keys=${value && typeof value === 'object' ? Object.keys(value as Record<string, unknown>).join(',') : 'null'}`);
+  }
+  return Response.json({ value });
 }
 
 export async function PUT(req: NextRequest, { params }: Ctx) {
@@ -53,6 +68,10 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   const conflict = t.table === 'source_state' ? 'user_id,source_id' : t.pk;
   const { error } = await auth.client.from(t.table).upsert(row, { onConflict: conflict });
   if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (collection === 'source-state') {
+    await setRuntimeSourceState(auth.userId, key, value as Record<string, unknown>);
+    console.log(`[api] source-state/${key} updated user=${auth.userId.slice(0, 8)} keys=${Object.keys(value as Record<string, unknown>).join(',')}`);
+  }
   return Response.json({ ok: true });
 }
 
@@ -64,5 +83,9 @@ export async function DELETE(req: NextRequest, { params }: Ctx) {
   if (!t) return Response.json({ error: `unknown collection: ${collection}` }, { status: 404 });
   const { error } = await auth.client.from(t.table).delete().eq(t.pk, key);
   if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (collection === 'source-state') {
+    await deleteRuntimeSourceState(auth.userId, key);
+    console.log(`[api] source-state/${key} deleted user=${auth.userId.slice(0, 8)}`);
+  }
   return Response.json({ ok: true });
 }

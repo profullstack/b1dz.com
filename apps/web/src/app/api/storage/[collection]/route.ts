@@ -7,6 +7,7 @@
  * authenticated user automatically.
  */
 import type { NextRequest } from 'next/server';
+import { listRuntimeSourceStates, stripLiveSourceState } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
 import { COLLECTION_TABLES } from '@/lib/storage-tables';
 
@@ -16,7 +17,23 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ coll
   const { collection } = await params;
   const t = COLLECTION_TABLES[collection];
   if (!t) return Response.json({ error: `unknown collection: ${collection}` }, { status: 404 });
-  const { data, error } = await auth.client.from(t.table).select('payload');
+  const select = collection === 'source-state' ? 'source_id,payload' : 'payload';
+  const { data, error } = await auth.client.from(t.table).select(select);
   if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ items: (data ?? []).map(r => r.payload) });
+  if (collection !== 'source-state') {
+    const rows = (data ?? []) as Array<{ payload?: unknown }>;
+    return Response.json({ items: rows.map((r) => r.payload) });
+  }
+
+  const persisted = new Map<string, Record<string, unknown>>();
+  for (const row of (data ?? []) as Array<{ source_id?: string; payload?: Record<string, unknown> }>) {
+    if (!row.source_id) continue;
+    persisted.set(row.source_id, stripLiveSourceState(row.payload ?? {}) ?? {});
+  }
+  const runtimeRows = await listRuntimeSourceStates<Record<string, unknown>>(auth.userId);
+  for (const row of runtimeRows) {
+    persisted.set(row.sourceId, row.value);
+  }
+  console.log(`[api] source-state list user=${auth.userId.slice(0, 8)} runtime=${runtimeRows.length} merged=${persisted.size}`);
+  return Response.json({ items: [...persisted.values()] });
 }

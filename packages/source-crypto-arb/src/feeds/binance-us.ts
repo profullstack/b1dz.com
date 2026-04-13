@@ -4,6 +4,10 @@ import { fetchJson } from './http.js';
 import { getSnapshot } from './ws-price-cache.js';
 
 const BASE = 'https://api.binance.us';
+const SYMBOL_CACHE_TTL_MS = 5 * 60_000;
+
+let cachedSymbols: Set<string> | null = null;
+let lastSymbolRefresh = 0;
 
 interface BinanceBookTicker {
   bidPrice: string;
@@ -17,6 +21,28 @@ interface BinanceDepth {
   asks: [string, string][];
 }
 
+interface BinanceExchangeInfo {
+  symbols: { symbol: string; status: string }[];
+}
+
+async function getSupportedSymbols(): Promise<Set<string> | null> {
+  if (cachedSymbols && (Date.now() - lastSymbolRefresh) < SYMBOL_CACHE_TTL_MS) {
+    return cachedSymbols;
+  }
+  try {
+    const info = await fetchJson<BinanceExchangeInfo>(`${BASE}/api/v3/exchangeInfo`);
+    cachedSymbols = new Set(
+      (info.symbols ?? [])
+        .filter((s) => s?.status === 'TRADING' && !!s.symbol)
+        .map((s) => s.symbol.toUpperCase()),
+    );
+    lastSymbolRefresh = Date.now();
+    return cachedSymbols;
+  } catch {
+    return cachedSymbols;
+  }
+}
+
 export class BinanceUsFeed implements PriceFeed {
   exchange = 'binance-us';
 
@@ -27,17 +53,24 @@ export class BinanceUsFeed implements PriceFeed {
 
     // Fallback to REST (through proxy)
     const symbol = normalizePair(pair, this.exchange);
+    const supportedSymbols = await getSupportedSymbols();
+    if (supportedSymbols && !supportedSymbols.has(symbol)) return null;
     try {
       const t = await fetchJson<BinanceBookTicker>(
         `${BASE}/api/v3/ticker/bookTicker?symbol=${symbol}`,
       );
+      const bid = parseFloat(t.bidPrice);
+      const ask = parseFloat(t.askPrice);
+      const bidSize = parseFloat(t.bidQty);
+      const askSize = parseFloat(t.askQty);
+      if (!isFinite(bid) || !isFinite(ask) || bid <= 0 || ask <= 0) return null;
       return {
         exchange: this.exchange,
         pair,
-        bid: parseFloat(t.bidPrice),
-        ask: parseFloat(t.askPrice),
-        bidSize: parseFloat(t.bidQty),
-        askSize: parseFloat(t.askQty),
+        bid,
+        ask,
+        bidSize,
+        askSize,
         ts: Date.now(),
       };
     } catch {
@@ -47,6 +80,8 @@ export class BinanceUsFeed implements PriceFeed {
 
   async orderBook(pair: string, depth = 10): Promise<OrderBook | null> {
     const symbol = normalizePair(pair, this.exchange);
+    const supportedSymbols = await getSupportedSymbols();
+    if (supportedSymbols && !supportedSymbols.has(symbol)) return null;
     try {
       const book = await fetchJson<BinanceDepth>(
         `${BASE}/api/v3/depth?symbol=${symbol}&limit=${depth}`,
