@@ -40,9 +40,17 @@ function cacheKey(exchange: string, pair: string): string {
   return `${exchange}:${pair}`;
 }
 
+function websocketSymbol(exchange: string, pair: string): string {
+  if (exchange === 'kraken') {
+    const [base, quote] = pair.split('-');
+    return `${base.toUpperCase()}/${quote.toUpperCase()}`;
+  }
+  return normalizePair(pair, exchange);
+}
+
 function currentCanonicalPair(exchange: string, symbol: string): string | null {
   for (const pair of subscribedPairs) {
-    const normalized = normalizePair(pair, exchange);
+    const normalized = websocketSymbol(exchange, pair);
     if (symbol === normalized || symbol?.includes(normalized)) return pair;
   }
   return null;
@@ -73,7 +81,7 @@ let krakenWs: WebSocket | null = null;
 
 function subscribeKrakenPairs(ws: WebSocket, pairs: string[]) {
   const nextSymbols = pairs
-    .map((p) => normalizePair(p, 'kraken'))
+    .map((p) => websocketSymbol('kraken', p))
     .filter((symbol) => !krakenSubscribedSymbols.has(symbol));
   if (nextSymbols.length === 0) return;
   for (const symbol of nextSymbols) krakenSubscribedSymbols.add(symbol);
@@ -106,6 +114,10 @@ function connectKraken(pairs: string[]) {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
+      if (msg.method === 'subscribe' && msg.success === false) {
+        wsLog(`[ws] ✗ kraken subscribe failed: ${msg.error ?? 'unknown error'}`);
+        return;
+      }
       if (msg.channel === 'ticker' && msg.type === 'update' && msg.data) {
         for (const tick of msg.data) {
           const pair = currentCanonicalPair('kraken', tick.symbol);
@@ -173,6 +185,10 @@ function connectCoinbase(pairs: string[]) {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
+      if (msg.type === 'error') {
+        wsLog(`[ws] ✗ coinbase error: ${msg.message ?? msg.reason ?? 'unknown error'}`);
+        return;
+      }
       if (msg.channel === 'ticker' && msg.events) {
         for (const event of msg.events) {
           if (event.type === 'update' && event.tickers) {
@@ -243,6 +259,10 @@ function connectBinance(pairs: string[]) {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
+      if (msg.id && msg.result === null && msg.error) {
+        wsLog(`[ws] ✗ binance.us subscribe failed: ${msg.error.msg ?? msg.error.message ?? 'unknown error'}`);
+        return;
+      }
       const data = msg.data ?? msg;
       if (data?.s && data?.b && data?.a) {
         const pair = currentCanonicalPair('binance-us', data.s);
