@@ -520,11 +520,12 @@ function DashboardInner() {
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [
-    '{bold} Exch        Pair             Volume        Entry        Last         PnL               Stop        Age{/bold}',
+    '{bold} Exch        Pair             Coins        Value       Entry        Last         PnL               Stop        Age{/bold}',
   ];
   for (const pos of displayedPositions) {
     const volume = typeof pos.volume === 'number' && Number.isFinite(pos.volume) ? pos.volume : 0;
     const currentPrice = typeof pos.currentPrice === 'number' && Number.isFinite(pos.currentPrice) ? pos.currentPrice : 0;
+    const currentValue = volume * currentPrice;
     const entryPrice = typeof pos.entryPrice === 'number' && Number.isFinite(pos.entryPrice) ? pos.entryPrice : 0;
     const pnlPct = typeof pos.pnlPct === 'number' && Number.isFinite(pos.pnlPct) ? pos.pnlPct : 0;
     const pnlUsd = typeof pos.pnlUsd === 'number' && Number.isFinite(pos.pnlUsd) ? pos.pnlUsd : 0;
@@ -533,7 +534,8 @@ function DashboardInner() {
     const exColor = pos.exchange === 'kraken' ? '{cyan-fg}' : pos.exchange === 'coinbase' ? '{magenta-fg}' : '{yellow-fg}';
     const exchangeCell = padRight(pos.exchange, 10);
     const pairCell = padRight(pos.pair, 16);
-    const volumeCell = padLeft(volume.toFixed(6), 12);
+    const volumeCell = padLeft(volume.toFixed(6), 11);
+    const valueCell = padLeft(`$${currentValue.toFixed(2)}`, 11);
     const lastCell = padLeft(`$${formatUsdPrice(currentPrice)}`, 11);
     if (entryPrice > 0) {
       const entryCell = padLeft(`$${formatUsdPrice(entryPrice)}`, 11);
@@ -541,10 +543,10 @@ function DashboardInner() {
       const pnlCell = padLeft(pnlText, 18);
       const stopCell = padLeft(`$${formatUsdPrice(stopPrice)}`, 11);
       const ageCell = padLeft(pos.elapsed ?? '-', 8);
-      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}`);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}`);
     } else {
       const statusCell = padRight('untracked holding', 18);
-      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
     }
   }
   if (displayedPositions.length === 0) {
