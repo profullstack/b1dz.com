@@ -134,11 +134,8 @@ function hasPositionOnExchange(exchange: string): boolean {
   for (const pos of openPositions.values()) {
     if (pos.exchange === exchange) return true;
   }
-  return exchangesHoldingCrypto.has(exchange);
+  return false;
 }
-
-/** Set by hydration — exchanges that have non-trivial crypto holdings. */
-const exchangesHoldingCrypto = new Set<string>();
 
 /** Pending buy — set in evaluate(), cleared at the next poll. Prevents multiple buys in one scan pass. */
 let pendingBuyExchange: string | null = null;
@@ -205,7 +202,6 @@ function restorePosition(
     entryTime,
     highWaterMark: entryPrice,
   });
-  exchangesHoldingCrypto.add(exchange);
   console.log(`[trade] RESTORED from exchange: ${exchange}:${pair} ${volume} @ $${entryPrice.toFixed(2)} (${reason})`);
 }
 
@@ -253,8 +249,6 @@ function latestSnapshotFor(exchange: string, pair: string): MarketSnapshot | nul
 
 function clearTrackedPosition(posKey: string, exchange: string) {
   openPositions.delete(posKey);
-  const stillHolding = [...openPositions.values()].some((p) => p.exchange === exchange);
-  if (!stillHolding) exchangesHoldingCrypto.delete(exchange);
 }
 
 async function actualBaseBalanceFor(exchange: string, pair: string): Promise<number> {
@@ -469,7 +463,7 @@ async function hydrateKrakenPositions(): Promise<void> {
   const holdings = findNonStableHoldings(balance);
   if (holdings.length === 0) return;
 
-  console.log(`[trade] found ${holdings.length} crypto holdings on kraken — blocking new kraken trades until resolved`);
+  console.log(`[trade] found ${holdings.length} crypto holdings on kraken`);
 
   const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
   for (const holding of holdings) {
@@ -500,8 +494,7 @@ async function hydrateCoinbasePositions(): Promise<void> {
   const holdings = findNonStableHoldings(balance);
   if (holdings.length === 0) return;
 
-  console.log(`[trade] found ${holdings.length} crypto holdings on coinbase — blocking new coinbase trades until resolved`);
-  exchangesHoldingCrypto.add('coinbase');
+  console.log(`[trade] found ${holdings.length} crypto holdings on coinbase`);
 
   for (const holding of holdings) {
     const pair = `${holding.asset}-USD`;
@@ -521,8 +514,7 @@ async function hydrateBinancePositions(): Promise<void> {
   const holdings = findNonStableHoldings(balance);
   if (holdings.length === 0) return;
 
-  console.log(`[trade] found ${holdings.length} crypto holdings on binance-us — blocking new binance-us trades until resolved`);
-  exchangesHoldingCrypto.add('binance-us');
+  console.log(`[trade] found ${holdings.length} crypto holdings on binance-us`);
 
   for (const holding of holdings) {
     const pair = `${holding.asset}-USD`;
@@ -545,10 +537,6 @@ async function hydrateBinancePositions(): Promise<void> {
 async function hydrateFromExchange() {
   if (hydratedExchanges.size === 3) return;
 
-  if (hydratedExchanges.size === 0) {
-    exchangesHoldingCrypto.clear();
-  }
-
   const steps: Array<{ exchange: string; fn: () => Promise<void> }> = [
     { exchange: 'kraken', fn: hydrateKrakenPositions },
     { exchange: 'coinbase', fn: hydrateCoinbasePositions },
@@ -565,7 +553,7 @@ async function hydrateFromExchange() {
     }
   }
 
-  if (hydratedExchanges.size === steps.length && openPositions.size === 0 && exchangesHoldingCrypto.size === 0) {
+  if (hydratedExchanges.size === steps.length && openPositions.size === 0) {
     console.log('[trade] no crypto holdings found — starting clean');
   }
 }
@@ -659,11 +647,7 @@ export function getTradeStatus(): TradeStatus {
     const histEntries = [...histories.entries()].filter(([key]) => key.startsWith(`${exchange}:`));
     const readyPairs = histEntries.filter(([, hist]) => hist.length >= WARMUP_TICKS).length;
     const warmingPairs = histEntries.filter(([, hist]) => hist.length > 0 && hist.length < WARMUP_TICKS).length;
-    const blockedReason = exchangesHoldingCrypto.has(exchange)
-      ? 'holding crypto'
-      : openCount > 0
-        ? 'open position'
-        : null;
+    const blockedReason = openCount > 0 ? 'open position' : null;
     return { exchange, readyPairs, warmingPairs, openPositions: openCount, blockedReason };
   });
 
