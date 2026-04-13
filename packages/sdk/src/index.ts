@@ -36,6 +36,7 @@ export class B1dzClient {
   private tokens: Tokens;
   private onRefresh?: (tokens: Tokens) => void | Promise<void>;
   private apiVersion: string | null = null;
+  private refreshInFlight: Promise<boolean> | null = null;
 
   constructor(opts: B1dzClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
@@ -52,7 +53,21 @@ export class B1dzClient {
     return this.apiVersion;
   }
 
+  private accessTokenExpiresSoon(): boolean {
+    try {
+      const [, payload] = this.tokens.accessToken.split('.');
+      if (!payload) return false;
+      const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
+      if (!json.exp) return false;
+      return json.exp <= Math.floor(Date.now() / 1000) + 30;
+    } catch {
+      return false;
+    }
+  }
+
   private async refresh(): Promise<boolean> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = (async () => {
     const res = await fetch(`${this.baseUrl}/api/auth/refresh`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -65,9 +80,18 @@ export class B1dzClient {
     this.tokens = { accessToken: session.access_token, refreshToken: session.refresh_token };
     if (this.onRefresh) await this.onRefresh(this.tokens);
     return true;
+    })();
+    try {
+      return await this.refreshInFlight;
+    } finally {
+      this.refreshInFlight = null;
+    }
   }
 
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    if (this.accessTokenExpiresSoon()) {
+      await this.refresh();
+    }
     const exec = async () => fetch(`${this.baseUrl}${path}`, {
       method,
       headers: {
