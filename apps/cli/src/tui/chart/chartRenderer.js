@@ -57,6 +57,7 @@ export function renderChart({
   const plotRows = Math.max(6, height - 2);
   const rightLabelWidth = 12;
   const plotWidth = Math.max(12, headerWidth - rightLabelWidth - 1);
+  const barStride = 3;
   const glyphs = ascii ? ASCII_GLYPHS : UNICODE_GLYPHS;
 
   if (!bars.length) {
@@ -67,14 +68,14 @@ export function renderChart({
     ].join('\n');
   }
 
-  const visibleCount = Math.max(10, Math.floor(plotWidth / 2));
+  const visibleCount = Math.max(8, Math.floor(plotWidth / barStride));
   const visibleBars = bars.slice(-visibleCount);
   const { min, max } = computePriceRange({ bars: visibleBars, markers, position, currentPrice });
   const grid = makeGrid(plotRows, plotWidth + rightLabelWidth);
 
   for (let index = 0; index < visibleBars.length; index += 1) {
     const bar = visibleBars[index];
-    const x = index * 2 + 1;
+    const x = index * barStride + 1;
     if (x >= plotWidth) break;
     const highRow = priceToRow(bar.high, min, max, plotRows);
     const lowRow = priceToRow(bar.low, min, max, plotRows);
