@@ -4,8 +4,6 @@ import { drawMarkers } from './markerRenderer.js';
 
 const UNICODE_GLYPHS = {
   vert: '│',
-  high: '╻',
-  low: '╹',
   open: '├',
   close: '┤',
   line: '─',
@@ -16,8 +14,6 @@ const UNICODE_GLYPHS = {
 
 const ASCII_GLYPHS = {
   vert: '|',
-  high: '^',
-  low: 'v',
   open: '[',
   close: ']',
   line: '-',
@@ -88,8 +84,6 @@ export function renderChart({
     for (let row = Math.min(highRow, lowRow); row <= Math.max(highRow, lowRow); row += 1) {
       if (grid[row]?.[x] != null) grid[row][x] = colorize(glyphs.vert, color);
     }
-    if (grid[highRow]?.[x] != null) grid[highRow][x] = colorize(glyphs.high, color);
-    if (grid[lowRow]?.[x] != null) grid[lowRow][x] = colorize(glyphs.low, color);
     if (grid[openRow]?.[x - 1] != null) grid[openRow][x - 1] = colorize(glyphs.open, color);
     if (grid[closeRow]?.[x + 1] != null) grid[closeRow][x + 1] = colorize(glyphs.close, color);
   }
