@@ -280,6 +280,18 @@ function latestSnapshotFor(exchange: string, pair: string): MarketSnapshot | nul
   return histories.get(`${exchange}:${pair}`)?.at(-1) ?? null;
 }
 
+function latestUsdBidForPair(pair: string, preferredExchange: string): number {
+  const preferred = latestSnapshotFor(preferredExchange, pair)?.bid;
+  if (Number.isFinite(preferred) && preferred! > 0) return preferred!;
+  for (const [key, history] of histories.entries()) {
+    const [, historyPair] = key.split(':');
+    if (historyPair !== pair) continue;
+    const bid = history.at(-1)?.bid;
+    if (Number.isFinite(bid) && bid! > 0) return bid!;
+  }
+  return 0;
+}
+
 function clearTrackedPosition(posKey: string, exchange: string) {
   openPositions.delete(posKey);
 }
@@ -303,6 +315,53 @@ async function actualBaseBalanceFor(exchange: string, pair: string): Promise<num
     return Math.max(0, parseFloat(bal[base] ?? '0'));
   }
   return 0;
+}
+
+async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPair: string): Promise<boolean> {
+  if (hasPositionOnExchange(exchange)) return false;
+
+  let balance: Record<string, string> = {};
+  if (exchange === 'kraken') {
+    balance = await getKrakenBalance();
+  } else if (exchange === 'coinbase') {
+    balance = await getCoinbaseBalance();
+  } else if (exchange === 'binance-us') {
+    balance = await getBinanceBalance();
+  }
+
+  const candidates = findNonStableHoldings(balance)
+    .map((holding) => {
+      const pair = exchange === 'kraken' ? krakenPairForAsset(holding.asset) : `${holding.asset}-USD`;
+      const key = `${exchange}:${pair}`;
+      if (pair === targetPair) return null;
+      if (openPositions.has(key)) return null;
+      const bid = latestUsdBidForPair(pair, exchange);
+      const usdValue = holding.amount * bid;
+      if (!Number.isFinite(usdValue) || usdValue < MIN_SPENDABLE_QUOTE_USD) return null;
+      return { asset: holding.asset, pair, amount: holding.amount, bid, usdValue };
+    })
+    .filter((item): item is { asset: string; pair: string; amount: number; bid: number; usdValue: number } => !!item)
+    .sort((a, b) => b.usdValue - a.usdValue);
+
+  const candidate = candidates[0];
+  if (!candidate) return false;
+
+  const availableBase = await actualBaseBalanceFor(exchange, candidate.pair);
+  const sellVolume = Math.min(candidate.amount, availableBase * 0.995);
+  if (!Number.isFinite(sellVolume) || sellVolume <= 0) return false;
+
+  console.log(`[trade] FREE FUNDS ${exchange}:${candidate.pair} value≈$${candidate.usdValue.toFixed(2)} to fund ${targetPair}`);
+  if (exchange === 'kraken') {
+    const krakenPair = candidate.pair.replace('-', '').replace('BTC', 'XBT');
+    await placeKrakenOrder({ pair: krakenPair, type: 'sell', ordertype: 'market', volume: sellVolume.toFixed(8) });
+  } else if (exchange === 'coinbase') {
+    await placeCoinbaseOrder({ productId: candidate.pair, side: 'SELL', size: sellVolume.toFixed(8) });
+  } else if (exchange === 'binance-us') {
+    const symbol = candidate.pair.replace('-', '');
+    await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
+  }
+  pendingLiquidations.delete(`${exchange}:${candidate.pair}`);
+  return true;
 }
 
 function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): Opportunity | null {
@@ -1139,6 +1198,24 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
         }
       } catch {}
+      if (availableQuote < MIN_SPENDABLE_QUOTE_USD) {
+        try {
+          const freed = await maybeLiquidateUntrackedHoldingForFunds(exchange, pair);
+          if (freed) {
+            lastQuoteBalanceRefresh = 0;
+            await refreshSpendableQuoteBalances();
+            if (exchange === 'kraken') {
+              availableQuote = await maybeAutoConvertKrakenQuote(quoteAsset, MAX_POSITION_USD);
+            } else if (exchange === 'coinbase') {
+              availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
+            } else if (exchange === 'binance-us') {
+              availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
+            }
+          }
+        } catch (freeError) {
+          console.log(`[trade] FREE FUNDS FAILED ${exchange}: ${(freeError as Error).message}`);
+        }
+      }
       if (availableQuote < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
