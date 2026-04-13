@@ -23,6 +23,8 @@ const subscribedPairs = new Set<string>();
 let initialized = false;
 const krakenSubscribedSymbols = new Set<string>();
 const coinbaseSubscribedPairs = new Set<string>();
+const binanceSubscribedSymbols = new Set<string>();
+let binanceRequestId = 1;
 
 let wsLogger: ((msg: string) => void) | null = null;
 export function setWsLogger(fn: ((msg: string) => void) | null) { wsLogger = fn; }
@@ -208,16 +210,30 @@ function connectCoinbase(pairs: string[]) {
 
 let binanceWs: WebSocket | null = null;
 
+function subscribeBinancePairs(ws: WebSocket, pairs: string[]) {
+  const nextSymbols = pairs
+    .map((p) => `${normalizePair(p, 'binance-us').toLowerCase()}@bookTicker`)
+    .filter((symbol) => !binanceSubscribedSymbols.has(symbol));
+  if (nextSymbols.length === 0) return;
+  for (const symbol of nextSymbols) binanceSubscribedSymbols.add(symbol);
+  ws.send(JSON.stringify({
+    method: 'SUBSCRIBE',
+    params: nextSymbols,
+    id: binanceRequestId++,
+  }));
+}
+
 function connectBinance(pairs: string[]) {
   if (binanceWs) return;
-  const streams = pairs.map((p) => `${normalizePair(p, 'binance-us').toLowerCase()}@bookTicker`);
-  const url = `wss://stream.binance.us:9443/stream?streams=${streams.join('/')}`;
+  const url = 'wss://stream.binance.us:9443/ws';
   const ws = new WebSocket(url);
   binanceWs = ws;
 
   ws.on('open', () => {
     if (binanceWs !== ws) return;
+    binanceSubscribedSymbols.clear();
     wsLog('[ws] binance.us connected');
+    subscribeBinancePairs(ws, pairs);
     const pingTimer = setInterval(() => {
       if (binanceWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
@@ -227,7 +243,7 @@ function connectBinance(pairs: string[]) {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
-      const data = msg.data;
+      const data = msg.data ?? msg;
       if (data?.s && data?.b && data?.a) {
         const pair = currentCanonicalPair('binance-us', data.s);
         if (pair) {
@@ -244,7 +260,8 @@ function connectBinance(pairs: string[]) {
     wsLog('[ws] ✗ binance.us disconnected, reconnecting in 5s...');
     if (binanceWs === ws) {
       binanceWs = null;
-      setTimeout(() => connectBinance(pairs), 5000);
+      binanceSubscribedSymbols.clear();
+      setTimeout(() => connectBinance([...subscribedPairs]), 5000);
     }
   });
 
@@ -266,9 +283,10 @@ export function subscribe(pairs: string[]) {
   for (const p of newPairs) subscribedPairs.add(p);
   const allPairs = [...subscribedPairs];
   if (!initialized) {
-    wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase (binance uses REST/proxy)`);
+    wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase + binance.us`);
     connectKraken(allPairs);
     connectCoinbase(allPairs);
+    connectBinance(allPairs);
     initialized = true;
     return;
   }
@@ -280,6 +298,8 @@ export function subscribe(pairs: string[]) {
   else connectKraken(allPairs);
   if (coinbaseWs?.readyState === WebSocket.OPEN) subscribeCoinbasePairs(coinbaseWs, newPairs);
   else connectCoinbase(allPairs);
+  if (binanceWs?.readyState === WebSocket.OPEN) subscribeBinancePairs(binanceWs, newPairs);
+  else connectBinance(allPairs);
   initialized = true;
 }
 

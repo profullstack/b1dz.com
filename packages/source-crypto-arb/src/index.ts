@@ -205,7 +205,13 @@ export const cryptoArbSource: Source<ArbItem> = {
     const items: ArbItem[] = [];
     for (const pair of PAIRS) {
       const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair))))
-        .filter((s): s is MarketSnapshot => s != null);
+        .filter((s): s is MarketSnapshot => (
+          s != null
+          && Number.isFinite(s.bid)
+          && Number.isFinite(s.ask)
+          && s.bid > 0
+          && s.ask > 0
+        ));
       if (snaps.length >= 2) {
         items.push({ pair, snapshots: snaps });
       }
