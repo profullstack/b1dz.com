@@ -701,7 +701,7 @@ function DashboardInner() {
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
-  const chartH = Math.max(10, Math.min(16, screenRows - 2 - posH - row2H - row3H - 8));
+  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - row2H - row3H - 6));
   const chartTop = 2 + posH;
   const primaryChartWidthPct = 39;
   const secondaryChartWidthPct = 39;
