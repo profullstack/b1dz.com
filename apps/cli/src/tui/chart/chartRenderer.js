@@ -4,8 +4,9 @@ import { drawMarkers } from './markerRenderer.js';
 
 const UNICODE_GLYPHS = {
   vert: '│',
-  open: '├',
-  close: '┤',
+  open: '┤',
+  close: '├',
+  both: '┼',
   line: '─',
   long: '▲',
   short: '▼',
@@ -14,8 +15,9 @@ const UNICODE_GLYPHS = {
 
 const ASCII_GLYPHS = {
   vert: '|',
-  open: '[',
-  close: ']',
+  open: '|',
+  close: '|',
+  both: '|',
   line: '-',
   long: '^',
   short: 'v',
@@ -85,8 +87,12 @@ export function renderChart({
     for (let row = Math.min(highRow, lowRow); row <= Math.max(highRow, lowRow); row += 1) {
       if (grid[row]?.[x] != null) grid[row][x] = colorize(glyphs.vert, color);
     }
-    if (grid[openRow]?.[x - 1] != null) grid[openRow][x - 1] = colorize(glyphs.open, color);
-    if (grid[closeRow]?.[x + 1] != null) grid[closeRow][x + 1] = colorize(glyphs.close, color);
+    if (openRow === closeRow) {
+      if (grid[openRow]?.[x] != null) grid[openRow][x] = colorize(glyphs.both, color);
+    } else {
+      if (grid[openRow]?.[x] != null) grid[openRow][x] = colorize(glyphs.open, color);
+      if (grid[closeRow]?.[x] != null) grid[closeRow][x] = colorize(glyphs.close, color);
+    }
   }
 
   if (position?.isOpen && Number.isFinite(position.currentPrice)) {
