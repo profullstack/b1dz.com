@@ -24,9 +24,11 @@ import {
   getBinanceBalance,
   getCoinbaseFills,
   getBinanceTrades,
+  getBinanceTradingRules,
   hasBinanceTradingSymbol,
   hasCoinbaseTradingProduct,
   hasKrakenTradingPair,
+  getKrakenPairMinVolume,
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
@@ -170,6 +172,7 @@ const spendableQuoteBalances: Record<string, Record<string, number>> = {
   coinbase: {},
   'binance-us': {},
 };
+const minExecutableUsdByMarket = new Map<string, number>();
 
 const STABLES = new Set(['ZUSD', 'USDC', 'USDT', 'USD', 'BUSD']);
 const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
@@ -385,6 +388,33 @@ function spendableQuoteFor(exchange: string, pair: string): number {
     spendable += Math.max(0, spendableQuoteBalances[exchange]?.USDT ?? 0);
   }
   return spendable;
+}
+
+async function refreshMarketMinimums(pairs: string[]): Promise<void> {
+  const uniquePairs = [...new Set(pairs)];
+  for (const pair of uniquePairs) {
+    const priceCandidates = TRADE_FEEDS
+      .map(({ exchange }) => Number(histories.get(`${exchange}:${pair}`)?.at(-1)?.ask))
+      .filter((price): price is number => Number.isFinite(price) && price > 0);
+    const referencePrice = priceCandidates[0] ?? 0;
+
+    if (referencePrice > 0) {
+      const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      const krakenMinVolume = await getKrakenPairMinVolume(krakenPair);
+      if (Number.isFinite(krakenMinVolume) && krakenMinVolume && krakenMinVolume > 0) {
+        minExecutableUsdByMarket.set(`kraken:${pair}`, krakenMinVolume * referencePrice);
+      }
+
+      const binanceSymbol = pair.replace('-', '');
+      const binanceRules = await getBinanceTradingRules(binanceSymbol);
+      if (binanceRules) {
+        const minQtyUsd = binanceRules.minQty ? binanceRules.minQty * referencePrice : 0;
+        const minNotionalUsd = binanceRules.minNotional ?? 0;
+        const minUsd = Math.max(minQtyUsd, minNotionalUsd);
+        if (minUsd > 0) minExecutableUsdByMarket.set(`binance-us:${pair}`, minUsd);
+      }
+    }
+  }
 }
 
 async function maybeAutoConvertBinanceQuote(targetQuote: string, neededQuote: number): Promise<number> {
@@ -805,6 +835,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           }
         }
       }
+      await refreshMarketMinimums(PAIRS);
       if (tradePollCount % 4 === 0) {
         const status = getTradeStatus();
         const summary = status.exchangeStates.map((s) => {
@@ -933,6 +964,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // quote balance for this market.
       const spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
       if (spendableQuote < MIN_SPENDABLE_QUOTE_USD) return null;
+      const spendBudget = Math.min(spendableQuote, MAX_POSITION_USD) * 0.98;
+      const minExecutableUsd = minExecutableUsdByMarket.get(`${tradeExchange}:${item.pair}`) ?? 0;
+      if (minExecutableUsd > 0 && spendBudget < minExecutableUsd) return null;
 
       // Check profitability: need to clear round-trip fees with take-profit
       const roundTripFee = 2 * KRAKEN_TAKER_FEE; // 0.52%

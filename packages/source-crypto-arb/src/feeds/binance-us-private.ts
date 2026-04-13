@@ -76,6 +76,25 @@ export async function hasTradingSymbol(symbol: string): Promise<boolean> {
   return exchangeInfoBySymbol.get(symbol.toUpperCase())?.status === 'TRADING';
 }
 
+export interface BinanceTradingRules {
+  minQty: number | null;
+  minNotional: number | null;
+}
+
+export async function getTradingRules(symbol: string): Promise<BinanceTradingRules | null> {
+  await syncExchangeInfo();
+  const info = exchangeInfoBySymbol.get(symbol.toUpperCase());
+  if (!info) return null;
+  const lotSize = info.filters.find((f) => f.filterType === 'LOT_SIZE');
+  const minNotionalFilter = info.filters.find((f) => f.filterType === 'MIN_NOTIONAL');
+  const minQty = parseFloat(lotSize?.minQty ?? '');
+  const minNotional = parseFloat(minNotionalFilter?.minNotional ?? '');
+  return {
+    minQty: Number.isFinite(minQty) && minQty > 0 ? minQty : null,
+    minNotional: Number.isFinite(minNotional) && minNotional > 0 ? minNotional : null,
+  };
+}
+
 async function syncExchangeInfo(force = false): Promise<void> {
   if (!force && Date.now() - exchangeInfoFetchedAt < EXCHANGE_INFO_TTL_MS && exchangeInfoBySymbol.size > 0) return;
   const res = await proxyFetch(`${BASE}/api/v3/exchangeInfo`);
