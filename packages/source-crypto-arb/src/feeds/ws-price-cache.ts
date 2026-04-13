@@ -25,8 +25,14 @@ const subscribedPairs = new Set<string>();
 let initialized = false;
 
 let wsLogger: ((msg: string) => void) | null = null;
-export function setWsLogger(fn: (msg: string) => void) { wsLogger = fn; }
-function wsLog(msg: string) { wsLogger?.(msg); console.log(msg); }
+export function setWsLogger(fn: ((msg: string) => void) | null) { wsLogger = fn; }
+function wsLog(msg: string) {
+  if (wsLogger) {
+    wsLogger(msg);
+    return;
+  }
+  console.log(msg);
+}
 
 function cacheKey(exchange: string, pair: string): string {
   return `${exchange}:${pair}`;

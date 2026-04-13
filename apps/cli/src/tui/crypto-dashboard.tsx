@@ -4,6 +4,7 @@ import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
+import { setWsLogger } from '@b1dz/source-crypto-arb';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
@@ -213,6 +214,11 @@ function DashboardInner() {
       return next;
     });
   };
+
+  useEffect(() => {
+    setWsLogger((msg) => addLog(msg));
+    return () => setWsLogger(null);
+  }, []);
 
   const selectChartPair = (next: string) => {
     setChartPair(next);
