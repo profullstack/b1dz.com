@@ -34,6 +34,18 @@ function timeframeToBinanceInterval(timeframe) {
   }[timeframe] ?? '1m';
 }
 
+function timeframeToCoinbaseExchangeGranularity(timeframe) {
+  return {
+    '1m': 60,
+    '5m': 300,
+    '15m': 900,
+    '1h': 3600,
+    '4h': 14400,
+    '1d': 86400,
+    '1w': 86400,
+  }[timeframe] ?? 60;
+}
+
 function chooseCoinbaseFetchTimeframe(timeframe) {
   if (timeframe === '4h') return { fetchTimeframe: '1h', aggregate: '4h' };
   if (timeframe === '1w') return { fetchTimeframe: '1d', aggregate: '1w' };
@@ -91,21 +103,21 @@ export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 1
 
     if (exchange === 'coinbase') {
       const { fetchTimeframe, aggregate } = chooseCoinbaseFetchTimeframe(timeframe);
-      const granularity = COINBASE_GRANULARITY[fetchTimeframe];
+      const granularity = timeframeToCoinbaseExchangeGranularity(fetchTimeframe);
       const seconds = TIMEFRAME_TO_MS[fetchTimeframe] / 1000;
       const end = Math.floor(Date.now() / 1000);
       const start = end - Math.max(1, limit) * seconds;
       const data = await fetchJson(
-        `https://api.coinbase.com/api/v3/brokerage/products/${pair}/candles?granularity=${granularity}&start=${start}&end=${end}`,
+        `https://api.exchange.coinbase.com/products/${pair}/candles?granularity=${granularity}&start=${start}&end=${end}`,
       );
-      const rawBars = (data?.candles ?? [])
+      const rawBars = (Array.isArray(data) ? data : [])
         .map((row) => ({
-          time: Number(row.start) * 1000,
-          open: Number(row.open),
-          high: Number(row.high),
-          low: Number(row.low),
-          close: Number(row.close),
-          volume: Number(row.volume ?? 0),
+          time: Number(row[0]) * 1000,
+          low: Number(row[1]),
+          high: Number(row[2]),
+          open: Number(row[3]),
+          close: Number(row[4]),
+          volume: Number(row[5] ?? 0),
         }))
         .filter((bar) => Number.isFinite(bar.close))
         .sort((a, b) => a.time - b.time);
