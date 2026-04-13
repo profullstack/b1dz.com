@@ -136,6 +136,8 @@ function safeCount(...values: unknown[]): number {
   return 0;
 }
 
+const DUST_USD_THRESHOLD = 1;
+
 function formatUsdPrice(value: number): string {
   if (!Number.isFinite(value)) return '-';
   if (Math.abs(value) >= 1000) return value.toFixed(2);
@@ -447,7 +449,7 @@ function DashboardInner() {
     ['binance-us', binanceHoldings],
   ] as const) {
     for (const holding of holdings) {
-      if (holding.isStable) continue;
+      if (holding.isStable || holding.usdValue < DUST_USD_THRESHOLD) continue;
       const pair = `${holding.asset}-USD`;
       const key = `${exchange}:${pair}`;
       if (seenTracked.has(key)) continue;
@@ -465,19 +467,20 @@ function DashboardInner() {
       seenTracked.add(key);
     }
   }
+  const visiblePositions = displayedPositions.filter((pos) => ((pos.currentPrice ?? 0) * (pos.volume ?? 0)) >= DUST_USD_THRESHOLD);
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
-  const posStr = displayedPositions.length === 0
+  const posStr = visiblePositions.length === 0
     ? '{white-fg}no position{/}'
-    : displayedPositions.length === 1
-      ? `{cyan-fg}${displayedPositions[0].exchange}:${displayedPositions[0].pair}{/}`
-      : `{cyan-fg}${displayedPositions.length} positions{/}`;
+    : visiblePositions.length === 1
+      ? `{cyan-fg}${visiblePositions[0].exchange}:${visiblePositions[0].pair}{/}`
+      : `{cyan-fg}${visiblePositions.length} positions{/}`;
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
-    ...displayedPositions.map((pos) => pos.pair),
+    ...visiblePositions.map((pos) => pos.pair),
     ...Object.keys(ts?.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':')),
     ...prices.map((price) => price.pair),
     ...closedTrades.map((trade) => trade.pair),
@@ -522,7 +525,7 @@ function DashboardInner() {
   const posLines: string[] = [
     '{bold} Exch        Pair             Coins        Value       Entry        Last         PnL               Stop        Age{/bold}',
   ];
-  for (const pos of displayedPositions) {
+  for (const pos of visiblePositions) {
     const volume = typeof pos.volume === 'number' && Number.isFinite(pos.volume) ? pos.volume : 0;
     const currentPrice = typeof pos.currentPrice === 'number' && Number.isFinite(pos.currentPrice) ? pos.currentPrice : 0;
     const currentValue = volume * currentPrice;
@@ -549,7 +552,7 @@ function DashboardInner() {
       posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
     }
   }
-  if (displayedPositions.length === 0) {
+  if (visiblePositions.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
   }
 

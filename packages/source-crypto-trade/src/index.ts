@@ -164,6 +164,7 @@ let krakenHydrationBlockedUntil = 0;
 const KRAKEN_HYDRATION_LOCKOUT_MS = 15 * 60_000;
 const QUOTE_BALANCE_REFRESH_MS = 60_000;
 const MIN_SPENDABLE_QUOTE_USD = 5;
+const DUST_USD_THRESHOLD = 1;
 const spendableQuoteBalances: Record<string, Record<string, number>> = {
   kraken: {},
   coinbase: {},
@@ -674,22 +675,24 @@ export function getTradeStatus(): TradeStatus {
   const trackedDailyPnl = closedTrades
     .filter((trade) => trade.exitTime >= todayStart.getTime())
     .reduce((sum, trade) => sum + trade.netPnl, 0);
-  const positions = [...openPositions.values()].map((pos) => {
-    const currentPrice = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1)?.bid ?? pos.entryPrice;
-    const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
-    const pnlUsd = (currentPrice - pos.entryPrice) * pos.volume;
-    return {
-      exchange: pos.exchange,
-      pair: pos.pair,
-      entryPrice: pos.entryPrice,
-      currentPrice,
-      volume: pos.volume,
-      pnlPct,
-      pnlUsd,
-      stopPrice: trailingStopPrice(pos),
-      elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
-    };
-  });
+  const positions = [...openPositions.values()]
+    .map((pos) => {
+      const currentPrice = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1)?.bid ?? pos.entryPrice;
+      const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+      const pnlUsd = (currentPrice - pos.entryPrice) * pos.volume;
+      return {
+        exchange: pos.exchange,
+        pair: pos.pair,
+        entryPrice: pos.entryPrice,
+        currentPrice,
+        volume: pos.volume,
+        pnlPct,
+        pnlUsd,
+        stopPrice: trailingStopPrice(pos),
+        elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+      };
+    })
+    .filter((pos) => (pos.currentPrice * pos.volume) >= DUST_USD_THRESHOLD);
   const pos = positions[0] ?? null;
   const cooldowns: { pair: string; remainingSec: number }[] = [];
   for (const [pair, exitTime] of lastExitAt) {
