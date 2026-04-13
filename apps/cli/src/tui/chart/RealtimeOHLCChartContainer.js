@@ -30,6 +30,7 @@ export function RealtimeOHLCChartContainer({
   timeframe = '1m',
   defaultTimeframe = '1m',
   width = 80,
+  boxWidth = '100%',
   height = 12,
   positions = [],
   closedTrades = [],
@@ -131,7 +132,7 @@ export function RealtimeOHLCChartContainer({
   return React.createElement(OHLCChart, {
     top,
     left,
-    width: '100%',
+    width: boxWidth,
     height,
     renderWidth: width,
     renderHeight: height - 2,

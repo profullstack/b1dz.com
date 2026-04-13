@@ -609,8 +609,11 @@ function DashboardInner() {
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
-  const chartH = Math.max(8, Math.min(14, screenRows - 2 - posH - row2H - row3H - 8));
+  const chartH = Math.max(10, Math.min(16, screenRows - 2 - posH - row2H - row3H - 8));
   const chartTop = 2 + posH;
+  const chartPaneWidthPct = 58;
+  const chartControlsWidthPct = 42;
+  const chartRenderWidth = Math.max(44, Math.floor((process.stdout.columns ?? 120) * 0.52));
   const footerTop = 2 + posH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
@@ -684,25 +687,42 @@ function DashboardInner() {
         top={chartTop}
         left={0}
         height={chartH}
-        width={(process.stdout.columns ?? 120) - 4}
-        label={` OHLC Chart  ${activeChartPair} @ ${chartExchange}  TF:${chartTimeframe}  Pair ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}  [1-7] tf [,/.] pair `}
+        width={chartRenderWidth}
+        boxWidth={`${chartPaneWidthPct}%`}
+        label={` OHLC Chart  ${activeChartPair} @ ${chartExchange}  TF:${chartTimeframe} `}
         pair={activeChartPair}
         exchange={chartExchange}
         timeframe={chartTimeframe}
         positions={positions as any}
         closedTrades={closedTrades as any}
       />
-      <ClickablePair
+      <box
         top={chartTop}
-        left={3}
+        left={`${chartPaneWidthPct}%`}
+        width={`${chartControlsWidthPct}%`}
+        height={chartH}
+        border={{ type: 'line' }}
+        tags={true}
+        style={{ border: { fg: 'cyan' }, bg: 'black', fg: 'white' }}
+        content={[
+          ` Pair ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}`,
+          ` Exchange: ${chartExchange}`,
+          ` Controls: click pair or timeframe`,
+          '',
+          ' Timeframe',
+        ].join('\n')}
+      />
+      <ClickablePair
+        top={chartTop + 1}
+        left={`${chartPaneWidthPct}%+2`}
         pair={activeChartPair}
         active={true}
         onSelect={selectChartPair}
-        width={activeChartPair.length + 2}
+        width={Math.max(activeChartPair.length + 2, 12)}
       />
       <box
-        top={chartTop}
-        left={18}
+        top={chartTop + 5}
+        left={`${chartPaneWidthPct}%+2`}
         width={12}
         height={1}
         mouse={true}
@@ -714,8 +734,8 @@ function DashboardInner() {
       />
       {showTimeframeMenu && (
         <box
-          top={chartTop + 1}
-          left={18}
+          top={chartTop + 6}
+          left={`${chartPaneWidthPct}%+2`}
           width={12}
           height={CHART_TIMEFRAMES.length + 2}
           border={{ type: 'line' }}
@@ -739,19 +759,23 @@ function DashboardInner() {
         </box>
       )}
       <box
-        top={chartTop}
-        left={32}
-        width={Math.min((process.stdout.columns ?? 120) - 40, 80)}
-        height={1}
+        top={chartTop + 5}
+        left={`${chartPaneWidthPct}%+16`}
+        width={Math.max(16, Math.floor(((process.stdout.columns ?? 120) * chartControlsWidthPct) / 100) - 18)}
+        height={chartH - 6}
+        scrollable={true}
         mouse={true}
+        keys={true}
+        vi={true}
+        alwaysScroll={true}
         tags={true}
         style={{ bg: 'black', fg: 'white' }}
       >
         {displayPricePairs.map((pair, index) => (
           <ClickablePair
             key={`chart-pair-${pair}`}
-            top={0}
-            left={index * 12}
+            top={index}
+            left={0}
             pair={pair}
             active={pair === activeChartPair}
             onSelect={selectChartPair}
