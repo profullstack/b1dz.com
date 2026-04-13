@@ -945,6 +945,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         const pnlPct = (item.snap.bid - pos.entryPrice) / pos.entryPrice;
         const stopPrice = trailingStopPrice(pos);
         const elapsed = Date.now() - pos.entryTime;
+        const notional = item.snap.bid * pos.volume;
+        const minExecutableUsd = minExecutableUsdByMarket.get(`${item.exchange}:${item.pair}`) ?? 0;
+
+        if (notional < DUST_USD_THRESHOLD || (minExecutableUsd > 0 && notional < minExecutableUsd)) {
+          openPositions.delete(posKey);
+          console.log(`[trade] CLEAR DUST ${item.exchange}:${item.pair} value=$${notional.toFixed(2)} min=$${minExecutableUsd.toFixed(2)}`);
+          return null;
+        }
 
         let exitReason = '';
 
@@ -1177,7 +1185,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           return { ok: true, message: `sold ${sellVolume.toFixed(8)} on ${exchange} net=$${netPnl.toFixed(4)}` };
         } catch (e) {
           const msg = (e as Error).message;
-          if (msg.includes('below minQty')) {
+          if (msg.includes('below minQty') || msg.includes('MIN_NOTIONAL')) {
             clearTrackedPosition(posKey, exchange);
           }
           console.error(`[trade] SELL FAILED ${exchange}: ${msg}`);
