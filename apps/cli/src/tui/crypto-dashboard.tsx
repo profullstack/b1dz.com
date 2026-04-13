@@ -204,8 +204,10 @@ function DashboardInner() {
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
   const [chartPair, setChartPair] = useState<string | null>(null);
+  const [chartPairB, setChartPairB] = useState<string | null>(null);
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('1m');
   const [showTimeframeMenu, setShowTimeframeMenu] = useState(false);
+  const [chartTarget, setChartTarget] = useState<'A' | 'B'>('A');
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -221,9 +223,10 @@ function DashboardInner() {
   }, []);
 
   const selectChartPair = (next: string) => {
-    setChartPair(next);
+    if (chartTarget === 'A') setChartPair(next);
+    else setChartPairB(next);
     setShowTimeframeMenu(false);
-    addLog(`{cyan-fg}Chart{/cyan-fg} pair → ${next}`);
+    addLog(`{cyan-fg}Chart ${chartTarget}{/cyan-fg} pair → ${next}`);
   };
 
   const selectChartTimeframe = (next: ChartTimeframe) => {
@@ -405,6 +408,13 @@ function DashboardInner() {
   const activeChartPair = chartPairs.includes(chartPair ?? '') ? chartPair! : (chartPairs[0] ?? 'BTC-USD');
   const chartExchange = preferredChartExchange(activeChartPair, positions, prices, closedTrades);
   const chartPairIdx = chartPairs.indexOf(activeChartPair);
+  const fallbackSecondary = chartPairs.length > 1
+    ? chartPairs[(Math.max(chartPairIdx, 0) + 1) % chartPairs.length]
+    : activeChartPair;
+  const secondaryChartPair = chartPairs.includes(chartPairB ?? '') && (chartPairB ?? '') !== activeChartPair
+    ? chartPairB!
+    : fallbackSecondary;
+  const secondaryChartExchange = preferredChartExchange(secondaryChartPair, positions, prices, closedTrades);
   const displayPricePairs = [...new Set(prices.map((price) => price.pair))].slice(0, 8);
 
   useEffect(() => {
@@ -413,6 +423,13 @@ function DashboardInner() {
       setChartPair(chartPairs[0]);
     }
   }, [chartPairs, chartPair]);
+  useEffect(() => {
+    if (!chartPairs.length) return;
+    if (!chartPairB || !chartPairs.includes(chartPairB) || chartPairB === activeChartPair) {
+      const next = chartPairs.find((pair) => pair !== activeChartPair) ?? activeChartPair;
+      setChartPairB(next);
+    }
+  }, [chartPairs, chartPairB, activeChartPair]);
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [];
@@ -611,9 +628,10 @@ function DashboardInner() {
   const screenRows = process.stdout.rows ?? 40;
   const chartH = Math.max(10, Math.min(16, screenRows - 2 - posH - row2H - row3H - 8));
   const chartTop = 2 + posH;
-  const chartPaneWidthPct = 58;
-  const chartControlsWidthPct = 42;
-  const chartRenderWidth = Math.max(44, Math.floor((process.stdout.columns ?? 120) * 0.52));
+  const primaryChartWidthPct = 39;
+  const secondaryChartWidthPct = 39;
+  const chartControlsWidthPct = 22;
+  const chartRenderWidth = Math.max(34, Math.floor((process.stdout.columns ?? 120) * 0.33));
   const footerTop = 2 + posH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
@@ -688,41 +706,94 @@ function DashboardInner() {
         left={0}
         height={chartH}
         width={chartRenderWidth}
-        boxWidth={`${chartPaneWidthPct}%`}
-        label={` OHLC Chart  ${activeChartPair} @ ${chartExchange}  TF:${chartTimeframe} `}
+        boxWidth={`${primaryChartWidthPct}%`}
+        label={` Chart A  ${activeChartPair} @ ${chartExchange}  TF:${chartTimeframe} `}
         pair={activeChartPair}
         exchange={chartExchange}
         timeframe={chartTimeframe}
         positions={positions as any}
         closedTrades={closedTrades as any}
       />
+      <RealtimeOHLCChartContainer
+        top={chartTop}
+        left={`${primaryChartWidthPct}%` as any}
+        height={chartH}
+        width={chartRenderWidth}
+        boxWidth={`${secondaryChartWidthPct}%`}
+        label={` Chart B  ${secondaryChartPair} @ ${secondaryChartExchange}  TF:${chartTimeframe} `}
+        pair={secondaryChartPair}
+        exchange={secondaryChartExchange}
+        timeframe={chartTimeframe}
+        positions={positions as any}
+        closedTrades={closedTrades as any}
+      />
       <box
         top={chartTop}
-        left={`${chartPaneWidthPct}%`}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%`}
         width={`${chartControlsWidthPct}%`}
         height={chartH}
         border={{ type: 'line' }}
         tags={true}
         style={{ border: { fg: 'cyan' }, bg: 'black', fg: 'white' }}
         content={[
-          ` Pair ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}`,
-          ` Exchange: ${chartExchange}`,
+          ` Pair A ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}`,
+          ` A: ${activeChartPair} @ ${chartExchange}`,
+          ` B: ${secondaryChartPair} @ ${secondaryChartExchange}`,
+          ` Target: ${chartTarget}`,
           ` Controls: click pair or timeframe`,
           '',
           ' Timeframe',
         ].join('\n')}
       />
-      <ClickablePair
+      <box
         top={chartTop + 1}
-        left={`${chartPaneWidthPct}%+2`}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%+2`}
+        width={5}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => setChartTarget('A')}
+        style={{ bg: chartTarget === 'A' ? 'green' : 'black', fg: chartTarget === 'A' ? 'black' : 'white' }}
+        content=" A "
+      />
+      <box
+        top={chartTop + 1}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%+8`}
+        width={5}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => setChartTarget('B')}
+        style={{ bg: chartTarget === 'B' ? 'green' : 'black', fg: chartTarget === 'B' ? 'black' : 'white' }}
+        content=" B "
+      />
+      <ClickablePair
+        top={chartTop + 2}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%+2`}
         pair={activeChartPair}
-        active={true}
-        onSelect={selectChartPair}
+        active={chartTarget === 'A'}
+        onSelect={(pair) => {
+          setChartTarget('A');
+          setChartPair(pair);
+        }}
         width={Math.max(activeChartPair.length + 2, 12)}
+      />
+      <ClickablePair
+        top={chartTop + 3}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%+2`}
+        pair={secondaryChartPair}
+        active={chartTarget === 'B'}
+        onSelect={(pair) => {
+          setChartTarget('B');
+          setChartPairB(pair);
+        }}
+        width={Math.max(secondaryChartPair.length + 2, 12)}
       />
       <box
         top={chartTop + 5}
-        left={`${chartPaneWidthPct}%+2`}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%+2`}
         width={12}
         height={1}
         mouse={true}
@@ -735,7 +806,7 @@ function DashboardInner() {
       {showTimeframeMenu && (
         <box
           top={chartTop + 6}
-          left={`${chartPaneWidthPct}%+2`}
+          left={`${primaryChartWidthPct + secondaryChartWidthPct}%+2`}
           width={12}
           height={CHART_TIMEFRAMES.length + 2}
           border={{ type: 'line' }}
@@ -760,8 +831,8 @@ function DashboardInner() {
       )}
       <box
         top={chartTop + 5}
-        left={`${chartPaneWidthPct}%+16`}
-        width={Math.max(16, Math.floor(((process.stdout.columns ?? 120) * chartControlsWidthPct) / 100) - 18)}
+        left={`${primaryChartWidthPct + secondaryChartWidthPct}%+16`}
+        width={Math.max(12, Math.floor(((process.stdout.columns ?? 120) * chartControlsWidthPct) / 100) - 18)}
         height={chartH - 6}
         scrollable={true}
         mouse={true}
