@@ -38,6 +38,14 @@ function cacheKey(exchange: string, pair: string): string {
   return `${exchange}:${pair}`;
 }
 
+function currentCanonicalPair(exchange: string, symbol: string): string | null {
+  for (const pair of subscribedPairs) {
+    const normalized = normalizePair(pair, exchange);
+    if (symbol === normalized || symbol?.includes(normalized)) return pair;
+  }
+  return null;
+}
+
 export function getSnapshot(exchange: string, pair: string): MarketSnapshot | null {
   const entry = cache.get(cacheKey(exchange, pair));
   if (!entry || entry.stale) return null;
@@ -98,11 +106,7 @@ function connectKraken(pairs: string[]) {
       const msg = JSON.parse(raw.toString());
       if (msg.channel === 'ticker' && msg.type === 'update' && msg.data) {
         for (const tick of msg.data) {
-          // Find canonical pair from kraken symbol
-          const pair = pairs.find((p) => {
-            const norm = normalizePair(p, 'kraken');
-            return tick.symbol === norm || tick.symbol?.includes(norm);
-          });
+          const pair = currentCanonicalPair('kraken', tick.symbol);
           if (pair && tick.bid !== undefined && tick.ask !== undefined) {
             setPrice('kraken', pair,
               parseFloat(tick.bid), parseFloat(tick.ask),
@@ -119,7 +123,7 @@ function connectKraken(pairs: string[]) {
     if (krakenWs === ws) {
       krakenWs = null;
       krakenSubscribedSymbols.clear();
-      setTimeout(() => connectKraken(pairs), 5000);
+      setTimeout(() => connectKraken([...subscribedPairs]), 5000);
     }
   });
 
@@ -191,7 +195,7 @@ function connectCoinbase(pairs: string[]) {
     if (coinbaseWs === ws) {
       coinbaseWs = null;
       coinbaseSubscribedPairs.clear();
-      setTimeout(() => connectCoinbase(pairs), 5000);
+      setTimeout(() => connectCoinbase([...subscribedPairs]), 5000);
     }
   });
 
@@ -225,8 +229,7 @@ function connectBinance(pairs: string[]) {
       const msg = JSON.parse(raw.toString());
       const data = msg.data;
       if (data?.s && data?.b && data?.a) {
-        // Find canonical pair from binance symbol
-        const pair = pairs.find((p) => normalizePair(p, 'binance-us') === data.s);
+        const pair = currentCanonicalPair('binance-us', data.s);
         if (pair) {
           setPrice('binance-us', pair,
             parseFloat(data.b), parseFloat(data.a),
