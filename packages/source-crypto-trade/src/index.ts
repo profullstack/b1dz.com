@@ -20,6 +20,8 @@ import {
   placeCoinbaseOrder,
   placeBinanceOrder,
   getBalance as getKrakenBalance,
+  getOpenOrders as getKrakenOpenOrders,
+  cancelKrakenOrder,
   getCoinbaseBalance,
   getBinanceBalance,
   getCoinbaseFills,
@@ -167,6 +169,7 @@ const KRAKEN_HYDRATION_LOCKOUT_MS = 15 * 60_000;
 const QUOTE_BALANCE_REFRESH_MS = 60_000;
 const MIN_SPENDABLE_QUOTE_USD = 5;
 const DUST_USD_THRESHOLD = 1;
+const STALE_OPEN_BUY_ORDER_MS = 5 * 60_000;
 const spendableQuoteBalances: Record<string, Record<string, number>> = {
   kraken: {},
   coinbase: {},
@@ -343,9 +346,35 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
   lastQuoteBalanceRefresh = Date.now();
 
   try {
-    const bal = await getKrakenBalance();
+    const [bal, openOrders] = await Promise.all([getKrakenBalance(), getKrakenOpenOrders()]);
+    const now = Date.now();
+    let reservedUsd = 0;
+    for (const [txid, order] of Object.entries(openOrders ?? {})) {
+      const type = order?.descr?.type?.toLowerCase?.() ?? '';
+      const pair = order?.descr?.pair?.toUpperCase?.() ?? '';
+      const price = parseFloat(order?.descr?.price ?? '0');
+      const vol = parseFloat(order?.vol ?? '0');
+      const volExec = parseFloat(order?.vol_exec ?? '0');
+      const remaining = Math.max(0, vol - volExec);
+      const openAtMs = Number((order as { opentm?: number }).opentm ?? 0) * 1000;
+      if (type !== 'buy' || !(remaining > 0)) continue;
+      if (pair.endsWith('USD') && Number.isFinite(price) && price > 0) {
+        reservedUsd += remaining * price;
+      }
+      if (openAtMs > 0 && now - openAtMs > STALE_OPEN_BUY_ORDER_MS) {
+        try {
+          await cancelKrakenOrder(txid);
+          console.log(`[trade] canceled stale kraken buy order ${pair} txid=${txid}`);
+          if (pair.endsWith('USD') && Number.isFinite(price) && price > 0) {
+            reservedUsd = Math.max(0, reservedUsd - (remaining * price));
+          }
+        } catch (cancelError) {
+          console.log(`[trade] failed to cancel stale kraken order ${txid}: ${(cancelError as Error).message}`);
+        }
+      }
+    }
     spendableQuoteBalances.kraken = {
-      USD: parseFloat(bal.ZUSD ?? '0'),
+      USD: Math.max(0, parseFloat(bal.ZUSD ?? '0') - reservedUsd),
       USDC: parseFloat(bal.USDC ?? '0'),
       USDT: parseFloat(bal.USDT ?? '0'),
     };
@@ -1113,7 +1142,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (availableQuote < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
-      const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * 0.98;
+      const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+      const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * Math.max(0.9, 1 - feeRate - 0.02);
       if (spendBudget < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
@@ -1147,8 +1177,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
         return { ok: true, message: `bought ${volume.toFixed(8)} on ${exchange} @ ${price.toFixed(2)}` };
       } catch (e) {
-        console.error(`[trade] BUY FAILED ${exchange}: ${(e as Error).message}`);
-        return { ok: false, message: (e as Error).message };
+        const msg = (e as Error).message;
+        if (exchange === 'kraken' && msg.includes('Insufficient funds')) {
+          lastQuoteBalanceRefresh = 0;
+          try {
+            await refreshSpendableQuoteBalances();
+          } catch {}
+        }
+        console.error(`[trade] BUY FAILED ${exchange}: ${msg}`);
+        return { ok: false, message: msg };
       }
     },
   };
