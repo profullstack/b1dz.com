@@ -15,6 +15,7 @@ export function OHLCChart({
   exchange = 'kraken',
   timeframe = '1m',
   currentPrice = null,
+  currentPriceDirection = 'flat',
   lastUpdateTime = null,
   ascii = false,
   ...boxProps
@@ -28,6 +29,7 @@ export function OHLCChart({
     position,
     status,
     currentPrice,
+    currentPriceDirection,
     lastUpdateTime,
     width: renderWidth,
     height: renderHeight,

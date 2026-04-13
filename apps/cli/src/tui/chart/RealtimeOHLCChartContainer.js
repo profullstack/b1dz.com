@@ -46,6 +46,7 @@ export function RealtimeOHLCChartContainer({
   const [status, setStatus] = useState('bootstrapping');
   const [lastUpdateTime, setLastUpdateTime] = useState(null);
   const [currentPrice, setCurrentPrice] = useState(null);
+  const [currentPriceDirection, setCurrentPriceDirection] = useState('flat');
 
   const position = useMemo(() => {
     const active = positions.find((item) => item.exchange === exchange && item.pair === pair);
@@ -90,6 +91,7 @@ export function RealtimeOHLCChartContainer({
     setBars([]);
     setStatus('bootstrapping');
     setCurrentPrice(position.isOpen ? position.currentPrice : null);
+    setCurrentPriceDirection('flat');
     setLastUpdateTime(null);
 
     let stopLiveFeed = () => {};
@@ -115,7 +117,18 @@ export function RealtimeOHLCChartContainer({
           const changed = storeRef.current.applyTick(tick);
           if (!changed) return;
           setBars(storeRef.current.getBars());
-          setCurrentPrice(tick.price);
+          setCurrentPrice((prev) => {
+            setCurrentPriceDirection(
+              Number.isFinite(prev) && Number.isFinite(tick.price)
+                ? tick.price > prev
+                  ? 'up'
+                  : tick.price < prev
+                    ? 'down'
+                    : 'flat'
+                : 'flat',
+            );
+            return tick.price;
+          });
           setLastUpdateTime(tick.time);
         },
       });
@@ -148,6 +161,7 @@ export function RealtimeOHLCChartContainer({
     position,
     status,
     currentPrice,
+    currentPriceDirection,
     lastUpdateTime,
     ascii: process.env.B1DZ_ASCII_CHARTS === 'true',
   });

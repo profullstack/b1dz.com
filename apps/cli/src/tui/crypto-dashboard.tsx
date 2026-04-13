@@ -172,6 +172,7 @@ function ClickablePair({
   top,
   left,
   pair,
+  exchange,
   active,
   onSelect,
   width,
@@ -179,8 +180,9 @@ function ClickablePair({
   top: number;
   left: number | string;
   pair: string;
+  exchange?: string;
   active?: boolean;
-  onSelect: (pair: string) => void;
+  onSelect: (pair: string, exchange?: string) => void;
   width?: number;
 }) {
   return (
@@ -192,7 +194,7 @@ function ClickablePair({
       mouse={true}
       clickable={true}
       tags={true}
-      onClick={() => onSelect(pair)}
+      onClick={() => onSelect(pair, exchange)}
       style={{ bg: active ? 'cyan' : 'black', fg: active ? 'black' : 'white' }}
       content={` ${pair} `}
     />
@@ -213,6 +215,8 @@ function DashboardInner() {
   const [rawPage, setRawPage] = useState(0);
   const [chartPair, setChartPair] = useState<string | null>(null);
   const [chartPairB, setChartPairB] = useState<string | null>(null);
+  const [chartExchangeA, setChartExchangeA] = useState<string | null>(null);
+  const [chartExchangeB, setChartExchangeB] = useState<string | null>(null);
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('1m');
   const [showTimeframeMenu, setShowTimeframeMenu] = useState(false);
   const [chartTarget, setChartTarget] = useState<'A' | 'B'>('A');
@@ -230,11 +234,16 @@ function DashboardInner() {
     return () => setWsLogger(null);
   }, []);
 
-  const selectChartPair = (next: string) => {
-    if (chartTarget === 'A') setChartPair(next);
-    else setChartPairB(next);
+  const selectChartPair = (next: string, exchange?: string) => {
+    if (chartTarget === 'A') {
+      setChartPair(next);
+      setChartExchangeA(exchange ?? null);
+    } else {
+      setChartPairB(next);
+      setChartExchangeB(exchange ?? null);
+    }
     setShowTimeframeMenu(false);
-    addLog(`{cyan-fg}Chart ${chartTarget}{/cyan-fg} pair → ${next}`);
+    addLog(`{cyan-fg}Chart ${chartTarget}{/cyan-fg} pair → ${next}${exchange ? ` @ ${exchange}` : ''}`);
   };
 
   const selectChartTimeframe = (next: ChartTimeframe) => {
@@ -278,6 +287,7 @@ function DashboardInner() {
         const start = current && pairs.includes(current) ? pairs.indexOf(current) : 0;
         const next = pairs[(start + delta + pairs.length) % pairs.length];
         setShowTimeframeMenu(false);
+        setChartExchangeA(null);
         addLog(`{cyan-fg}Chart{/cyan-fg} pair → ${next}`);
         return next;
       });
@@ -472,7 +482,8 @@ function DashboardInner() {
     ...closedTrades.map((trade) => trade.pair),
   ])].filter(Boolean);
   const activeChartPair = chartPairs.includes(chartPair ?? '') ? chartPair! : (chartPairs[0] ?? 'BTC-USD');
-  const chartExchange = preferredChartExchange(activeChartPair, positions, prices, closedTrades);
+  const preferredPrimaryExchange = preferredChartExchange(activeChartPair, positions, prices, closedTrades);
+  const chartExchange = chartExchangeA ?? preferredPrimaryExchange;
   const chartPairIdx = chartPairs.indexOf(activeChartPair);
   const fallbackSecondary = chartPairs.length > 1
     ? chartPairs[(Math.max(chartPairIdx, 0) + 1) % chartPairs.length]
@@ -480,13 +491,15 @@ function DashboardInner() {
   const secondaryChartPair = chartPairs.includes(chartPairB ?? '') && (chartPairB ?? '') !== activeChartPair
     ? chartPairB!
     : fallbackSecondary;
-  const secondaryChartExchange = preferredChartExchange(secondaryChartPair, positions, prices, closedTrades);
+  const preferredSecondaryExchange = preferredChartExchange(secondaryChartPair, positions, prices, closedTrades);
+  const secondaryChartExchange = chartExchangeB ?? preferredSecondaryExchange;
   const displayPricePairs = [...new Set(prices.map((price) => price.pair))].slice(0, 8);
 
   useEffect(() => {
     if (!chartPairs.length) return;
     if (!chartPair || !chartPairs.includes(chartPair)) {
       setChartPair(chartPairs[0]);
+      setChartExchangeA(null);
     }
   }, [chartPairs, chartPair]);
   useEffect(() => {
@@ -494,6 +507,7 @@ function DashboardInner() {
     if (!chartPairB || !chartPairs.includes(chartPairB) || chartPairB === activeChartPair) {
       const next = chartPairs.find((pair) => pair !== activeChartPair) ?? activeChartPair;
       setChartPairB(next);
+      setChartExchangeB(null);
     }
   }, [chartPairs, chartPairB, activeChartPair]);
 
@@ -502,22 +516,28 @@ function DashboardInner() {
     '{bold} Exch        Pair             Volume        Entry        Last         PnL               Stop        Age{/bold}',
   ];
   for (const pos of displayedPositions) {
-    const pnlColor = pos.pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
+    const volume = typeof pos.volume === 'number' && Number.isFinite(pos.volume) ? pos.volume : 0;
+    const currentPrice = typeof pos.currentPrice === 'number' && Number.isFinite(pos.currentPrice) ? pos.currentPrice : 0;
+    const entryPrice = typeof pos.entryPrice === 'number' && Number.isFinite(pos.entryPrice) ? pos.entryPrice : 0;
+    const pnlPct = typeof pos.pnlPct === 'number' && Number.isFinite(pos.pnlPct) ? pos.pnlPct : 0;
+    const pnlUsd = typeof pos.pnlUsd === 'number' && Number.isFinite(pos.pnlUsd) ? pos.pnlUsd : 0;
+    const stopPrice = typeof pos.stopPrice === 'number' && Number.isFinite(pos.stopPrice) ? pos.stopPrice : 0;
+    const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
     const exColor = pos.exchange === 'kraken' ? '{cyan-fg}' : pos.exchange === 'coinbase' ? '{magenta-fg}' : '{yellow-fg}';
     const exchangeCell = padRight(pos.exchange, 10);
     const pairCell = padRight(pos.pair, 16);
-    const volumeCell = padLeft(pos.volume.toFixed(6), 12);
-    const lastCell = padLeft(`$${formatUsdPrice(pos.currentPrice)}`, 11);
-    if (pos.entryPrice > 0) {
-      const entryCell = padLeft(`$${formatUsdPrice(pos.entryPrice)}`, 11);
-      const pnlText = `${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(2)}% ($${pos.pnlUsd.toFixed(2)})`;
+    const volumeCell = padLeft(volume.toFixed(6), 12);
+    const lastCell = padLeft(`$${formatUsdPrice(currentPrice)}`, 11);
+    if (entryPrice > 0) {
+      const entryCell = padLeft(`$${formatUsdPrice(entryPrice)}`, 11);
+      const pnlText = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`;
       const pnlCell = padLeft(pnlText, 18);
-      const stopCell = padLeft(`$${formatUsdPrice(pos.stopPrice)}`, 11);
-      const ageCell = padLeft(pos.elapsed, 8);
+      const stopCell = padLeft(`$${formatUsdPrice(stopPrice)}`, 11);
+      const ageCell = padLeft(pos.elapsed ?? '-', 8);
       posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}`);
     } else {
       const statusCell = padRight('untracked holding', 18);
-      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed, 8)}`);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
     }
   }
   if (displayedPositions.length === 0) {
@@ -743,6 +763,7 @@ function DashboardInner() {
           top={4 + index}
           left={13}
           pair={pos.pair}
+          exchange={pos.exchange}
           active={pos.pair === activeChartPair}
           onSelect={selectChartPair}
           width={pos.pair.length + 2}
@@ -825,6 +846,7 @@ function DashboardInner() {
         onSelect={(pair) => {
           setChartTarget('A');
           setChartPair(pair);
+          setChartExchangeA(null);
         }}
         width={Math.max(activeChartPair.length + 2, 12)}
       />
@@ -836,6 +858,7 @@ function DashboardInner() {
         onSelect={(pair) => {
           setChartTarget('B');
           setChartPairB(pair);
+          setChartExchangeB(null);
         }}
         width={Math.max(secondaryChartPair.length + 2, 12)}
       />
@@ -912,6 +935,7 @@ function DashboardInner() {
           top={3 + posH + chartH + index}
           left={2}
           pair={s.pair}
+          exchange={s.buyExchange || undefined}
           active={s.pair === activeChartPair}
           onSelect={selectChartPair}
           width={s.pair.length + 2}
@@ -939,6 +963,7 @@ function DashboardInner() {
           top={3 + posH + chartH + row2H + (index * 2)}
           left={13}
           pair={trade.pair}
+          exchange={trade.exchange}
           active={trade.pair === activeChartPair}
           onSelect={selectChartPair}
           width={trade.pair.length + 2}

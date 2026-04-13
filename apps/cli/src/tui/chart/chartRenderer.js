@@ -50,6 +50,7 @@ export function renderChart({
   position = null,
   status = 'bootstrapping',
   currentPrice = null,
+  currentPriceDirection = 'flat',
   lastUpdateTime = null,
   width = 80,
   height = 12,
@@ -130,12 +131,13 @@ export function renderChart({
 
   const lastBar = visibleBars.at(-1);
   const lastPrice = Number.isFinite(currentPrice) ? currentPrice : lastBar?.close ?? null;
+  const lastPriceColor = currentPriceDirection === 'up' ? 'green' : currentPriceDirection === 'down' ? 'red' : 'white';
   const positionLabel = position?.isOpen
     ? ` ${colorize('Position', 'cyan')}: ${position.side?.toUpperCase() ?? 'OPEN'} @ $${formatPrice(position.entryPrice)}`
     : '';
   const ageLabel = lastUpdateTime ? `  ${colorize('Age', 'cyan')}: ${Math.max(0, Math.floor((Date.now() - lastUpdateTime) / 1000))}s` : '';
   const statusColor = status === 'live' ? 'green' : status === 'error' ? 'red' : status === 'stale' ? 'yellow' : 'white';
-  const header = `${colorize('Pair', 'cyan')}: ${pair} @ ${exchange}  ${colorize('TF', 'cyan')}: ${timeframe}  ${colorize('Last', 'cyan')}: $${formatPrice(lastPrice)}  ${colorize('Status', statusColor)}: ${status.toUpperCase()}${positionLabel}${ageLabel}`;
+  const header = `${colorize('Pair', 'cyan')}: ${pair} @ ${exchange}  ${colorize('TF', 'cyan')}: ${timeframe}  ${colorize('Last', 'cyan')}: ${colorize(`$${formatPrice(lastPrice)}`, lastPriceColor)}  ${colorize('Status', statusColor)}: ${status.toUpperCase()}${positionLabel}${ageLabel}`;
 
   return [header, ...grid.map((row) => row.join(''))].join('\n');
 }
