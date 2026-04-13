@@ -39,6 +39,16 @@ function formatPrice(value) {
   return value.toFixed(6);
 }
 
+function formatCompactNumber(value) {
+  if (!Number.isFinite(value)) return '-';
+  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  if (Math.abs(value) >= 100) return `${Math.round(value)}`;
+  if (Math.abs(value) >= 1) return value.toFixed(1);
+  return value.toFixed(3);
+}
+
 function makeGrid(rows, cols) {
   return Array.from({ length: rows }, () => Array.from({ length: cols }, () => ' '));
 }
@@ -82,6 +92,11 @@ export function renderChart({
   if (volumeOverlayRows > 0) {
     const volumes = visibleBars.map((bar) => (Number.isFinite(bar.volume) && bar.volume > 0 ? bar.volume : 0));
     const maxVolume = Math.max(...volumes, 0);
+    const maxVolumeUsd = visibleBars.reduce((max, bar) => {
+      const rawVolume = Number.isFinite(bar.volume) && bar.volume > 0 ? bar.volume : 0;
+      const referencePrice = Number.isFinite(bar.close) && bar.close > 0 ? bar.close : (Number.isFinite(bar.open) ? bar.open : 0);
+      return Math.max(max, rawVolume * Math.max(0, referencePrice));
+    }, 0);
     for (let index = 0; index < visibleBars.length; index += 1) {
       const bar = visibleBars[index];
       const volume = volumes[index];
@@ -94,12 +109,7 @@ export function renderChart({
         if (grid[row]?.[x] === ' ') grid[row][x] = colorize(glyphs.volume, color);
       }
     }
-    const maxVolLabel = maxVolume >= 1_000_000
-      ? `${(maxVolume / 1_000_000).toFixed(1)}M`
-      : maxVolume >= 1_000
-        ? `${(maxVolume / 1_000).toFixed(1)}K`
-        : `${Math.round(maxVolume)}`;
-    const label = `Vol ${maxVolLabel}`;
+    const label = `Vol ${formatCompactNumber(maxVolume)} (USD: $${formatCompactNumber(maxVolumeUsd)})`;
     const labelRow = Math.max(0, plotRows - volumeOverlayRows);
     for (let i = 0; i < label.length; i += 1) {
       if (grid[labelRow]?.[plotWidth + i] != null) grid[labelRow][plotWidth + i] = colorize(label[i], 'cyan');
