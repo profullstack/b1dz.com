@@ -146,6 +146,7 @@ function formatUsdPrice(value: number): string {
 
 const CHART_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
 type ChartTimeframe = typeof CHART_TIMEFRAMES[number];
+type ClosedTradeRow = NonNullable<NonNullable<TradeState['tradeState']>['closedTrades']>[number];
 
 function preferredChartExchange(pair: string, positions: TradeStatusData['positions'], prices: ArbState['prices'], closedTrades: NonNullable<TradeState['tradeState']>['closedTrades'] = []) {
   const open = positions.find((pos) => pos.pair === pair);
@@ -156,6 +157,37 @@ function preferredChartExchange(pair: string, positions: TradeStatusData['positi
   }
   const recentClosed = [...closedTrades].sort((a, b) => b.exitTime - a.exitTime).find((trade) => trade.pair === pair);
   return recentClosed?.exchange ?? 'kraken';
+}
+
+function ClickablePair({
+  top,
+  left,
+  pair,
+  active,
+  onSelect,
+  width,
+}: {
+  top: number;
+  left: number | string;
+  pair: string;
+  active?: boolean;
+  onSelect: (pair: string) => void;
+  width?: number;
+}) {
+  return (
+    <box
+      top={top}
+      left={left}
+      width={width ?? Math.max(pair.length + 2, 10)}
+      height={1}
+      mouse={true}
+      clickable={true}
+      tags={true}
+      onClick={() => onSelect(pair)}
+      style={{ bg: active ? 'cyan' : 'black', fg: active ? 'black' : 'white' }}
+      content={` ${pair} `}
+    />
+  );
 }
 
 // Wrap the whole component in error handling so bad data doesn't crash React
@@ -172,6 +204,7 @@ function DashboardInner() {
   const [rawPage, setRawPage] = useState(0);
   const [chartPair, setChartPair] = useState<string | null>(null);
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('1m');
+  const [showTimeframeMenu, setShowTimeframeMenu] = useState(false);
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -179,6 +212,18 @@ function DashboardInner() {
       while (next.length > 50) next.shift();
       return next;
     });
+  };
+
+  const selectChartPair = (next: string) => {
+    setChartPair(next);
+    setShowTimeframeMenu(false);
+    addLog(`{cyan-fg}Chart{/cyan-fg} pair → ${next}`);
+  };
+
+  const selectChartTimeframe = (next: ChartTimeframe) => {
+    setChartTimeframe(next);
+    setShowTimeframeMenu(false);
+    addLog(`{cyan-fg}Chart{/cyan-fg} timeframe → ${next}`);
   };
 
   // Key events
@@ -199,8 +244,7 @@ function DashboardInner() {
       }
     };
     const timeframeHandler = (next: ChartTimeframe) => {
-      setChartTimeframe(next);
-      addLog(`{cyan-fg}Chart{/cyan-fg} timeframe → ${next}`);
+      selectChartTimeframe(next);
     };
     const pairCycleHandler = (delta: number) => {
       setChartPair((current) => {
@@ -216,6 +260,7 @@ function DashboardInner() {
         if (pairs.length === 0) return current;
         const start = current && pairs.includes(current) ? pairs.indexOf(current) : 0;
         const next = pairs[(start + delta + pairs.length) % pairs.length];
+        setShowTimeframeMenu(false);
         addLog(`{cyan-fg}Chart{/cyan-fg} pair → ${next}`);
         return next;
       });
@@ -354,6 +399,7 @@ function DashboardInner() {
   const activeChartPair = chartPairs.includes(chartPair ?? '') ? chartPair! : (chartPairs[0] ?? 'BTC-USD');
   const chartExchange = preferredChartExchange(activeChartPair, positions, prices, closedTrades);
   const chartPairIdx = chartPairs.indexOf(activeChartPair);
+  const displayPricePairs = [...new Set(prices.map((price) => price.pair))].slice(0, 8);
 
   useEffect(() => {
     if (!chartPairs.length) return;
@@ -397,11 +443,12 @@ function DashboardInner() {
   // Closed trades (last 24h) — strategy round-trips, not raw exchange fills.
   const oneDayAgoMs = Date.now() - 86400_000;
   const recentClosedTrades = closedTrades.filter((t) => t.exitTime >= oneDayAgoMs);
+  const recentClosedRows = [...recentClosedTrades].sort((a, b) => b.exitTime - a.exitTime).slice(0, 8);
   const tradeLines: string[] = ['{bold} Closed Trades (24h){/bold}'];
   if (recentClosedTrades.length === 0) {
     tradeLines.push(' {white-fg}No closed trades in last 24h{/white-fg}');
   } else {
-    for (const t of [...recentClosedTrades].sort((a, b) => b.exitTime - a.exitTime).slice(0, 8)) {
+    for (const t of recentClosedRows) {
       const color = t.netPnl >= 0 ? '{green-fg}' : '{red-fg}';
       tradeLines.push(` ${color}${t.exchange.padEnd(10)}{/} ${t.pair.padEnd(10)} ${t.volume.toFixed(6)}  ${t.strategyId.padEnd(10)} net:${t.netPnl >= 0 ? '+' : ''}$${t.netPnl.toFixed(2)}`);
       tradeLines.push(`   entry:$${t.entryPrice.toFixed(2)} exit:$${t.exitPrice.toFixed(2)} gross:$${t.grossPnl.toFixed(2)} fee:$${t.fee.toFixed(2)}  ${timeSince(Math.floor(t.exitTime / 1000))}`);
@@ -557,6 +604,7 @@ function DashboardInner() {
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
   const chartH = Math.max(8, Math.min(14, screenRows - 2 - posH - row2H - row3H - 8));
+  const chartTop = 2 + posH;
   const footerTop = 2 + posH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
@@ -614,9 +662,20 @@ function DashboardInner() {
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={posLines.join('\n')} />
+      {positions.map((pos, index) => (
+        <ClickablePair
+          key={`pos-pair-${pos.exchange}-${pos.pair}`}
+          top={3 + index}
+          left={13}
+          pair={pos.pair}
+          active={pos.pair === activeChartPair}
+          onSelect={selectChartPair}
+          width={pos.pair.length + 2}
+        />
+      ))}
 
       <RealtimeOHLCChartContainer
-        top={2 + posH}
+        top={chartTop}
         left={0}
         height={chartH}
         width={(process.stdout.columns ?? 120) - 4}
@@ -627,10 +686,88 @@ function DashboardInner() {
         positions={positions as any}
         closedTrades={closedTrades as any}
       />
+      <ClickablePair
+        top={chartTop}
+        left={3}
+        pair={activeChartPair}
+        active={true}
+        onSelect={selectChartPair}
+        width={activeChartPair.length + 2}
+      />
+      <box
+        top={chartTop}
+        left={18}
+        width={12}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => setShowTimeframeMenu((prev) => !prev)}
+        style={{ bg: 'blue', fg: 'white' }}
+        content={` TF:${chartTimeframe} ▼ `}
+      />
+      {showTimeframeMenu && (
+        <box
+          top={chartTop + 1}
+          left={18}
+          width={12}
+          height={CHART_TIMEFRAMES.length + 2}
+          border={{ type: 'line' }}
+          style={{ border: { fg: 'cyan' }, bg: 'black', fg: 'white' }}
+        >
+          {CHART_TIMEFRAMES.map((tf, index) => (
+            <box
+              key={`tf-${tf}`}
+              top={1 + index}
+              left={1}
+              width={8}
+              height={1}
+              mouse={true}
+              clickable={true}
+              tags={true}
+              onClick={() => selectChartTimeframe(tf)}
+              style={{ bg: tf === chartTimeframe ? 'cyan' : 'black', fg: tf === chartTimeframe ? 'black' : 'white' }}
+              content={` ${tf} `}
+            />
+          ))}
+        </box>
+      )}
+      <box
+        top={chartTop}
+        left={32}
+        width={Math.min((process.stdout.columns ?? 120) - 40, 80)}
+        height={1}
+        mouse={true}
+        tags={true}
+        style={{ bg: 'black', fg: 'white' }}
+      >
+        {displayPricePairs.map((pair, index) => (
+          <ClickablePair
+            key={`chart-pair-${pair}`}
+            top={0}
+            left={index * 12}
+            pair={pair}
+            active={pair === activeChartPair}
+            onSelect={selectChartPair}
+            width={Math.max(pair.length + 2, 10)}
+          />
+        ))}
+      </box>
 
       <box label=" Arb Spreads " top={2 + posH + chartH} left={0} width="40%" height={row2H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={arbLines.join('\n')} />
+      {displaySpreads.map((s, index) => (
+        <ClickablePair
+          key={`spread-pair-${s.pair}-${index}`}
+          top={3 + posH + chartH + index}
+          left={2}
+          pair={s.pair}
+          active={s.pair === activeChartPair}
+          onSelect={selectChartPair}
+          width={s.pair.length + 2}
+        />
+      ))}
 
       <box label=" Open Orders " top={2 + posH + chartH} left="40%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
@@ -647,6 +784,17 @@ function DashboardInner() {
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
+      {recentClosedRows.map((trade: ClosedTradeRow, index: number) => (
+        <ClickablePair
+          key={`closed-pair-${trade.exchange}-${trade.pair}-${trade.exitTime}`}
+          top={3 + posH + chartH + row2H + (index * 2)}
+          left={13}
+          pair={trade.pair}
+          active={trade.pair === activeChartPair}
+          onSelect={selectChartPair}
+          width={trade.pair.length + 2}
+        />
+      ))}
 
       <box label=" Balances " top={2 + posH + chartH + row2H} left="55%" width="45%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
