@@ -61,5 +61,6 @@ export function makeBarFromPrice(time, price, timeframe) {
     high: price,
     low: price,
     close: price,
+    volume: 0,
   };
 }

@@ -132,11 +132,17 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
     if (!snap) return false;
     const bid = Number(snap?.bid);
     const ask = Number(snap?.ask);
+    const bidSize = Number(snap?.bidSize);
+    const askSize = Number(snap?.askSize);
     const price = Number.isFinite(bid) && bid > 0 && Number.isFinite(ask) && ask > 0
       ? (bid + ask) / 2
       : Number.isFinite(bid) && bid > 0
         ? bid
         : ask;
+    const volume = Math.max(
+      Number.isFinite(bidSize) && bidSize > 0 ? bidSize : 0,
+      Number.isFinite(askSize) && askSize > 0 ? askSize : 0,
+    );
     if (!(snap?.ts && Number.isFinite(price))) return false;
     if (!(snap.ts > lastPublishedTs || price !== lastPublishedPrice)) return false;
     lastPublishedTs = snap.ts;
@@ -146,6 +152,7 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
     onTick?.({
       time: snap.ts,
       price,
+      volume,
       exchange,
       pair,
     });
