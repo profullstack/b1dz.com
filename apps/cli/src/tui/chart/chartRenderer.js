@@ -8,6 +8,7 @@ const UNICODE_GLYPHS = {
   close: '├',
   both: '┼',
   line: '─',
+  volume: '░',
   long: '▲',
   short: '▼',
   exit: '✖',
@@ -19,6 +20,7 @@ const ASCII_GLYPHS = {
   close: '|',
   both: '|',
   line: '-',
+  volume: '.',
   long: '^',
   short: 'v',
   exit: 'x',
@@ -57,11 +59,12 @@ export function renderChart({
   ascii = false,
 }) {
   const headerWidth = Math.max(20, width);
-  const plotRows = Math.max(6, height - 2);
   const rightLabelWidth = 12;
   const plotWidth = Math.max(12, headerWidth - rightLabelWidth - 1);
   const barStride = 3;
   const glyphs = ascii ? ASCII_GLYPHS : UNICODE_GLYPHS;
+  const plotRows = Math.max(6, height - 2);
+  const volumeOverlayRows = plotRows >= 10 ? Math.min(4, Math.max(2, Math.floor(plotRows * 0.25))) : 0;
 
   if (!bars.length) {
     const stateLabel = status.toUpperCase();
@@ -75,6 +78,33 @@ export function renderChart({
   const visibleBars = bars.slice(-visibleCount);
   const { min, max } = computePriceRange({ bars: visibleBars, markers, position, currentPrice });
   const grid = makeGrid(plotRows, plotWidth + rightLabelWidth);
+
+  if (volumeOverlayRows > 0) {
+    const volumes = visibleBars.map((bar) => (Number.isFinite(bar.volume) && bar.volume > 0 ? bar.volume : 0));
+    const maxVolume = Math.max(...volumes, 0);
+    for (let index = 0; index < visibleBars.length; index += 1) {
+      const bar = visibleBars[index];
+      const volume = volumes[index];
+      if (!(maxVolume > 0) || !(volume > 0)) continue;
+      const x = index * barStride + 1;
+      if (x >= plotWidth) break;
+      const color = bar.close >= bar.open ? 'green' : 'red';
+      const filledRows = Math.max(1, Math.round((volume / maxVolume) * volumeOverlayRows));
+      for (let row = plotRows - 1; row >= plotRows - filledRows; row -= 1) {
+        if (grid[row]?.[x] === ' ') grid[row][x] = colorize(glyphs.volume, color);
+      }
+    }
+    const maxVolLabel = maxVolume >= 1_000_000
+      ? `${(maxVolume / 1_000_000).toFixed(1)}M`
+      : maxVolume >= 1_000
+        ? `${(maxVolume / 1_000).toFixed(1)}K`
+        : `${Math.round(maxVolume)}`;
+    const label = `Vol ${maxVolLabel}`;
+    const labelRow = Math.max(0, plotRows - volumeOverlayRows);
+    for (let i = 0; i < label.length; i += 1) {
+      if (grid[labelRow]?.[plotWidth + i] != null) grid[labelRow][plotWidth + i] = colorize(label[i], 'cyan');
+    }
+  }
 
   for (let index = 0; index < visibleBars.length; index += 1) {
     const bar = visibleBars[index];
@@ -139,5 +169,8 @@ export function renderChart({
   const statusColor = status === 'live' ? 'green' : status === 'error' ? 'red' : status === 'stale' ? 'yellow' : 'white';
   const header = `${colorize('Pair', 'cyan')}: ${pair} @ ${exchange}  ${colorize('TF', 'cyan')}: ${timeframe}  ${colorize('Last', 'cyan')}: ${colorize(`$${formatPrice(lastPrice)}`, lastPriceColor)}  ${colorize('Status', statusColor)}: ${status.toUpperCase()}${positionLabel}${ageLabel}`;
 
-  return [header, ...grid.map((row) => row.join(''))].join('\n');
+  return [
+    header,
+    ...grid.map((row) => row.join('')),
+  ].join('\n');
 }
