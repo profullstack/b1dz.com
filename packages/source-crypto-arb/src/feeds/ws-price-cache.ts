@@ -95,7 +95,7 @@ function connectKraken(pairs: string[]) {
     if (krakenWs !== ws) return;
     krakenSubscribedSymbols.clear();
     wsLog('[ws] kraken connected');
-    subscribeKrakenPairs(ws, pairs);
+    subscribeKrakenPairs(ws, [...subscribedPairs]);
     // Keepalive ping every 30s
     const pingTimer = setInterval(() => {
       if (krakenWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
@@ -163,7 +163,7 @@ function connectCoinbase(pairs: string[]) {
     if (coinbaseWs !== ws) return;
     coinbaseSubscribedPairs.clear();
     wsLog('[ws] coinbase connected');
-    subscribeCoinbasePairs(ws, pairs);
+    subscribeCoinbasePairs(ws, [...subscribedPairs]);
     const pingTimer = setInterval(() => {
       if (coinbaseWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
@@ -233,7 +233,7 @@ function connectBinance(pairs: string[]) {
     if (binanceWs !== ws) return;
     binanceSubscribedSymbols.clear();
     wsLog('[ws] binance.us connected');
-    subscribeBinancePairs(ws, pairs);
+    subscribeBinancePairs(ws, [...subscribedPairs]);
     const pingTimer = setInterval(() => {
       if (binanceWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
       else clearInterval(pingTimer);
