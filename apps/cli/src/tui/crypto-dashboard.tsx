@@ -145,6 +145,14 @@ function formatUsdPrice(value: number): string {
   return value.toFixed(6);
 }
 
+function padLeft(value: string, width: number): string {
+  return value.length >= width ? value : `${' '.repeat(width - value.length)}${value}`;
+}
+
+function padRight(value: string, width: number): string {
+  return value.length >= width ? value : `${value}${' '.repeat(width - value.length)}`;
+}
+
 const CHART_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
 type ChartTimeframe = typeof CHART_TIMEFRAMES[number];
 type ClosedTradeRow = NonNullable<NonNullable<TradeState['tradeState']>['closedTrades']>[number];
@@ -490,17 +498,29 @@ function DashboardInner() {
   }, [chartPairs, chartPairB, activeChartPair]);
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
-  const posLines: string[] = [];
+  const posLines: string[] = [
+    '{bold} Exch        Pair             Volume        Entry        Last         PnL               Stop        Age{/bold}',
+  ];
   for (const pos of displayedPositions) {
     const pnlColor = pos.pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
     const exColor = pos.exchange === 'kraken' ? '{cyan-fg}' : pos.exchange === 'coinbase' ? '{magenta-fg}' : '{yellow-fg}';
+    const exchangeCell = padRight(pos.exchange, 10);
+    const pairCell = padRight(pos.pair, 16);
+    const volumeCell = padLeft(pos.volume.toFixed(6), 12);
+    const lastCell = padLeft(`$${formatUsdPrice(pos.currentPrice)}`, 11);
     if (pos.entryPrice > 0) {
-      posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)} @ $${formatUsdPrice(pos.entryPrice)}  now:$${formatUsdPrice(pos.currentPrice)}  ${pnlColor}${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(2)}% ($${pos.pnlUsd.toFixed(2)}){/}  stop:$${formatUsdPrice(pos.stopPrice)}  ${pos.elapsed}`);
+      const entryCell = padLeft(`$${formatUsdPrice(pos.entryPrice)}`, 11);
+      const pnlText = `${pos.pnlPct >= 0 ? '+' : ''}${pos.pnlPct.toFixed(2)}% ($${pos.pnlUsd.toFixed(2)})`;
+      const pnlCell = padLeft(pnlText, 18);
+      const stopCell = padLeft(`$${formatUsdPrice(pos.stopPrice)}`, 11);
+      const ageCell = padLeft(pos.elapsed, 8);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}`);
     } else {
-      posLines.push(` ${exColor}${pos.exchange}{/}  ${pos.pair.padEnd(14)} ${pos.volume.toFixed(6)}  now:$${formatUsdPrice(pos.currentPrice)}  {white-fg}untracked holding{/white-fg}`);
+      const statusCell = padRight('untracked holding', 18);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed, 8)}`);
     }
   }
-  if (posLines.length === 0) {
+  if (displayedPositions.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
   }
 
@@ -717,10 +737,10 @@ function DashboardInner() {
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={posLines.join('\n')} />
-      {positions.map((pos, index) => (
+      {displayedPositions.map((pos, index) => (
         <ClickablePair
           key={`pos-pair-${pos.exchange}-${pos.pair}`}
-          top={3 + index}
+          top={4 + index}
           left={13}
           pair={pos.pair}
           active={pos.pair === activeChartPair}
