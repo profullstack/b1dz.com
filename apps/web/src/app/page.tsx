@@ -1,7 +1,5 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { TuiScreenshot } from './components/tui-screenshot';
-import { DashboardMock } from './components/dashboard-mock';
 
 export default function LandingPage(): JSX.Element {
   return (
@@ -44,13 +42,26 @@ export default function LandingPage(): JSX.Element {
       {/* Terminal Screenshot */}
       <section className="max-w-5xl mx-auto px-6 pb-8">
         <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Terminal Interface</h3>
-        <TuiScreenshot />
+        <Image
+          src="/images/gallery-1.png"
+          alt="Terminal Interface"
+          width={1960}
+          height={682}
+          className="w-full h-auto rounded-xl border border-zinc-800"
+          priority
+        />
       </section>
 
       {/* Web Dashboard Mock */}
       <section className="max-w-5xl mx-auto px-6 pb-16">
         <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Web Dashboard</h3>
-        <DashboardMock />
+        <Image
+          src="/images/gallery-2.png"
+          alt="Web Dashboard"
+          width={1949}
+          height={1254}
+          className="w-full h-auto rounded-xl border border-zinc-800"
+        />
       </section>
 
       {/* Features */}
