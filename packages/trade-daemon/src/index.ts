@@ -11,7 +11,7 @@
  */
 
 import type { EventChannel, QueuedOpportunity, OpportunityStatus } from '@b1dz/event-channel';
-import type { Opportunity } from '@b1dz/venue-types';
+import type { ExecutionMode, Opportunity } from '@b1dz/venue-types';
 
 export type TradeMode = 'observe' | 'paper' | 'live';
 
@@ -23,6 +23,17 @@ export interface RiskLimits {
   maxGasUsd: number;
   maxSlippageBps: number;
   maxRouteHops: number;
+  /** PRD §A14: highest execution mode this daemon can actually run.
+   *  Opportunities whose recommendedExecutionMode escalates above this
+   *  are rejected. `public` is the default — private/bundle require
+   *  explicit infrastructure wiring. */
+  executionMode: ExecutionMode;
+  /** PRD §A7: reject an opportunity whose realizability score falls
+   *  below this threshold. 0 disables the filter. */
+  minRealizabilityScore: number;
+  /** PRD §A14: reject public-flow routes whose MEV risk exceeds this
+   *  threshold. Applied only when executionMode='public'. */
+  rejectPublicMevAbove: number;
 }
 
 export const DEFAULT_RISK_LIMITS: RiskLimits = {
@@ -33,7 +44,25 @@ export const DEFAULT_RISK_LIMITS: RiskLimits = {
   maxGasUsd: 5,
   maxSlippageBps: 50,
   maxRouteHops: 3,
+  executionMode: 'public',
+  minRealizabilityScore: 0.5,
+  rejectPublicMevAbove: 0.7,
 };
+
+/** Ordering used to check whether the operator's mode can satisfy the
+ *  opportunity's recommended mode. `paper_only` is the most restrictive
+ *  (refuses live execution entirely); `bundle` is the most capable. */
+const EXECUTION_MODE_RANK: Record<ExecutionMode, number> = {
+  paper_only: 0,
+  public: 1,
+  private: 2,
+  bundle: 3,
+};
+
+function canSatisfy(available: ExecutionMode, required: ExecutionMode): boolean {
+  if (required === 'paper_only') return available === 'paper_only';
+  return EXECUTION_MODE_RANK[available] >= EXECUTION_MODE_RANK[required];
+}
 
 export interface TradeDecision {
   queueId: string;
@@ -83,6 +112,20 @@ export function decideOpportunity(
   if (maxSlippageBps > risk.maxSlippageBps) reasons.push(`slip ${maxSlippageBps}bps > max ${risk.maxSlippageBps}bps`);
   const maxHops = Math.max(opp.buyQuote.routeHops, opp.sellQuote.routeHops);
   if (maxHops > risk.maxRouteHops) reasons.push(`hops ${maxHops} > max ${risk.maxRouteHops}`);
+
+  // PRD §A5, §A7: execution-mode and realizability gates.
+  if (opp.execution) {
+    const { recommendedExecutionMode, realizabilityScore, mevRiskScore } = opp.execution;
+    if (!canSatisfy(risk.executionMode, recommendedExecutionMode)) {
+      reasons.push(`requires ${recommendedExecutionMode} but daemon=${risk.executionMode}`);
+    }
+    if (realizabilityScore < risk.minRealizabilityScore) {
+      reasons.push(`realizability ${realizabilityScore.toFixed(2)} < min ${risk.minRealizabilityScore}`);
+    }
+    if (risk.executionMode === 'public' && mevRiskScore > risk.rejectPublicMevAbove) {
+      reasons.push(`public-mode MEV risk ${mevRiskScore.toFixed(2)} > ${risk.rejectPublicMevAbove}`);
+    }
+  }
 
   // TTL: refuse to act on expired rows even if the channel somehow
   // handed one back.

@@ -31,6 +31,26 @@ export type OpportunityCategory =
   | 'pumpfun_migration'
   | 'pumpfun_post_migration';
 
+/** PRD Addendum A: execution mode the operator / infra can support.
+ *  An opportunity whose recommendedExecutionMode exceeds the available
+ *  mode must be rejected or paper-only. */
+export type ExecutionMode = 'public' | 'private' | 'bundle' | 'paper_only';
+
+/** PRD §A6 — realizability metadata attached to every Opportunity so
+ *  the daemon can refuse routes that look profitable in a frictionless
+ *  model but would not survive live execution. */
+export interface OpportunityExecutionMeta {
+  /** 0-1. 1 = very likely to execute at or near quoted edge. */
+  realizabilityScore: number;
+  /** 0-1. Higher = more backrun/sandwich exposure on public mempool. */
+  mevRiskScore: number;
+  /** 0-1. Higher = detection-to-submit window is the primary risk. */
+  latencyRiskScore: number;
+  requiresPrivateFlow: boolean;
+  recommendedExecutionMode: ExecutionMode;
+  simulationNotes: string[];
+}
+
 export interface NormalizedQuote {
   venue: string;
   venueType: VenueType;
@@ -91,6 +111,10 @@ export interface Opportunity {
   sellQuote: NormalizedQuote;
   /** When this opportunity was scored (ms since epoch). */
   observedAt: number;
+  /** PRD §A6: realizability / MEV / execution-mode metadata. Optional
+   *  for legacy callers; observer should always populate it via
+   *  scoreExecutionMeta() before publishing to the channel. */
+  execution?: OpportunityExecutionMeta | null;
 }
 
 // ─── Adapter interface ────────────────────────────────────────────
@@ -137,6 +161,100 @@ export interface ProfitabilityConfig {
   riskBufferUsd?: number;
 }
 
+/** Chains where public-mempool arbitrage is effectively owned by
+ *  professional MEV infrastructure. Public-mode routes here should be
+ *  treated with extra skepticism per PRD §A9. */
+const HIGH_MEV_CHAINS = new Set(['ethereum', 'mainnet']);
+
+/**
+ * Heuristic realizability scorer (PRD §A3, §A6).
+ *
+ * MVP-grade: good enough to gate the obvious cases while a proper
+ * simulator is built out. A route is downgraded toward private/bundle
+ * when both legs are DEX on a high-MEV chain, and toward paper_only
+ * when a Pump.fun launch lacks a validated exit.
+ */
+export function scoreExecutionMeta(
+  buy: NormalizedQuote,
+  sell: NormalizedQuote,
+  category: OpportunityCategory,
+): OpportunityExecutionMeta {
+  const notes: string[] = [];
+  let realizability = 0.9;
+  let mev = 0.1;
+  let latency = 0.1;
+  let mode: ExecutionMode = 'public';
+  let requiresPrivate = false;
+
+  const bothDex = buy.venueType !== 'cex' && sell.venueType !== 'cex';
+  const buyHighMev = buy.chain ? HIGH_MEV_CHAINS.has(buy.chain) : false;
+  const sellHighMev = sell.chain ? HIGH_MEV_CHAINS.has(sell.chain) : false;
+
+  if (bothDex && (buyHighMev || sellHighMev)) {
+    // PRD §A9: don't try to win public-mempool races against pro MEV.
+    mev = 0.85;
+    realizability = 0.35;
+    requiresPrivate = true;
+    mode = 'private';
+    notes.push('dex↔dex on high-MEV chain — public mempool likely to lose edge');
+  } else if (bothDex) {
+    // L2s / altchains: public OK but still some MEV risk.
+    mev = 0.4;
+    realizability = 0.7;
+    notes.push('dex↔dex on lower-MEV chain — public execution acceptable');
+  } else if (buy.venueType === 'cex' && sell.venueType === 'cex') {
+    // CEX↔CEX has no mempool exposure; realizability is gated by
+    // withdrawal/transfer rather than MEV.
+    mev = 0.05;
+    latency = 0.2;
+    realizability = 0.85;
+    notes.push('cex↔cex — no mempool MEV risk');
+  } else {
+    // Mixed CEX/DEX: one leg is onchain, still exposed to MEV on that leg.
+    mev = (buyHighMev || sellHighMev) ? 0.6 : 0.3;
+    realizability = (buyHighMev || sellHighMev) ? 0.55 : 0.75;
+    if (buyHighMev || sellHighMev) {
+      requiresPrivate = true;
+      mode = 'private';
+      notes.push('cex↔dex with a high-MEV chain leg — prefer private flow');
+    }
+  }
+
+  // Pump.fun categories: default to paper_only unless the lifecycle
+  // is post-migration with a known external pool.
+  if (category === 'pumpfun_scalp' || category === 'pumpfun_migration') {
+    mode = 'paper_only';
+    realizability = Math.min(realizability, 0.4);
+    notes.push('pump.fun pre-migration — paper only until exit route validated');
+  }
+
+  // Staleness pressure: if either quote is already expired at scoring
+  // time, the route is not realistic.
+  const now = Date.now();
+  if ((buy.expiresAt && buy.expiresAt <= now) || (sell.expiresAt && sell.expiresAt <= now)) {
+    realizability = 0.05;
+    latency = 0.95;
+    notes.push('one or both quotes expired');
+  }
+
+  // Many hops on DEX legs compound slippage + latency surprise.
+  const maxHops = Math.max(buy.routeHops, sell.routeHops);
+  if (maxHops >= 3) {
+    realizability = Math.max(0, realizability - 0.2);
+    latency = Math.min(1, latency + 0.2);
+    notes.push(`route complexity: ${maxHops} hops`);
+  }
+
+  return {
+    realizabilityScore: Math.max(0, Math.min(1, realizability)),
+    mevRiskScore: Math.max(0, Math.min(1, mev)),
+    latencyRiskScore: Math.max(0, Math.min(1, latency)),
+    requiresPrivateFlow: requiresPrivate,
+    recommendedExecutionMode: mode,
+    simulationNotes: notes,
+  };
+}
+
 export function buildOpportunity(
   id: string,
   sizeUsd: string,
@@ -181,5 +299,6 @@ export function buildOpportunity(
     buyQuote: buy,
     sellQuote: sell,
     observedAt: Date.now(),
+    execution: scoreExecutionMeta(buy, sell, category),
   };
 }

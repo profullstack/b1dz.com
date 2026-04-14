@@ -160,6 +160,90 @@ describe('decideOpportunity', () => {
     );
     expect(d.reasons.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('rejects when opportunity requires higher execution mode than daemon supports', () => {
+    const opp = mkOpp({
+      execution: {
+        realizabilityScore: 0.9,
+        mevRiskScore: 0.2,
+        latencyRiskScore: 0.1,
+        requiresPrivateFlow: true,
+        recommendedExecutionMode: 'private',
+        simulationNotes: [],
+      },
+    });
+    const d = decideOpportunity(mkQueued({ opportunity: opp }), 'paper', DEFAULT_RISK_LIMITS, now);
+    expect(d.decision).toBe('reject');
+    expect(d.reasons.some((r) => r.includes('requires private'))).toBe(true);
+  });
+
+  it('accepts a private-mode opportunity when daemon is configured for bundle execution', () => {
+    const opp = mkOpp({
+      execution: {
+        realizabilityScore: 0.9,
+        mevRiskScore: 0.2,
+        latencyRiskScore: 0.1,
+        requiresPrivateFlow: true,
+        recommendedExecutionMode: 'private',
+        simulationNotes: [],
+      },
+    });
+    const d = decideOpportunity(
+      mkQueued({ opportunity: opp }),
+      'paper',
+      { ...DEFAULT_RISK_LIMITS, executionMode: 'bundle' },
+      now,
+    );
+    expect(d.decision).toBe('paper');
+  });
+
+  it('rejects when realizability score is below the daemon threshold', () => {
+    const opp = mkOpp({
+      execution: {
+        realizabilityScore: 0.2,
+        mevRiskScore: 0.2,
+        latencyRiskScore: 0.1,
+        requiresPrivateFlow: false,
+        recommendedExecutionMode: 'public',
+        simulationNotes: [],
+      },
+    });
+    const d = decideOpportunity(mkQueued({ opportunity: opp }), 'paper', DEFAULT_RISK_LIMITS, now);
+    expect(d.decision).toBe('reject');
+    expect(d.reasons.some((r) => r.includes('realizability'))).toBe(true);
+  });
+
+  it('rejects a public-mode route whose MEV risk is too high', () => {
+    const opp = mkOpp({
+      execution: {
+        realizabilityScore: 0.8,
+        mevRiskScore: 0.9,
+        latencyRiskScore: 0.1,
+        requiresPrivateFlow: false,
+        recommendedExecutionMode: 'public',
+        simulationNotes: [],
+      },
+    });
+    const d = decideOpportunity(mkQueued({ opportunity: opp }), 'paper', DEFAULT_RISK_LIMITS, now);
+    expect(d.decision).toBe('reject');
+    expect(d.reasons.some((r) => r.includes('MEV'))).toBe(true);
+  });
+
+  it('rejects any opportunity recommended as paper_only when daemon runs live', () => {
+    const opp = mkOpp({
+      execution: {
+        realizabilityScore: 0.9,
+        mevRiskScore: 0.1,
+        latencyRiskScore: 0.1,
+        requiresPrivateFlow: false,
+        recommendedExecutionMode: 'paper_only',
+        simulationNotes: [],
+      },
+    });
+    const d = decideOpportunity(mkQueued({ opportunity: opp }), 'live', DEFAULT_RISK_LIMITS, now);
+    expect(d.decision).toBe('reject');
+    expect(d.reasons.some((r) => r.includes('paper_only'))).toBe(true);
+  });
 });
 
 describe('TradeDaemon.tick', () => {
