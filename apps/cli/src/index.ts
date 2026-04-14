@@ -127,6 +127,14 @@ Multi-venue quote observer (v2 DEX engine):
   Adapters: kraken, coinbase, binance-us, gemini, 0x, 1inch, jupiter
   Env: ZEROX_API_KEY, ONEINCH_API_KEY (free at portal.1inch.dev / 0x.org)
 
+Pump.fun discovery (observe-only, opt-in scrape):
+  b1dz pumpfun discover                    list new launches + lifecycle
+    --min-mcap 1000                        min USD market cap (default 1000)
+    --max-age 60                           max age in minutes (default 60)
+    --lifecycle new_launch,bonding_curve   comma-separated filter (optional)
+    --limit 20                             rows to show (default 20)
+  Requires PUMPFUN_ENABLE_SCRAPE=true (PRD §27 opt-in)
+
 Sources:
   b1dz <source> run        start headless
   Available sources: crypto-arb, crypto-trade, all
@@ -209,6 +217,15 @@ if (source === 'backtest') {
     process.exit(0);
   } catch (e) {
     console.error(`observe failed: ${(e as Error).message}`);
+    process.exit(1);
+  }
+} else if (source === 'pumpfun') {
+  const { runPumpfunCli } = await import('./pumpfun.js');
+  try {
+    await runPumpfunCli(process.argv.slice(3));
+    process.exit(0);
+  } catch (e) {
+    console.error(`pumpfun failed: ${(e as Error).message}`);
     process.exit(1);
   }
 } else if (source === 'tui') {
