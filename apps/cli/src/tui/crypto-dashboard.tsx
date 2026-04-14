@@ -298,6 +298,22 @@ function DashboardInner() {
     addLog(`{cyan-fg}Chart ${target}{/cyan-fg} auto-cycle paused 5m`);
   };
 
+  const unpauseChart = (target: 'A' | 'B') => {
+    if (target === 'A') setChartPauseUntilA(0);
+    else setChartPauseUntilB(0);
+    addLog(`{cyan-fg}Chart ${target}{/cyan-fg} auto-cycle resumed`);
+  };
+
+  const toggleChartPause = (target: 'A' | 'B') => {
+    const now = Date.now();
+    const pausedUntil = target === 'A' ? chartPauseUntilA : chartPauseUntilB;
+    if (pausedUntil > now) {
+      unpauseChart(target);
+    } else {
+      pauseChart(target);
+    }
+  };
+
   const selectChartPair = (
     next: string,
     exchange?: string,
@@ -655,10 +671,10 @@ function DashboardInner() {
     chartPauseUntilB,
   ]);
 
-  const chartAPauseRemainingSec = Math.max(0, Math.ceil((chartPauseUntilA - Date.now()) / 1000));
-  const chartBPauseRemainingSec = Math.max(0, Math.ceil((chartPauseUntilB - Date.now()) / 1000));
-  const chartAPauseLabel = chartAPauseRemainingSec > 0 ? `paused ${chartAPauseRemainingSec}s` : 'auto 30s';
-  const chartBPauseLabel = chartBPauseRemainingSec > 0 ? `paused ${chartBPauseRemainingSec}s` : 'auto 30s';
+  const chartAPaused = chartPauseUntilA > Date.now();
+  const chartBPaused = chartPauseUntilB > Date.now();
+  const chartAPauseLabel = chartAPaused ? 'paused' : 'auto';
+  const chartBPauseLabel = chartBPaused ? 'paused' : 'auto';
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [
@@ -939,7 +955,7 @@ function DashboardInner() {
         clickable={true}
         onClick={() => {
           setChartTarget('A');
-          pauseChart('A');
+          toggleChartPause('A');
         }}
       />
       <RealtimeOHLCChartContainer
@@ -958,7 +974,7 @@ function DashboardInner() {
         clickable={true}
         onClick={() => {
           setChartTarget('B');
-          pauseChart('B');
+          toggleChartPause('B');
         }}
       />
       <box
