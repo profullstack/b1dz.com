@@ -107,6 +107,13 @@ Backtest:
   timeframes: 1m, 5m, 15m, 1h, 4h, 1d, 1w
   Active pairs are discovered the same way the live daemon picks them.
 
+Cross-exchange arb audit:
+  b1dz audit-arb                           measure historical spread edges
+    --timeframe 1h                         default 1h
+    --limit 720                            candles per exchange (default 720)
+    --pair BTC-USD,ETH-USD                 optional: specific pairs
+    --position 100                         position size for $ estimates
+
 Sources:
   b1dz <source> run        start headless
   Available sources: crypto-arb, crypto-trade, all
@@ -171,6 +178,15 @@ if (source === 'backtest') {
     process.exit(0);
   } catch (e) {
     console.error(`backtest failed: ${(e as Error).message}`);
+    process.exit(1);
+  }
+} else if (source === 'audit-arb') {
+  const { runAuditArbCli } = await import('./audit-arb.js');
+  try {
+    await runAuditArbCli(process.argv.slice(3));
+    process.exit(0);
+  } catch (e) {
+    console.error(`audit-arb failed: ${(e as Error).message}`);
     process.exit(1);
   }
 } else if (source === 'tui') {
