@@ -1,559 +1,1211 @@
 # PRD.md
 
-# Crypto Trading Bot Analysis Engine PRD
+# b1dz DEX + Liquidity Pool Support PRD
+## With Solana and Pump.fun Support From Day One
 
 ## 1. Overview
 
-Build a deterministic short-term crypto trading analysis engine that scores market conditions and emits actionable trade setup signals without relying on AI for trade decisioning in v1.
+Build a new DEX and liquidity-pool trading layer for b1dz so the arbitrage bot can operate across both centralized exchanges and onchain venues from day one, with a deliberate shift in emphasis toward DeFi where fragmented liquidity and route mismatch opportunities are more likely to exist than on major centralized exchanges.
 
-The goal is to create a modular, testable signal engine that can:
-- detect market regime
-- score long and short setups
-- filter out low-quality conditions
-- support real-time analysis
-- feed a downstream execution engine
-- provide a clean upgrade path for AI-assisted regime classification and post-trade optimization in v2
+The current b1dz bot supports centralized exchanges only:
+- Coinbase
+- Gemini
+- Kraken
+- Binance.US
 
-This PRD covers the analysis engine only. It does not assume that AI is used to place trades.
+These venues remain useful for reference pricing, inventory parking, fiat access, and CEX/DEX comparison, but the PRD now assumes the strongest long-term edge is more likely to come from DeFi routing and pool fragmentation rather than simple major-exchange CEX arbitrage.
 
-## 2. Goals
+This project adds:
+- EVM DEX routing and swap execution
+- Solana DEX routing and swap execution
+- liquidity-pool quote ingestion
+- Pump.fun discovery, quote monitoring, and guarded execution support
+- unified profitability modeling across CEX and DEX venues
+- paper trading and backtesting support for onchain routes
+- production-safe live execution with strict risk controls
 
-- Generate short-term trading signals for crypto markets
-- Support intraday and swing-aware analysis
-- Minimize false positives during chop
-- Avoid overfitting by using a small number of interpretable signals
-- Provide a confidence score for each setup
-- Make all signals explainable in logs and UI
-- Enable later AI augmentation without changing core architecture
+The goal is not to start as a liquidity provider in MVP. The primary goal is to trade against onchain liquidity pools and aggregators in order to unlock more fragmented and potentially more profitable opportunity surfaces than are available on large centralized exchanges alone. A secondary explicit goal is to leave room for LP-management automation as a later strategy track on EVM chains once pool interactions, contracts, and execution behavior are well understood.
 
-## 3. Non-Goals
+This PRD is for Claude Code and should be treated as an implementation blueprint.
 
-- No AI-based autonomous trade placement in v1
-- No next-candle prediction model in v1
-- No opaque black-box signals in v1
-- No exchange-specific execution logic in this module
-- No portfolio optimization in v1
+## 2. Product Goal
 
-## 4. Product Requirements
+Enable b1dz to detect and execute profitable arbitrage and short-term routing opportunities across:
+- CEX to CEX
+- CEX to DEX
+- DEX to DEX
+- single-chain multi-pool arbitrage on EVM chains
+- multi-hop route arbitrage on EVM chains
+- Pump.fun bonding curve opportunities
+- Pump.fun to PumpSwap opportunities
+- Pump.fun ecosystem to Raydium / Orca / Jupiter routes where supported
+- single-chain routed swaps
+- eventually selected cross-chain opportunities
 
-The analysis engine must:
-- run continuously on live market data
-- support multiple symbols
-- support multiple timeframes
-- compute deterministic indicators in real time
-- classify market regime before evaluating entries
-- score setups using weighted signal logic
-- emit structured signal objects for downstream execution
-- expose reasons why a signal was produced or rejected
-- log all intermediate values for backtesting and debugging
+The system must support Solana from the initial release, not as a later add-on.
 
-## 5. Supported Timeframes
+## 3. Core Principles
 
-The engine must support:
-- 1m
-- 5m
-- 15m
-- 1h
-- 4h
-- 1d
-- 1w
+- Venue-agnostic architecture
+- All-in profitability accounting
+- Deterministic execution logic
+- Strict risk controls
+- Small-size live rollout first
+- Quote normalization across chains
+- Backtest parity where practical
+- No blind trust in aggregator output
+- Do not start by providing liquidity
+- Start by quoting and swapping against pools
+- Treat Pump.fun tokens as high-risk unless proven otherwise
+- Favor survivability over aggressiveness
 
-Recommended default usage:
-- entry timeframe: 1m or 5m
-- confirmation timeframe: 15m
-- bias timeframe: 1h
+## 4. Non-Goals
 
-## 6. Core Strategy Philosophy
+- No LP farming or LP provisioning in MVP
+- No automated concentrated-liquidity management in MVP
+- No fully autonomous cross-chain bridge arbitrage in MVP
+- No flash-loan arbitrage in MVP
+- No memecoin-first strategy in MVP outside guarded Pump.fun support
+- No AI-based trade placement in MVP
+- No blind buying of fresh Pump.fun launches without filters
 
-Use a small, complementary set of signals:
-- trend
-- momentum
-- intraday bias
-- volatility
-- volume
-- market regime
+## 5. Why This Exists
 
-Do not stack many overlapping indicators.
+Simple arbitrage across major centralized exchanges is highly competitive and often unprofitable after:
+- fees
+- spread
+- latency
+- withdrawal constraints
+- transfer delays
+- capital fragmentation
 
-The engine should first determine whether the market is:
-- trending up
-- trending down
-- sideways / choppy
-- high-volatility breakout
-- low-volatility compression
+Onchain liquidity pools create a wider opportunity surface:
+- more venues
+- more fragmented liquidity
+- many pools for the same base pair on one chain
+- more routing variation
+- more stale pricing in some pools
+- more stablecoin route differences
+- more long-tail asset opportunities
+- more combinatorial arbitrage paths when multiple pools and multi-hop routes are considered
 
-Only strategies appropriate to the current regime should be eligible.
+But onchain trading also introduces:
+- gas fees
+- slippage
+- approval flows on EVM
+- transaction failure risk
+- MEV risk
+- RPC latency and reliability issues
+- token risk
+- smart contract risk
 
-## 7. Inputs
+Gas must be modeled everywhere, but the PRD now distinguishes between:
+- high-gas environments where gas can dominate edge, especially Ethereum mainnet
+- lower-cost EVM environments where gas is still real but often less likely to be the primary blocker for moderate-size opportunities
 
-Required live inputs:
-- symbol
-- exchange
-- OHLCV candles by timeframe
-- real-time last trade price
-- bid/ask spread
-- volume
-- timestamp
+Pump.fun adds another opportunity surface, but with even higher risk:
+- extreme volatility
+- shallow or rapidly changing liquidity
+- bot-heavy flows
+- social hype decay
+- rug / abandonment risk
+- bag-holder risk
+- route and venue transitions during token lifecycle
 
-Optional future inputs:
-- order book imbalance
-- funding rates
-- open interest
-- liquidations
-- news / sentiment events
+Therefore b1dz needs a formal onchain execution architecture, not just a few swap scripts.
 
-## 8. Indicators and Signals
+## 6. Supported Venue Types
 
-### 8.1 Trend Filter
-Primary trend filter:
-- EMA fast
-- EMA slow
+### 6.1 CEX
+Existing:
+- Coinbase
+- Gemini
+- Kraken
+- Binance.US
 
-Recommended defaults:
-- 9 EMA
-- 21 EMA
-- optional 50 EMA for stronger trend confirmation
+### 6.2 EVM DEX / Aggregator Support
+MVP:
+- 0x
+- 1inch
+- at least one direct AMM integration on an EVM chain for contract-level learning and execution validation
+
+Phase 2 direct venues:
+- Uniswap
+- Curve
+- Balancer
+- Trader Joe on Avalanche
+- additional chain-native DEXes as justified by observed opportunity density
+
+### 6.3 Solana Support
+MVP:
+- Jupiter aggregator
+
+Phase 2 direct venues:
+- Raydium
+- Orca
+- Meteora or other major Solana liquidity venues as needed
+
+### 6.4 Pump.fun Ecosystem Support
+MVP:
+- Pump.fun token discovery
+- Pump.fun bonding-curve state monitoring
+- PumpSwap route awareness
+- Jupiter route comparison for supported assets
+- scrape or stream metadata only where officially supported APIs are absent or incomplete
+
+Phase 2:
+- direct PumpSwap adapter
+- direct Pump.fun program-aware quote adapter
+- migration detection from bonding curve to downstream venue
+- strategy module specialized for launch / post-launch behavior
+
+## 7. Chains
+
+### 7.1 EVM Chains
+MVP recommended:
+- Base
+- Avalanche
+- Ethereum for reference and selective execution only
+
+Optional later:
+- Arbitrum
+- Optimism
+- Polygon
+- BNB Chain
+
+Avalanche is specifically called out because DeFi pool fragmentation there may create many same-pair pool combinations and route permutations worth scanning.
+
+### 7.2 Solana
+MVP required:
+- Solana mainnet-beta
+
+## 8. Product Requirements
+
+The system must:
+- ingest quotes from CEXs, EVM aggregators, EVM DEXs, Solana aggregators, and Pump.fun-related venues
+- explicitly support multiple pools for the same pair on the same chain
+- explicitly support multi-hop route enumeration on EVM chains
+- normalize quotes into one canonical format
+- calculate all-in profitability before execution
+- support paper trading for onchain routes
+- support live EVM swap execution
+- support live Solana swap execution
+- manage EVM token approvals safely
+- manage Solana token account requirements
+- estimate gas, fees, and slippage
+- model route complexity and execution risk
+- reject unsafe or low-quality opportunities
+- track inventory by venue and chain
+- log every quote, decision, and execution outcome
+- support backtesting and replay where feasible
+- support strict Pump.fun allowlists and launch filters
+- support Pump.fun kill switches and exposure caps
+
+## 9. Core User Story
+
+As the operator of b1dz, I want to compare centralized exchange prices with onchain swap quotes on both EVM chains and Solana, including Pump.fun ecosystem routes, so that I can identify and execute profitable routes that still work after all costs and execution risks are applied.
+
+## 10. Strategy Scope
+
+The MVP should support these opportunity classes:
+
+### 10.1 CEX -> DEX Arbitrage
+Example:
+- buy on Coinbase
+- sell via Uniswap route on Base
+or:
+- buy on Kraken
+- sell via Jupiter on Solana
+
+### 10.2 DEX -> CEX Arbitrage
+Example:
+- buy via 0x on Base
+- sell on Binance.US
+
+### 10.3 DEX -> DEX Arbitrage On Same Chain
+Example:
+- buy through direct Uniswap route
+- sell through Curve route
+or:
+- buy through Orca
+- sell through Raydium
+or:
+- compare many same-pair pools on Avalanche such as multiple AVAX/USDC pools and evaluate all viable pairwise and routed combinations
+
+### 10.4 Aggregator vs Direct Venue Comparison
+Compare:
+- 0x quote
+- 1inch quote
+- direct Uniswap quote
+- direct Curve quote
+- direct Balancer quote
+- Jupiter route
+- direct Raydium quote
+- direct Orca quote
+- direct PumpSwap quote when available
+
+### 10.5 Pump.fun Specialized Opportunities
+- early discovery and paper scoring only for brand-new launches
+- bonding curve momentum observation
+- post-migration route comparison
+- Pump.fun / PumpSwap vs Raydium / Orca / Jupiter comparison where routable
+- fast-entry / faster-exit scalps only under strict exposure limits
+- immediate reject if token fails safety and liquidity filters
+
+## 11. Out of Scope for MVP Strategy
+- flash-loan atomic arbitrage
+- sandwich or MEV extraction
+- liquidity providing
+- rebalancing concentrated LP ranges
+- bridging capital mid-trade
+- fully automated long-tail token speculation
+- unlimited memecoin chasing
+- averaging down on failing Pump.fun names
+
+## 11A. Runtime Model: Observe Command and Trade Daemon
+
+b1dz must be split into two coordinated runtime components:
+
+### 11A.1 `b1dz observe`
+The `b1dz observe` command is a real-time opportunity scanner.
+
+Responsibilities:
+- connect to all enabled data sources
+- watch CEX books, DEX quotes, pool states, and Pump.fun lifecycle events
+- enumerate candidate opportunities
+- compute all-in profitability
+- rank opportunities by expected net profit and confidence
+- continuously stream the best opportunities to the server-side trade engine
+- never place trades directly in its default production role
+
+Outputs:
+- structured opportunity events
+- profitability breakdowns
+- reject reasons
+- top-N live opportunity feed
+- health and latency metrics by venue
+
+### 11A.2 Trade Engine Daemon
+The trade engine runs as a daemon on the server.
+
+Responsibilities:
+- subscribe to opportunity events from `b1dz observe`
+- apply final risk checks, balance checks, and feature flags
+- decide whether to execute, paper trade, or reject
+- manage execution state, retries, confirmations, and receipts
+- update inventory and realized PnL
+- expose kill-switch control and audit logs
+
+The observe process and trade daemon must communicate through a durable internal event channel such as:
+- Redis streams
+- NATS
+- Postgres queue
+- or another reliable message bus
+
+The boundary between them must be explicit:
+- observe finds and scores
+- daemon decides and executes
+
+## 11B. CoinPay CLI and Web Wallet Integration
+
+Because b1dz already has CoinPay web wallet infrastructure, the PRD should support using CoinPay CLI and related wallet flows as the operational bridge into onchain execution.
+
+Goals:
+- reuse existing wallet and signing infrastructure where practical
+- avoid inventing a second disconnected wallet stack unless required
+- make b1dz capable of requesting balances, addresses, and signing flows through CoinPay-compatible interfaces
+
+Recommended integration pattern:
+- b1dz adapters request wallet actions through a wallet-provider abstraction
+- one implementation of that abstraction is CoinPay CLI
+- other implementations may include direct private-key signers or chain-specific SDK signers
+
+Suggested responsibilities for the CoinPay CLI wallet provider:
+- return chain addresses for configured wallets
+- report balances for supported assets
+- sign EVM transactions
+- sign Solana transactions if supported by CoinPay wallet flows, otherwise fall back to a Solana-specific signer
+- manage or proxy web-wallet session/auth flows where relevant
+- keep private key material out of the b1dz app process when possible
+
+The PRD should treat CoinPay CLI as the preferred wallet bridge for:
+- web wallet interoperability
+- existing operational consistency
+- future user-facing wallet features
+
+But the architecture must remain pluggable because:
+- some DEX integrations may need direct low-level chain SDK access
+- Solana support may require a dedicated signer path even if CoinPay handles EVM well
+- server daemon execution may need non-interactive signing behavior distinct from browser wallet UX
+
+## 12. System Architecture
+
+The architecture must be modular and venue-agnostic.
+
+## 12A. EVM Pool Graph and Route Enumeration
+
+For EVM chains, the engine must maintain a pool graph where:
+- nodes are tokens
+- edges are pools or executable swap venues
+- multiple edges may exist for the same token pair
+
+The route engine must:
+- enumerate same-pair multi-pool comparisons
+- enumerate 2-hop and 3-hop routes under strict complexity limits
+- score routes by expected net value after gas, slippage, and price impact
+- avoid combinatorial explosion with configurable pruning rules
+
+
+### 12.1 Major Modules
+- market data service
+- quote service
+- venue adapter layer
+- token metadata registry
+- chain config registry
+- route profitability engine
+- risk engine
+- paper trading engine
+- live execution engine
+- wallet and signer service
+- wallet-provider abstraction with CoinPay CLI implementation
+- inventory ledger
+- Pump.fun discovery watcher
+- Pump.fun lifecycle classifier
+- observability and logging service
+- backtest/replay engine
+- admin config and feature flag layer
+
+### 12.2 High-Level Flow
+1. request quotes from all enabled venues
+2. ingest Pump.fun discovery / lifecycle events
+3. normalize all quotes and token metadata
+4. compute all-in profitability
+5. run safety and liquidity checks
+6. rank viable opportunities
+7. paper trade or live execute depending on mode
+8. track confirmations and fills
+9. update inventory and logs
+10. evaluate post-trade PnL
+
+## 13. Canonical Data Model
+
+All venues must map into a shared quote shape.
+
+```ts
+export type NormalizedQuote = {
+  venue: string
+  venueType: "cex" | "dex" | "aggregator" | "launchpad"
+  chain: string | null
+  dexProtocol?: string | null
+  pair: string
+  baseAsset: string
+  quoteAsset: string
+  amountIn: string
+  amountOut: string
+  amountInUsd?: string | null
+  amountOutUsd?: string | null
+  side: "buy" | "sell"
+  estimatedUnitPrice: string
+  feeUsd: string
+  gasUsd: string
+  slippageBps: number
+  priceImpactBps?: number | null
+  routeHops: number
+  routeSummary: string[]
+  quoteTimestamp: number
+  expiresAt?: number | null
+  latencyMs?: number | null
+  allowanceRequired?: boolean | null
+  approvalToken?: string | null
+  tokenLifecycle?: "new_launch" | "bonding_curve" | "migrating" | "pumpswap" | "external_pool" | null
+  raw: unknown
+}
+```
+
+All opportunities must map into a shared route shape.
+
+```ts
+export type Opportunity = {
+  id: string
+  buyVenue: string
+  sellVenue: string
+  buyChain: string | null
+  sellChain: string | null
+  asset: string
+  size: string
+  grossEdgeUsd: string
+  totalFeesUsd: string
+  totalGasUsd: string
+  totalSlippageUsd: string
+  riskBufferUsd: string
+  expectedNetUsd: string
+  expectedNetBps: number
+  confidence: number
+  blockers: string[]
+  executable: boolean
+  category: "cex_cex" | "cex_dex" | "dex_dex" | "pumpfun_scalp" | "pumpfun_migration" | "pumpfun_post_migration"
+}
+```
+
+## 14. Venue Adapter Requirements
+
+Each adapter must implement:
+- health check
+- authentication or wallet setup
+- token/pair support discovery
+- quote fetch
+- execution preparation
+- execution submit
+- execution status check
+- error normalization
+- rate limiting
+- retry policy
+- structured logging
+
+### 14.1 CEX Adapter Interface
+- fetch order book or top-of-book
+- fetch effective fill estimate for target size
+- submit order if enabled
+- fetch fill status
+- fetch balances
+
+### 14.1.1 CEX Market-Type Rules
+- distinguish spot from perps explicitly
+- never compare spot and perp prices as if they were identical without funding / basis logic
+- tag every CEX quote with market type
+- keep perp support out of scope unless a dedicated basis or funding-aware module is added
+
+
+### 14.2 EVM Adapter Interface
+- fetch quote
+- fetch firm quote or calldata
+- estimate gas
+- validate allowance
+- build approval transaction if needed
+- simulate where possible
+- submit transaction
+- track receipt
+- classify failure
+
+### 14.3 Solana Adapter Interface
+- fetch quote
+- fetch prepared swap transaction or instructions
+- estimate fees
+- validate token account readiness
+- sign and send transaction
+- confirm transaction
+- classify failure
+
+### 14.4 Pump.fun Adapter Interface
+- detect new launches or newly relevant tokens
+- fetch bonding curve state if applicable
+- infer token lifecycle state
+- discover downstream routing venue availability
+- fetch quote or indicative price when possible
+- classify unsupported / unsafe states
+- expose migration or graduation signals
+- support scrape fallback only behind feature flag
+
+### 14.5 EVM Contract Discovery and ABI Workflow
+- for at least one direct EVM DEX integration, inspect real swap and liquidity transactions
+- capture relevant contract addresses from transaction traces or logs
+- retrieve and store verified ABIs when available
+- generate typed contract clients from ABIs
+- separate router, pair/pool, factory, and helper contracts in the adapter design
+- support a developer workflow for learning new pools by tracing a known deposit or swap transaction end to end
+
+
+## 15. EVM-Specific Requirements
+
+### 15.1 Wallet Support
+- per-chain wallet configuration
+- support dedicated hot wallet
+- secure private key loading through env or secret manager
+- nonce management
+- balance checks before execution
+
+### 15.2 Approvals
+- detect allowance requirement
+- support approve-exact or safe approval policy
+- track approval gas cost
+- optionally pre-approve commonly used tokens only via explicit config
+- reject routes that require approval when approval cost kills edge
+
+### 15.3 Gas Strategy
+- support EIP-1559 fee modeling
+- configurable max gas thresholds
+- gas buffer for volatile periods
+- stale gas quote rejection
+
+### 15.4 Simulation
+- where possible, simulate swap transaction before send
+- reject on obvious failure cases
+- store simulation diagnostics
+
+## 15A. Wallet Provider Abstraction
+
+All execution paths must go through a wallet-provider abstraction rather than coupling adapters directly to raw keys.
+
+Required interface areas:
+- getAddress(chain)
+- getBalance(chain, asset)
+- signTransaction(chain, payload)
+- signMessage(chain, payload) where needed
+- broadcastTransaction(chain, signedPayload) when supported
+- capability discovery by chain
+
+Implementations:
+- CoinPay CLI wallet provider
+- direct EVM signer provider
+- direct Solana signer provider
 
 Rules:
-- bullish trend when EMA fast > EMA slow and price > both
-- bearish trend when EMA fast < EMA slow and price < both
-- neutral otherwise
+- prefer CoinPay CLI where it provides a clean server-safe path
+- keep Solana signer support pluggable in case CoinPay coverage is incomplete
+- never hardcode wallet logic into venue adapters
 
-### 8.2 Momentum Confirmation
-Use MACD as momentum confirmation, not as standalone direction.
+## 16. Solana-Specific Requirements
 
-Compute:
-- MACD line
-- signal line
-- histogram
-- histogram slope
+### 16.1 Wallet Support
+- dedicated Solana hot wallet
+- secure keypair loading through env or secret manager
+- SOL balance monitoring for transaction fees
+- SPL token account awareness
 
-Bullish momentum:
-- MACD histogram > previous histogram
-- MACD line >= signal line preferred
+### 16.2 Quote and Execution
+- Jupiter quote integration from MVP
+- support prepared transaction flow
+- slippage configuration per route
+- optional priority fee support
+- blockhash freshness validation
+- transaction confirmation handling
+- transaction retry or re-sign policy where safe
 
-Bearish momentum:
-- MACD histogram < previous histogram
-- MACD line <= signal line preferred
+### 16.3 Solana Safety Checks
+- token mint allowlist for MVP
+- freeze authority / mint risk awareness where available
+- token decimal verification
+- liquidity threshold filter
+- route complexity filter
+- stale quote rejection
 
-### 8.3 Mean Reversion Trigger
-Use RSI as a pullback or exhaustion tool, not as a standalone buy/sell trigger.
+## 17. Pump.fun Strategy Guardrails
 
-Recommended defaults:
-- RSI length 14
+Pump.fun support must be opt-in and heavily restricted.
 
-Bullish pullback context:
-- higher timeframe bullish
-- RSI dips into 35-45 zone
-- RSI turns upward
+### 17.1 MVP Pump.fun Rules
+- default to observe mode only
+- default to paper trading for fresh launches
+- require manual enablement for live trading
+- require token allowlist or rule-based allowlist
+- require min liquidity / routeability
+- require max holding time
+- require hard stop loss
+- require max position size much smaller than majors
+- never average down automatically
+- never hold because of social hype alone
 
-Bearish pullback context:
-- higher timeframe bearish
-- RSI rises into 55-65 zone
-- RSI turns downward
+### 17.2 Pump.fun Entry Filters
+A Pump.fun candidate must pass:
+- sufficient routeable liquidity
+- acceptable spread / price impact
+- sufficient volume velocity
+- enough unique activity to avoid totally dead launches
+- not flagged by denylist
+- token metadata present enough to classify
+- execution venue actually reachable
+- estimated exit path exists before entry
 
-Optional hard oversold / overbought:
-- RSI < 30 oversold
-- RSI > 70 overbought
+### 17.3 Pump.fun Exit Rules
+For Pump.fun live mode:
+- predefined take-profit ladder or hard take-profit
+- predefined stop-loss
+- predefined max hold time
+- immediate exit on liquidity collapse signal
+- immediate exit on route disappearance
+- immediate exit on severe price-impact expansion
+- no discretionary bag holding
 
-### 8.4 Intraday Bias
-Use VWAP as the primary intraday anchor.
+### 17.4 Pump.fun Modes
+- observe_only
+- paper_only
+- guarded_live
+- disabled
 
-Bullish intraday bias:
-- price above VWAP
-- or price reclaims VWAP after pullback
+## 18. Token Registry
 
-Bearish intraday bias:
-- price below VWAP
-- or price rejects VWAP after rally
+Build an internal token registry that stores:
+- symbol
+- chain
+- mint or contract address
+- decimals
+- stablecoin flag
+- wrapped/native mapping
+- safety status
+- allowlisted flag
+- disabled flag
+- common venues
+- pumpFunFlag
+- pumpLifecycleState
+- denylistReason if blocked
 
-### 8.5 Volatility Gate
-Use ATR for volatility qualification and stop sizing.
+This registry must support:
+- ETH <-> WETH normalization
+- SOL <-> wrapped SOL handling where needed
+- BTC wrappers distinction
+- USDC variants by chain
+- token aliases and symbol collisions
+- Pump.fun mint lifecycle transitions
 
-Recommended default:
-- ATR length 14
+## 19. Pricing and Profitability Engine
 
-Usage:
-- skip trades when ATR is below configured minimum threshold
-- prefer breakout setups when ATR is expanding
-- size stops and targets using ATR multiples
+This is the heart of the system.
 
-### 8.6 Volume Confirmation
-Use volume as a quality check.
+The engine must compute:
 
-Recommended checks:
-- current volume > rolling average volume
-- breakout candle volume > N-period average
-- reject weak breakouts on low volume
+expectedNetUsd =
+exitValueUsd
+- entryValueUsd
+- tradingFeesUsd
+- gasUsd
+- slippageUsd
+- approvalCostUsd
+- transferCostUsd
+- priorityFeeUsd
+- riskBufferUsd
 
-### 8.7 Optional Future Signals
-Optional for v1.1 or v2:
-- Bollinger Band expansion/compression
-- ADX for trend strength
-- support/resistance breakout detection
-- order book imbalance
-- liquidation cluster proximity
-- open interest expansion
+The engine must never treat a raw spread as profit.
 
-## 9. Market Regime Engine
+### 19.1 Required Cost Inputs
+- CEX trading fees
+- DEX protocol fees where embedded or explicit
+- EVM gas
+- Solana network fees
+- Solana priority fees if used
+- approval gas costs
+- estimated slippage
+- route price impact
+- spread decay buffer
+- quote staleness buffer
+- Pump.fun-specific liquidity decay buffer
+- Pump.fun-specific dump-risk buffer
 
-Before scoring entries, classify current regime.
+### 19.2 Profitability Thresholds
+Configurable:
+- minimum absolute USD profit
+- minimum net basis points
+- per-asset minimum edge
+- per-chain minimum edge
+- stricter thresholds during high gas or high volatility
+- much stricter thresholds for Pump.fun names
 
-Minimum regimes:
-- Uptrend
-- Downtrend
-- Sideways
-- Breakout Expansion
-- Compression
+## 20. Liquidity and Safety Filters
 
-Suggested logic:
-- Uptrend: EMA fast > EMA slow, price above VWAP, ATR normal-to-rising
-- Downtrend: EMA fast < EMA slow, price below VWAP, ATR normal-to-rising
-- Sideways: EMA mixed, price crossing VWAP frequently, low ADX or flat ATR behavior
-- Breakout Expansion: ATR rising sharply, volume rising, price breaking recent range
-- Compression: ATR falling, range narrowing, low realized volatility
+Reject any opportunity that violates safety rules.
 
-The strategy engine must only allow:
-- trend continuation setups in trending regimes
-- mean reversion setups in sideways or pullback contexts
-- breakout setups in expansion regimes
+### 20.1 Global Filters
+- net profit below threshold
+- quote too stale
+- opportunity already executed recently
+- insufficient inventory
+- insufficient wallet balance
+- feature flag disabled
+- circuit breaker active
 
-## 10. Setup Types
+### 20.2 DEX Filters
+- price impact too high
+- route too many hops
+- liquidity below minimum threshold
+- token not allowlisted
+- gas too high relative to trade size
+- slippage too high
+- required approval too expensive
+- direct venue unavailable
+- aggregator confidence too low
 
-### 10.1 Long Trend Continuation
-Conditions:
-- higher timeframe bullish bias
-- EMA fast > EMA slow
-- price above VWAP
-- RSI pulled back and recovering
-- MACD histogram rising
-- volume above average
+### 20.3 Solana Filters
+- token not allowlisted
+- route too complex
+- fee spike
+- blockhash too stale
+- Jupiter route quality below threshold
+- token account setup requirement exceeds value of trade
+- low liquidity on pool
 
-Entry trigger examples:
-- reclaim of short EMA
-- break of prior candle high
-- reclaim of VWAP after pullback
+### 20.4 Pump.fun Filters
+- fresh launch but no validated exit route
+- price impact too high
+- liquidity too thin
+- suspected dead token behavior
+- route vanished
+- denylisted mint
+- holding time limit would likely be exceeded
+- social-only momentum with no executable depth
+- position size exceeds Pump.fun cap
+- token lifecycle unknown
 
-### 10.2 Short Trend Continuation
-Conditions:
-- higher timeframe bearish bias
-- EMA fast < EMA slow
-- price below VWAP
-- RSI rallied and turning down
-- MACD histogram falling
-- volume above average
-
-Entry trigger examples:
-- rejection from short EMA
-- break of prior candle low
-- rejection at VWAP
-
-### 10.3 Long Mean Reversion
-Conditions:
-- higher timeframe not strongly bearish
-- price stretched below local fair value
-- RSI oversold or in pullback zone
-- seller momentum decelerating
-- reclaim trigger confirmed
-
-Good contexts:
-- range market
-- pullback in broader uptrend
-
-### 10.4 Short Mean Reversion
-Conditions:
-- higher timeframe not strongly bullish
-- price stretched above local fair value
-- RSI overbought or in rally zone
-- buyer momentum decelerating
-- rejection trigger confirmed
-
-### 10.5 Breakout / Breakdown
-Conditions:
-- recent compression or range
-- ATR expansion begins
-- volume expands
-- price breaks local structure
-- VWAP aligns with breakout direction where possible
-
-## 11. Signal Scoring
-
-Each candidate setup should receive a confidence score from 0 to 100.
-
-Suggested weights:
-- trend alignment: 25
-- momentum confirmation: 20
-- VWAP / intraday bias: 20
-- RSI context: 10
-- volatility qualification: 10
-- volume confirmation: 10
-- spread / execution quality: 5
-
-Suggested score thresholds:
-- 80-100: high-confidence setup
-- 65-79: tradable setup
-- 50-64: weak / optional
-- below 50: reject
-
-The engine must return both:
-- numeric score
-- structured reasons
-
-Example:
-- trend_aligned = true
-- vwap_aligned = true
-- macd_confirmed = true
-- rsi_recovery = true
-- volume_confirmed = false
-- atr_ok = true
-
-## 12. Risk and Trade Filters
-
-The analysis engine must include reject conditions even though actual risk management may live elsewhere.
-
-Reject setup if:
+### 20.5 CEX Filters
+- order book depth insufficient
 - spread too wide
-- ATR too low
-- volume too low
-- recent candles too noisy
-- price too extended from entry anchor
-- regime conflicts with strategy type
-- cooldown active for symbol
-- too close to max loss threshold or kill switch state
+- withdrawal disabled if route depends on asset movement
+- venue in degraded state
 
-Recommended filters:
-- max spread percentage
-- min ATR threshold by symbol
-- min relative volume
-- no trade after N consecutive stopouts
-- no entry if distance to stop is too wide for configured risk
+## 21. Inventory Management
 
-## 13. Outputs
-
-The engine should emit structured signal objects like:
-
-```json
-{
-  "symbol": "BTCUSDT",
-  "timestamp": 1770000000,
-  "timeframe": "5m",
-  "regime": "uptrend",
-  "setupType": "long_trend_continuation",
-  "score": 84,
-  "direction": "long",
-  "entryBias": "market_or_limit",
-  "entryZone": {
-    "min": 63250.5,
-    "max": 63290.0
-  },
-  "stopLoss": 62980.0,
-  "takeProfit": 63840.0,
-  "riskReward": 2.1,
-  "indicators": {
-    "emaFast": 63210.2,
-    "emaSlow": 63140.7,
-    "rsi": 42.6,
-    "macdHistogram": 18.2,
-    "vwap": 63195.8,
-    "atr": 145.3,
-    "volumeRatio": 1.42
-  },
-  "reasons": [
-    "Higher timeframe bullish bias",
-    "Price above VWAP",
-    "EMA fast above EMA slow",
-    "RSI pullback recovered",
-    "MACD histogram rising"
-  ],
-  "rejected": false
-}
-```
-
-Rejected setups should also be logged with reject reasons.
-
-## 14. Backtesting Requirements
-
-The same exact signal engine used in production must be usable in backtests.
-
-Backtests must include:
-- fees
-- slippage
-- spread assumptions
-- latency assumptions where possible
-- stop and target simulation
-- cooldown logic
-- no-trade filters
-
-Minimum metrics:
-- total return
-- win rate
-- profit factor
-- expectancy
-- max drawdown
-- Sharpe or simpler risk-adjusted metric
-- average hold time
-- trades per day
-- performance by symbol
-- performance by regime
-- performance by hour of day
-- performance by volatility bucket
-
-## 15. Logging and Observability
-
-The engine must log:
-- raw indicator values
-- regime classification
-- score breakdown
-- reason codes
-- rejected setup reasons
-- final output signal
-- downstream execution result references
-
-Logs should support:
-- debugging false positives
-- post-trade review
-- AI-assisted analysis later
-- dashboard visualization
-
-## 16. Suggested Default Config
-
-```json
-{
-  "timeframes": {
-    "entry": "5m",
-    "confirm": "15m",
-    "bias": "1h"
-  },
-  "indicators": {
-    "emaFast": 9,
-    "emaSlow": 21,
-    "emaTrend": 50,
-    "rsiLength": 14,
-    "atrLength": 14,
-    "macdFast": 12,
-    "macdSlow": 26,
-    "macdSignal": 9,
-    "volumeLookback": 20
-  },
-  "thresholds": {
-    "minScore": 65,
-    "highConfidenceScore": 80,
-    "maxSpreadPct": 0.15,
-    "minVolumeRatio": 1.1,
-    "minAtrPct": 0.2
-  },
-  "risk": {
-    "defaultAtrStopMultiple": 1.5,
-    "defaultAtrTargetMultiple": 2.5,
-    "cooldownBarsAfterLoss": 3
-  }
-}
-```
-
-## 17. AI Roadmap
-
-### 17.1 No-AI v1
-v1 should be fully deterministic and explainable.
-
-AI is not required for profitable operation in the first version.
-
-### 17.2 AI-Assisted v2
-AI should help with classification and optimization, not directly place trades initially.
-
-Recommended AI use cases:
-- regime classification enhancement
-- anomaly detection
-- strategy selection by environment
-- threshold adaptation
-- post-trade pattern clustering
-- performance attribution
-- filtering out low-quality setups
+b1dz must track inventory separately by venue and chain.
 
 Examples:
-- identify whether current market is trend, chop, breakout, liquidation event, or news shock
-- disable mean reversion during violent expansion
-- identify which hours and symbols respond best to which setups
-- detect when spread/slippage conditions are abnormal
+- USD on Coinbase
+- USDC on Base hot wallet
+- ETH on Base hot wallet
+- SOL in Solana hot wallet
+- USDC on Solana wallet
+- Pump.fun token inventory on Solana wallet
+- USDT on Kraken
 
-### 17.3 Avoid These AI Uses Early
-Do not start with:
-- raw next-candle prediction
-- LLM-generated trade calls
-- black-box autonomous trading
-- continuously changing parameters without guardrails
-- training on tiny datasets
+The bot must not assume capital is freely movable in real time.
 
-## 18. Recommended Architecture
+Inventory ledger must include:
+- available balance
+- reserved balance
+- pending settlement
+- pending tx state
+- venue
+- chain
+- token
+- USD reference value
 
-Modules:
-- market data ingestion
-- candle builder
-- indicator engine
-- regime classifier
-- setup evaluator
-- score engine
-- risk filter layer
-- signal publisher
-- logging / analytics pipeline
+## 22. Trade Modes
 
-Flow:
-1. ingest live market data
-2. update candles
-3. compute indicators
-4. classify regime
-5. evaluate eligible setup types
-6. score setup
-7. run reject filters
-8. emit signal or rejection
-9. log everything
+### 22.1 Observe Mode
+- fetch quotes only
+- compute opportunities only
+- log everything
+- no paper fills
+- no live execution
 
-## 19. MVP Scope
+### 22.2 Paper Mode
+- simulate fills using modeled slippage and fees
+- generate pseudo execution receipts
+- compare expected vs simulated realized outcome
 
-MVP must include:
-- OHLCV ingestion
-- multi-timeframe candle support
-- EMA trend filter
-- MACD momentum confirmation
-- RSI pullback logic
-- VWAP bias
-- ATR gate
-- volume confirmation
+### 22.3 Live Mode
+- real transactions and orders
+- strict max size
+- strict allowed assets
+- strict chain allowlist
+- kill switch enabled
+
+### 22.4 Pump.fun Live Restrictions
+- separate feature flag
+- separate max size
+- separate max concurrent positions
+- separate kill switch
+- separate daily loss cap
+
+## 23. Backtesting and Replay
+
+Backtesting must support:
+- historical CEX top-of-book or candle-derived approximations
+- recorded DEX quote snapshots or replay logs
+- recorded gas and fee estimates when possible
+- modeled slippage
+- modeled approval costs
+- route rejection logic
+- latency assumptions
+- Pump.fun event streams or scraped snapshots where available
+
+Where perfect reconstruction is impossible, the system must document the gap clearly.
+
+### 23.1 Minimum Metrics
+- gross PnL
+- net PnL
+- net PnL after all costs
+- win rate
+- average opportunity size
+- fill rate
+- failure rate
+- execution rejection rate
+- PnL by venue
+- PnL by chain
+- PnL by asset
+- PnL by route type
+- PnL by token lifecycle state
+- Pump.fun exposure versus return
+
+## 24. Logging and Observability
+
+Every decision must be explainable.
+
+Log:
+- raw venue quote
+- normalized quote
+- profitability breakdown
+- rejection reasons
+- selected opportunity
+- execution payload metadata
+- tx hash or order id
+- confirmation status
+- realized outcome
+- post-trade variance vs estimate
+- Pump.fun lifecycle state changes
+- Pump.fun migration detection events
+
+Dashboards should show:
+- quote counts by venue
+- opportunities by venue pair
+- approval costs over time
+- gas by chain
+- Solana fee trends
+- realized vs expected PnL
+- error rates
+- kill switch events
+- Pump.fun watchlist quality
+- Pump.fun exits by reason
+
+## 25. Risk Engine
+
+### 25.1 Hard Limits
+- max USD size per trade
+- max USD size per asset
+- max USD size per chain
+- max daily loss
+- max per-venue loss
+- max gas per trade
+- max Solana fee per trade
+- max slippage bps
+- max price impact bps
+
+### 25.2 Pump.fun Hard Limits
+- much lower max USD per trade
+- max hold time in seconds or minutes
+- max concurrent Pump.fun positions
+- max daily Pump.fun loss
+- max exposure to any single mint
+- mandatory stop-loss
+- mandatory take-profit or timed exit
+
+### 25.3 Kill Switches
+- repeated tx failures
+- repeated CEX order failures
+- repeated stale quote failures
+- chain congestion
+- RPC degradation
+- abnormal gas spike
+- wallet balance too low
+- approval stuck state
+- realized loss threshold exceeded
+- Pump.fun liquidity collapse
+- too many Pump.fun stopouts in sequence
+
+## 25A. Node Strategy
+
+The system should support both third-party RPC providers and self-hosted nodes where practical.
+
+Guidance:
+- do not require self-hosting for MVP
+- track quote freshness and latency by provider
+- design the architecture so a self-hosted node can be added later for chains where lower latency or better trace access materially improves results
+- prioritize own-node or archive/trace-capable access for serious EVM arbitrage research if third-party RPC quality proves limiting
+
+## 26. RPC and Infrastructure Requirements
+
+### 26.1 EVM
+- reliable primary RPC per chain
+- fallback RPC support
+- configurable timeouts
+- health checks
+- rate limiting
+- metrics per provider
+
+### 26.2 Solana
+- reliable primary RPC
+- fallback RPC support
+- WebSocket support if needed
+- health and slot lag checks
+- confirmation latency tracking
+
+### 26.3 General
+- Dockerized services
+- Railway-friendly deployment where possible
+- isolated signer service if desired
+- environment-based secrets
+- detailed structured JSON logs
+
+## 27. Security Requirements
+
+- never expose private keys client-side
+- all signing server-side only
+- encrypt secrets at rest where possible
+- validate token allowlist before trade
+- block unknown token mints/contracts by default
+- support dry-run mode globally
+- support emergency global disable
+- store minimal sensitive data in logs
+- redact secrets in errors and traces
+- require explicit enablement for scrape-based Pump.fun sources
+
+## 28. Recommended MVP Asset Scope
+
+Keep the first live scope narrow.
+
+### 28.1 EVM MVP Assets
+- ETH / WETH
+- USDC
+- USDT
+- DAI
+- cbBTC or WBTC only if explicitly enabled
+
+### 28.2 Solana MVP Assets
+- SOL
+- USDC
+- USDT
+- wrapped BTC or ETH only if explicitly enabled
+
+### 28.3 Pump.fun MVP Scope
+- observe and paper mode for broad discovery
+- live mode only for explicitly enabled shortlist
+- no blind trading of every new launch
+- no overnight holds
+- no averaging down
+- no martingale behavior
+
+### 28.4 Avoid in MVP
+- memecoins outside guarded rules
+- low-liquidity tokens
+- newly deployed tokens without routeable exit
+- unverified mints/contracts
+- fee-on-transfer tokens
+
+## 29. Recommended Roadmap
+
+### Phase 1: Normalized Quote Infrastructure
+Build:
+- shared quote types
+- adapter interfaces
+- token registry
+- opportunity model
+- profitability engine
+- observe mode
+- logging
+
+Adapters:
+- Coinbase
+- Kraken
+- Gemini
+- Binance.US
+- 0x
+- 1inch
+- Jupiter
+- Pump.fun discovery adapter
+
+### Phase 2: Paper Trading
+Build:
+- paper execution simulator
+- slippage model
+- gas and fee model
+- route replay logs
+- comparison dashboards
+- Pump.fun lifecycle replay
+
+### Phase 3: Live EVM Execution
+Build:
+- wallet service
+- approval manager
+- transaction builder
+- receipt tracker
+- kill switch controls
+
+### Phase 4: Live Solana Execution
+Build:
+- Solana wallet service
+- Jupiter transaction flow
+- confirmation tracking
+- priority fee controls
+- Solana-specific safety filters
+
+### Phase 5: Guarded Pump.fun Execution
+Build:
+- Pump.fun rule engine
+- allowlist / denylist controls
+- forced time-based exit logic
+- tighter risk caps
+- PumpSwap awareness
+- migration-aware execution filters
+
+### Phase 6: Direct Venue Integrations
+EVM:
+- direct Uniswap
+- direct Curve
+- direct Balancer
+
+Solana:
+- direct Raydium
+- direct Orca
+- optional Meteora
+- direct PumpSwap if justified
+
+### Phase 7: Advanced Strategies
+- DEX vs DEX route optimization
+- atomic route support where feasible
+- direct venue vs aggregator edge testing
+- AI-assisted route filtering
+- selective cross-chain opportunities
+
+## 30. AI Roadmap
+
+AI is optional and should not control trading in MVP.
+
+Good AI uses later:
+- opportunity quality scoring
 - regime classification
-- score engine
-- structured output
-- full logging
-- backtest compatibility
+- anomaly detection
+- route failure prediction
+- gas spike forecasting
+- token risk pattern detection
+- post-trade clustering of winners vs losers
+- Pump.fun launch quality scoring
 
-Nice-to-have after MVP:
-- ADX
-- Bollinger compression
-- order book imbalance
-- open interest
-- liquidation feeds
-- AI-assisted regime labeling
+Bad AI uses early:
+- LLM deciding trades directly
+- black-box next-tick prediction
+- dynamic parameter changes without guardrails
+- buying hype because of social chatter alone
 
-## 20. Success Criteria
+## 31. Suggested Repo Structure
 
-The analysis engine is successful when:
-- it produces fewer low-quality trades in chop
-- it emits explainable signals
-- it supports reliable backtesting and live use with identical logic
-- it shows positive expectancy after fees and slippage on selected pairs
-- it can be extended with AI without rewriting the core system
+```txt
+/apps
+  /engine
+  /api
+  /dashboard
+/packages
+  /core
+  /types
+  /config
+  /adapters-cex
+  /adapters-evm
+  /adapters-solana
+  /adapters-pumpfun
+  /wallet-provider
+  /coinpay-wallet-provider
+  /profitability
+  /risk
+  /paper-execution
+  /live-execution
+  /token-registry
+  /observability
+```
 
-## 21. Final Recommendation
+## 32. Suggested Environment Variables
 
-Start with deterministic signals first.
+```env
+# General
+NODE_ENV=development
+LOG_LEVEL=info
+MODE=observe
 
-The best first production setup is:
-- higher timeframe bias
-- EMA trend filter
-- VWAP intraday bias
-- RSI pullback trigger
-- MACD histogram confirmation
-- ATR-based volatility gate
-- volume confirmation
-- strict score threshold
-- strict spread/slippage rejection
+# CEX
+COINBASE_API_KEY=
+COINBASE_API_SECRET=
+KRAKEN_API_KEY=
+KRAKEN_API_SECRET=
+GEMINI_API_KEY=
+GEMINI_API_SECRET=
+BINANCE_US_API_KEY=
+BINANCE_US_API_SECRET=
 
-Add AI later as a supervisor and optimizer, not as the first trader.
+# CoinPay / Wallet Provider
+COINPAY_CLI_PATH=coinpay
+COINPAY_PROFILE=default
+WALLET_PROVIDER=coinpay
+COINPAY_WEB_WALLET_ENABLED=true
+
+# EVM
+EVM_PRIVATE_KEY=
+ETHEREUM_RPC_URL=
+BASE_RPC_URL=
+AVALANCHE_RPC_URL=
+ZEROX_API_KEY=
+ONEINCH_API_KEY=
+
+# Solana
+SOLANA_PRIVATE_KEY=
+SOLANA_RPC_URL=
+SOLANA_WS_URL=
+
+# Pump.fun
+PUMPFUN_MODE=observe_only
+PUMPFUN_ENABLE_SCRAPE=false
+PUMPFUN_MAX_TRADE_USD=25
+PUMPFUN_MAX_HOLD_SECONDS=300
+PUMPFUN_MAX_CONCURRENT_POSITIONS=2
+PUMPFUN_DAILY_MAX_LOSS_USD=100
+
+# Risk
+MAX_TRADE_USD=100
+MIN_NET_PROFIT_USD=2
+MIN_NET_PROFIT_BPS=15
+MAX_GAS_USD=5
+MAX_SLIPPAGE_BPS=50
+MAX_ROUTE_HOPS=3
+```
+
+## 33. MVP Acceptance Criteria
+
+The MVP is complete when:
+- `b1dz observe` can stream ranked live opportunities in real time
+- the trade daemon can subscribe to those opportunities and apply final execution decisions
+- CoinPay CLI can be used as a wallet-provider implementation for supported chains
+- b1dz can fetch quotes from all enabled CEX venues
+- b1dz can fetch quotes from 0x, 1inch, Jupiter, and Pump.fun discovery sources
+- all quotes map into a single normalized format
+- the profitability engine computes net expected value after all costs
+- unsafe routes are rejected with explicit reasons
+- paper trading works for CEX, EVM, Solana, and guarded Pump.fun opportunities
+- live EVM execution works for allowed assets on enabled chains
+- live Solana execution works via Jupiter for allowed assets
+- Pump.fun support works in observe and paper mode by default
+- optional guarded Pump.fun live mode enforces tighter risk caps
+- inventory tracking works across venues and chains
+- dashboards and logs clearly explain why opportunities were accepted or rejected
+- kill switch and hard risk limits are enforced
+
+## 34. Success Criteria
+
+This project is successful when:
+- b1dz finds more viable opportunities than the current CEX-only engine
+- observed edge survives realistic cost modeling
+- paper mode closely matches live execution quality
+- live mode safely executes small-size profitable routes
+- Solana support is first-class, not bolted on later
+- Pump.fun support is heavily controlled and does not create recurring bag-holder behavior
+- the architecture is clean enough to add direct DEX integrations afterward
+
+## 35. Final Recommendation
+
+Build b1dz as a unified multi-venue arbitrage engine, not as a set of exchange-specific scripts.
+
+Start with:
+- CEX quotes
+- 0x
+- 1inch
+- Jupiter
+- Pump.fun discovery and guarded lifecycle monitoring
+- all-in profitability modeling
+- observe mode
+- paper mode
+- very small live mode
+
+Do not start by becoming an LP.
+
+Do not treat Pump.fun as a free-money machine.
+
+Start by:
+- reading onchain liquidity
+- routing swaps safely
+- modeling the true cost of execution
+- comparing routes across CEX, EVM, and Solana venues
+- keeping Pump.fun on the shortest leash of all
+
+That is the fastest path to learning whether liquidity-pool support actually improves profitability for b1dz without turning the bot into a bag-holder.
