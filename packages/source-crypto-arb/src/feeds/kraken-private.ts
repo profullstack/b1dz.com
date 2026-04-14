@@ -177,6 +177,10 @@ export async function getOpenOrders(): Promise<Record<string, OpenOrder>> {
   return result.open;
 }
 
+export async function cancelOrder(txid: string): Promise<{ count: number }> {
+  return krakenPrivate<{ count: number }>('/0/private/CancelOrder', { txid });
+}
+
 export interface TradeEntry {
   pair: string;
   type: string;
