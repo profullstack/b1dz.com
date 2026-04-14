@@ -47,7 +47,7 @@ export default function LandingPage(): JSX.Element {
           alt="Terminal Interface"
           width={1960}
           height={682}
-          className="w-full h-auto rounded-xl border border-zinc-800"
+          className="w-full h-auto rounded-xl"
           priority
         />
       </section>
@@ -60,7 +60,7 @@ export default function LandingPage(): JSX.Element {
           alt="Web Dashboard"
           width={1949}
           height={1254}
-          className="w-full h-auto rounded-xl border border-zinc-800"
+          className="w-full h-auto rounded-xl"
         />
       </section>
 
