@@ -9,7 +9,7 @@
  *   - Trailing stop-loss (breakeven → lock-in profit)
  *   - Take-profit at +1.5%
  *   - 10-minute cooldown between trades per pair
- *   - $5/day max loss limit (5% of $100)
+ *   - 5%/day max realized loss limit across total account equity
  *   - $100 max position size
  */
 
@@ -88,8 +88,11 @@ const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%
 /** Cooldown after closing a position before opening another. */
 const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes (was 10)
 
-/** Max daily loss before halting trades. Disabled during active development/testing. */
-const DAILY_LOSS_LIMIT_USD = Number.POSITIVE_INFINITY;
+/** Max daily realized loss before halting new entries, as % of start-of-day total equity. */
+const DAILY_LOSS_LIMIT_PCT = (() => {
+  const value = Number.parseFloat(process.env.DAILY_LOSS_LIMIT_PCT ?? '5');
+  return Number.isFinite(value) && value > 0 ? value : 5;
+})();
 const WARMUP_TICKS = 20;
 
 // ─── State ─────────────────────────────────────────────────────
@@ -158,6 +161,7 @@ const lastExitAt = new Map<string, number>();
 /** Cumulative realized P/L for today. */
 let dailyPnl = 0;
 let dailyPnlDate = new Date().toDateString();
+let dailyEquityBaselineUsd = 0;
 let tradePollCount = 0;
 let lastEligiblePairs: string[] = [];
 let lastQuoteBalanceRefresh = 0;
@@ -172,6 +176,11 @@ const MIN_SPENDABLE_QUOTE_USD = 5;
 const DUST_USD_THRESHOLD = 1;
 const STALE_OPEN_BUY_ORDER_MS = 5 * 60_000;
 const spendableQuoteBalances: Record<string, Record<string, number>> = {
+  kraken: {},
+  coinbase: {},
+  'binance-us': {},
+};
+const accountBalances: Record<string, Record<string, string>> = {
   kraken: {},
   coinbase: {},
   'binance-us': {},
@@ -275,6 +284,43 @@ function currentLiquidationOnExchange(exchange: string): PendingLiquidation | nu
     if (liquidation.exchange === exchange) return liquidation;
   }
   return null;
+}
+
+function normalizeKrakenAsset(asset: string): string {
+  if (asset === 'ZUSD') return 'USD';
+  if (asset === 'XXBT' || asset === 'XBT') return 'BTC';
+  if (asset === 'XETH') return 'ETH';
+  if (asset === 'XXDG' || asset === 'XDG') return 'DOGE';
+  if (asset === 'XZEC') return 'ZEC';
+  if (asset === 'XXRP') return 'XRP';
+  if (asset === 'XXLM') return 'XLM';
+  if (asset === 'XXMR') return 'XMR';
+  if (asset === 'XLTC') return 'LTC';
+  if (asset === 'XADA') return 'ADA';
+  if (asset === 'XSOL') return 'SOL';
+  return asset.replace(/^[XZ]/, '');
+}
+
+function normalizeAssetSymbol(exchange: string, asset: string): string {
+  return exchange === 'kraken' ? normalizeKrakenAsset(asset) : asset.toUpperCase();
+}
+
+function usdPriceForAsset(exchange: string, asset: string): number {
+  const normalized = normalizeAssetSymbol(exchange, asset);
+  if (STABLES.has(asset) || STABLES.has(normalized)) return 1;
+  return latestUsdBidForPair(`${normalized}-USD`, exchange);
+}
+
+function estimateTotalEquityUsd(): number {
+  let total = 0;
+  for (const [exchange, balance] of Object.entries(accountBalances)) {
+    for (const [asset, rawValue] of Object.entries(balance)) {
+      const amount = parseFloat(rawValue);
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      total += amount * usdPriceForAsset(exchange, asset);
+    }
+  }
+  return total;
 }
 
 function latestSnapshotFor(exchange: string, pair: string): MarketSnapshot | null {
@@ -407,6 +453,7 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
 
   try {
     const [bal, openOrders] = await Promise.all([getKrakenBalance(), getKrakenOpenOrders()]);
+    accountBalances.kraken = bal;
     const now = Date.now();
     let reservedUsd = 0;
     for (const [txid, order] of Object.entries(openOrders ?? {})) {
@@ -440,6 +487,7 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     };
   } catch (e) {
     spendableQuoteBalances.kraken = {};
+    accountBalances.kraken = {};
     const msg = (e as Error).message;
     if (msg.includes('Temporary lockout')) {
       krakenHydrationBlockedUntil = Math.max(krakenHydrationBlockedUntil, Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS);
@@ -448,6 +496,7 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
 
   try {
     const bal = await getCoinbaseBalance();
+    accountBalances.coinbase = bal;
     spendableQuoteBalances.coinbase = {
       USD: parseFloat(bal.USD ?? '0'),
       USDC: parseFloat(bal.USDC ?? '0'),
@@ -455,10 +504,12 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     };
   } catch {
     spendableQuoteBalances.coinbase = {};
+    accountBalances.coinbase = {};
   }
 
   try {
     const bal = await getBinanceBalance();
+    accountBalances['binance-us'] = bal;
     spendableQuoteBalances['binance-us'] = {
       USD: parseFloat(bal.USD ?? '0'),
       USDC: parseFloat(bal.USDC ?? '0'),
@@ -466,6 +517,7 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     };
   } catch {
     spendableQuoteBalances['binance-us'] = {};
+    accountBalances['binance-us'] = {};
   }
 }
 
@@ -740,6 +792,9 @@ function restorePersistedTradeState(state: Record<string, unknown> | undefined) 
   }
   const savedDailyPnlDate = tradeState.dailyPnlDate;
   if (typeof savedDailyPnlDate === 'string') dailyPnlDate = savedDailyPnlDate;
+  if (Number.isFinite(tradeState.dailyEquityBaselineUsd)) {
+    dailyEquityBaselineUsd = Math.max(0, Number(tradeState.dailyEquityBaselineUsd));
+  }
   const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
   closedTrades.splice(0, closedTrades.length, ...savedClosedTrades);
   const todayStart = new Date();
@@ -756,21 +811,39 @@ export function serializeTradeState(): Record<string, unknown> {
     exits: [...lastExitAt.entries()].map(([pair, at]) => ({ pair, at })),
     dailyPnl,
     dailyPnlDate,
+    dailyEquityBaselineUsd,
     closedTrades,
   };
 }
 
-function resetDailyPnlIfNeeded() {
+function resetDailyStateIfNeeded() {
   const today = new Date().toDateString();
   if (today !== dailyPnlDate) {
     dailyPnl = 0;
     dailyPnlDate = today;
+    dailyEquityBaselineUsd = 0;
   }
 }
 
+function refreshDailyEquityBaselineIfNeeded() {
+  resetDailyStateIfNeeded();
+  if (dailyEquityBaselineUsd > 0) return;
+  const totalEquityUsd = estimateTotalEquityUsd();
+  if (Number.isFinite(totalEquityUsd) && totalEquityUsd > 0) {
+    dailyEquityBaselineUsd = totalEquityUsd;
+  }
+}
+
+function dailyPnlPct(): number {
+  resetDailyStateIfNeeded();
+  if (!(dailyEquityBaselineUsd > 0)) return 0;
+  return (dailyPnl / dailyEquityBaselineUsd) * 100;
+}
+
 function isDailyLossLimitHit(): boolean {
-  resetDailyPnlIfNeeded();
-  return dailyPnl <= -DAILY_LOSS_LIMIT_USD;
+  refreshDailyEquityBaselineIfNeeded();
+  if (!(dailyEquityBaselineUsd > 0)) return false;
+  return dailyPnlPct() <= -DAILY_LOSS_LIMIT_PCT;
 }
 
 /** Live status snapshot for TUI display. */
@@ -778,7 +851,9 @@ export interface TradeStatus {
   positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
   position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
+  dailyPnlPct: number;
   dailyLossLimitHit: boolean;
+  dailyLossLimitPct: number;
   cooldowns: { pair: string; remainingSec: number }[];
   eligiblePairs: number;
   observedPairs: number;
@@ -788,7 +863,7 @@ export interface TradeStatus {
 }
 
 export function getTradeStatus(): TradeStatus {
-  resetDailyPnlIfNeeded();
+  refreshDailyEquityBaselineIfNeeded();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const trackedDailyPnl = closedTrades
@@ -833,7 +908,9 @@ export function getTradeStatus(): TradeStatus {
     positions,
     position: pos,
     dailyPnl: trackedDailyPnl,
-    dailyLossLimitHit: trackedDailyPnl <= -DAILY_LOSS_LIMIT_USD,
+    dailyPnlPct: dailyEquityBaselineUsd > 0 ? (trackedDailyPnl / dailyEquityBaselineUsd) * 100 : 0,
+    dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -DAILY_LOSS_LIMIT_PCT : false,
+    dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
     cooldowns,
     eligiblePairs: lastEligiblePairs.length,
     observedPairs: new Set([...histories.keys()].map((key) => key.split(':').slice(1).join(':'))).size,
@@ -925,6 +1002,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
       }
       await refreshMarketMinimums(PAIRS);
+      refreshDailyEquityBaselineIfNeeded();
       if (tradePollCount % 4 === 0) {
         const status = getTradeStatus();
         const summary = status.exchangeStates.map((s) => {
@@ -1027,7 +1105,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // Daily loss limit
       if (isDailyLossLimitHit()) {
         if (Date.now() - lastDailyLossLimitLogAt >= 60_000) {
-          console.log(`[trade] DAILY LOSS LIMIT HIT ($${dailyPnl.toFixed(2)}) — trading halted, scanning only`);
+          console.log(`[trade] DAILY LOSS LIMIT HIT ($${dailyPnl.toFixed(2)} / ${dailyPnlPct().toFixed(2)}%) — trading halted, scanning only`);
           lastDailyLossLimitLogAt = Date.now();
         }
         return null;

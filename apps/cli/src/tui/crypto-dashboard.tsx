@@ -68,7 +68,9 @@ interface TradeStatusData {
   positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
   position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
+  dailyPnlPct: number;
   dailyLossLimitHit: boolean;
+  dailyLossLimitPct: number;
   cooldowns: { pair: string; remainingSec: number }[];
   eligiblePairs?: number;
   observedPairs?: number;
@@ -514,6 +516,7 @@ function DashboardInner() {
   const observedPairs = safeCount(ts?.observedPairs, observedPairFallback, ts?.pairsScanned);
 
   const realizedPnl = ts?.dailyPnl ?? 0;
+  const realizedPnlPct = ts?.dailyPnlPct ?? 0;
 
   // Fees shown in the header are based on today's closed strategy trades.
   const todayStart = new Date();
@@ -560,11 +563,12 @@ function DashboardInner() {
       ? `{cyan-fg}${visiblePositions[0].exchange}:${visiblePositions[0].pair}{/}`
       : `{cyan-fg}${visiblePositions.length} positions{/}`;
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
+  const pnlPctStr = realizedPnlPct >= 0 ? `{green-fg}(+${realizedPnlPct.toFixed(2)}%){/}` : `{red-fg}(${realizedPnlPct.toFixed(2)}%){/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   const haltStr = ts?.dailyLossLimitHit
-    ? `  {black-fg}{yellow-bg} HALTED daily limit ${realizedPnl >= 0 ? '+' : ''}$${realizedPnl.toFixed(2)} {/}`
+    ? `  {black-fg}{yellow-bg} HALTED ${ts?.dailyLossLimitPct?.toFixed(1) ?? '5.0'}% daily limit {/}`
     : '';
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}${haltStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr} ${pnlPctStr}${haltStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
     ...visiblePositions.map((pos) => pos.pair),
@@ -778,7 +782,7 @@ function DashboardInner() {
       sigLines.push(` {white-fg}No open position — scanning for entry...{/white-fg}`);
     }
     if (ts.dailyLossLimitHit) {
-      sigLines.push(` {red-fg}⚠ DAILY LOSS LIMIT HIT ($${ts.dailyPnl.toFixed(2)}) — trading halted{/red-fg}`);
+      sigLines.push(` {red-fg}⚠ DAILY LOSS LIMIT HIT ($${ts.dailyPnl.toFixed(2)} / ${ts.dailyPnlPct.toFixed(2)}%) — trading halted{/red-fg}`);
     }
     if (ts.cooldowns.length > 0) {
       for (const c of ts.cooldowns) {
