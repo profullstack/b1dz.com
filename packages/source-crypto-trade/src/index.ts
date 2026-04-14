@@ -161,6 +161,7 @@ let dailyPnlDate = new Date().toDateString();
 let tradePollCount = 0;
 let lastEligiblePairs: string[] = [];
 let lastQuoteBalanceRefresh = 0;
+let lastDailyLossLimitLogAt = 0;
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
@@ -1025,8 +1026,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       // Daily loss limit
       if (isDailyLossLimitHit()) {
-        if (item.history.length % 20 === 0) {
-          console.log(`[trade] ${item.pair} daily loss limit hit ($${dailyPnl.toFixed(2)}), no new trades today`);
+        if (Date.now() - lastDailyLossLimitLogAt >= 60_000) {
+          console.log(`[trade] DAILY LOSS LIMIT HIT ($${dailyPnl.toFixed(2)}) — trading halted, scanning only`);
+          lastDailyLossLimitLogAt = Date.now();
         }
         return null;
       }

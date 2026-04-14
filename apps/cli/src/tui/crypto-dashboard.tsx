@@ -477,7 +477,10 @@ function DashboardInner() {
       : `{cyan-fg}${visiblePositions.length} positions{/}`;
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
+  const haltStr = ts?.dailyLossLimitHit
+    ? `  {black-fg}{yellow-bg} HALTED daily limit ${realizedPnl >= 0 ? '+' : ''}$${realizedPnl.toFixed(2)} {/}`
+    : '';
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}${haltStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
     ...visiblePositions.map((pos) => pos.pair),
