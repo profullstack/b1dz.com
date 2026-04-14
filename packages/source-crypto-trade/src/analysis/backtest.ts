@@ -265,6 +265,256 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   };
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Multi-pair exchange-aware backtest
+// ──────────────────────────────────────────────────────────────────────
+//
+// The single-pair runBacktest above treats each pair as if it had its
+// own $100 budget and could always take a signal. Live doesn't: only one
+// position per exchange at a time, per-pair cooldown, and a single
+// daily-loss halt shared across all pairs.
+//
+// runMultiPairBacktest iterates time-major across all pairs on one
+// exchange, gates entries with those shared rules, and picks the
+// highest-scoring signal when multiple fire simultaneously.
+
+export interface BacktestPairCandles {
+  symbol: string;
+  candles: Candle[];
+}
+
+export interface BacktestMultiInput {
+  exchange: string;
+  pairs: BacktestPairCandles[];
+  config?: AnalysisConfig;
+  assumptions?: Partial<BacktestAssumptions>;
+  signalEngine?: (input: AnalysisInput) => AnalysisSignal;
+}
+
+export interface BacktestMultiResult {
+  trades: BacktestTrade[];
+  metrics: BacktestMetrics;
+  haltedByDailyLossLimit: boolean;
+  /** Count of signals that would have fired in single-pair mode but were
+   *  blocked because another pair already held the exchange position. */
+  signalsSkippedForOpenPosition: number;
+  /** Per-pair trade counts derived from `trades` for convenience. */
+  perPair: Record<string, { trades: number; netPnl: number; candles: number }>;
+}
+
+interface MultiPairPosition extends OpenBacktestPosition {
+  symbol: string;
+}
+
+export function runMultiPairBacktest(input: BacktestMultiInput): BacktestMultiResult {
+  const config = input.config ?? DEFAULT_ANALYSIS_CONFIG;
+  const assumptions = { ...DEFAULT_ASSUMPTIONS, ...(input.assumptions ?? {}) };
+  const engine = input.signalEngine ?? analyzeSignal;
+  const exchange = input.exchange;
+
+  // Sort each pair's candles and build a lookup: pair symbol → sorted candles.
+  const pairCandles = new Map<string, Candle[]>();
+  for (const p of input.pairs) {
+    const sorted = [...p.candles].sort((a, b) => a.time - b.time);
+    if (sorted.length > 0) pairCandles.set(p.symbol, sorted);
+  }
+
+  // Union of all candle timestamps across pairs — the master timeline.
+  const timestampSet = new Set<number>();
+  for (const candles of pairCandles.values()) {
+    for (const c of candles) timestampSet.add(c.time);
+  }
+  const timestamps = [...timestampSet].sort((a, b) => a - b);
+
+  // Per-pair running index, used to advance through each pair's candles
+  // without re-scanning from the start every tick.
+  const indexByPair = new Map<string, number>();
+  for (const symbol of pairCandles.keys()) indexByPair.set(symbol, -1);
+
+  function advancePairTo(symbol: string, ts: number): Candle | null {
+    const candles = pairCandles.get(symbol);
+    if (!candles) return null;
+    let idx = indexByPair.get(symbol) ?? -1;
+    while (idx + 1 < candles.length && candles[idx + 1]!.time <= ts) idx++;
+    indexByPair.set(symbol, idx);
+    if (idx < 0) return null;
+    const candle = candles[idx]!;
+    return candle.time === ts ? candle : null;
+  }
+
+  function visibleFor(symbol: string, ts: number): Candle[] {
+    const candles = pairCandles.get(symbol);
+    if (!candles) return [];
+    const idx = indexByPair.get(symbol) ?? -1;
+    if (idx < 0) return [];
+    const candle = candles[idx]!;
+    if (candle.time !== ts) return [];
+    return candles.slice(0, idx + 1);
+  }
+
+  const trades: BacktestTrade[] = [];
+  let position: MultiPairPosition | null = null;
+  const lastExitByPair = new Map<string, number>();
+  const dailyRealizedPnlByDayUtc = new Map<string, number>();
+  const dailyLossLimitPct = assumptions.dailyLossLimitPct ?? DAILY_LOSS_LIMIT_PCT_DEFAULT;
+  const dailyLossLimitUsd = assumptions.startingEquityUsd * (dailyLossLimitPct / 100);
+  let haltedByDailyLossLimit = false;
+  let signalsSkippedForOpenPosition = 0;
+
+  function utcDayKey(ts: number): string {
+    return new Date(ts).toISOString().slice(0, 10);
+  }
+
+  function isDailyLossLimitHit(ts: number): boolean {
+    const net = dailyRealizedPnlByDayUtc.get(utcDayKey(ts)) ?? 0;
+    return net <= -dailyLossLimitUsd;
+  }
+
+  function closePosition(pos: MultiPairPosition, exitPrice: number, exitTime: number): void {
+    const exitSlippage = exitPrice * (assumptions.slippagePct / 100);
+    const filledExit = exitPrice - exitSlippage;
+    const quantity = assumptions.startingEquityUsd / pos.entryPrice;
+    const grossPnl = (filledExit - pos.entryPrice) * quantity;
+    const fees = ((pos.entryPrice * quantity) + (filledExit * quantity)) * assumptions.feeRate;
+    const slippageCost = exitSlippage * quantity;
+    const netPnl = grossPnl - fees;
+    trades.push({
+      symbol: pos.symbol,
+      exchange,
+      direction: pos.direction,
+      regime: pos.regime,
+      setupType: pos.setupType,
+      score: pos.score,
+      entryTime: pos.entryTime,
+      exitTime,
+      entryPrice: pos.entryPrice,
+      exitPrice: filledExit,
+      stopLoss: trailingStopPriceFor(pos.entryPrice, pos.highWaterMark),
+      takeProfit: pos.takeProfit,
+      grossPnl,
+      fees,
+      slippageCost,
+      netPnl,
+      holdMinutes: (exitTime - pos.entryTime) / 60_000,
+      hourOfDay: new Date(pos.entryTime).getUTCHours(),
+      volatilityBucket: pos.volatilityBucket,
+    });
+    lastExitByPair.set(pos.symbol, exitTime);
+    const key = utcDayKey(pos.entryTime);
+    dailyRealizedPnlByDayUtc.set(key, (dailyRealizedPnlByDayUtc.get(key) ?? 0) + netPnl);
+    if (!haltedByDailyLossLimit && isDailyLossLimitHit(pos.entryTime)) {
+      haltedByDailyLossLimit = true;
+    }
+  }
+
+  for (const ts of timestamps) {
+    // 1) Exit check on the open position (if any). We advance that pair's
+    //    cursor to ts and evaluate exits against its current candle.
+    if (position) {
+      const c = advancePairTo(position.symbol, ts);
+      if (c) {
+        const exit = resolveLongExit(c, position.entryPrice, position.highWaterMark, position.takeProfit, position.entryTime);
+        if (exit) {
+          closePosition(position, exit.price, ts);
+          position = null;
+        } else {
+          if (c.high > position.highWaterMark) position.highWaterMark = c.high;
+        }
+      }
+    }
+
+    // 2) Advance all non-position pair cursors to ts so their visible
+    //    history stays accurate for signal evaluation next.
+    for (const symbol of pairCandles.keys()) {
+      if (!position || symbol !== position.symbol) advancePairTo(symbol, ts);
+    }
+
+    // 3) Daily-halt gate (applies across entire exchange).
+    if (isDailyLossLimitHit(ts)) continue;
+
+    // 4) Already have an open position on this exchange: skip entries.
+    //    But count signals that would have fired so the user can see how
+    //    much the position-per-exchange rule is filtering.
+    if (position) {
+      for (const symbol of pairCandles.keys()) {
+        if (symbol === position.symbol) continue;
+        const visible = visibleFor(symbol, ts);
+        if (visible.length === 0) continue;
+        const analysisInput = makeAnalysisInput(symbol, exchange, visible, config, assumptions.spreadPct);
+        const analysis = engine(analysisInput);
+        if (!analysis.rejected && analysis.direction === 'long' && analysis.setupType) {
+          signalsSkippedForOpenPosition++;
+        }
+      }
+      continue;
+    }
+
+    // 5) No position open: evaluate every pair, pick the highest-scoring
+    //    long signal, enter it. Respect per-pair cooldown.
+    let best: { symbol: string; analysis: AnalysisSignal; candle: Candle } | null = null;
+    for (const symbol of pairCandles.keys()) {
+      const lastExit = lastExitByPair.get(symbol) ?? -Infinity;
+      if (ts - lastExit < COOLDOWN_MS) continue;
+      const visible = visibleFor(symbol, ts);
+      if (visible.length === 0) continue;
+      const candle = visible.at(-1)!;
+      const analysisInput = makeAnalysisInput(symbol, exchange, visible, config, assumptions.spreadPct);
+      const analysis = engine(analysisInput);
+      if (analysis.rejected || !analysis.direction || !analysis.setupType || analysis.direction !== 'long') continue;
+      if (!best || analysis.score > best.analysis.score) {
+        best = { symbol, analysis, candle };
+      }
+    }
+
+    if (!best) continue;
+
+    const fillSlippage = best.candle.close * (assumptions.slippagePct / 100);
+    const fillPrice = best.candle.close + fillSlippage;
+    position = {
+      symbol: best.symbol,
+      direction: 'long',
+      regime: best.analysis.regime,
+      setupType: best.analysis.setupType!,
+      score: best.analysis.score,
+      entryTime: ts,
+      entryPrice: fillPrice,
+      takeProfit: fillPrice * (1 + TAKE_PROFIT_PCT),
+      highWaterMark: fillPrice,
+      volatilityBucket: classifyVolatilityBucket(best.analysis.indicators.atrPct),
+    };
+  }
+
+  // Close any dangling position at end of data.
+  if (position) {
+    const candles = pairCandles.get(position.symbol);
+    const last = candles?.at(-1);
+    if (last) closePosition(position, last.close, last.time);
+    position = null;
+  }
+
+  const perPair: Record<string, { trades: number; netPnl: number; candles: number }> = {};
+  for (const { symbol } of input.pairs) {
+    perPair[symbol] = {
+      trades: 0,
+      netPnl: 0,
+      candles: (pairCandles.get(symbol)?.length ?? 0),
+    };
+  }
+  for (const t of trades) {
+    const bucket = perPair[t.symbol] ?? (perPair[t.symbol] = { trades: 0, netPnl: 0, candles: 0 });
+    bucket.trades++;
+    bucket.netPnl += t.netPnl;
+  }
+
+  return {
+    trades,
+    metrics: computeBacktestMetrics(trades, assumptions.startingEquityUsd),
+    haltedByDailyLossLimit,
+    signalsSkippedForOpenPosition,
+    perPair,
+  };
+}
+
 // Unused constants re-exported so consumers can inspect live parameters.
 export {
   TAKE_PROFIT_PCT,

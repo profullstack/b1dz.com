@@ -1613,6 +1613,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 }
 
 export const cryptoTradeSource: Source<TradeItem> = makeCryptoTradeSource();
-export { runBacktest, type BacktestResult, type BacktestAssumptions } from './analysis/backtest.js';
+export {
+  runBacktest,
+  runMultiPairBacktest,
+  type BacktestResult,
+  type BacktestAssumptions,
+  type BacktestMultiInput,
+  type BacktestMultiResult,
+  type BacktestPairCandles,
+} from './analysis/backtest.js';
 export { computeBacktestMetrics, type BacktestMetrics, type BacktestTrade } from './analysis/analytics.js';
 export { fetchHistoricalCandles, type Candle, type AnalysisTimeframe } from './analysis/candles.js';

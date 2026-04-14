@@ -37,25 +37,24 @@ export interface BacktestPairResult {
   pair: string;
   exchange?: string;
   candles: number;
-  result: {
-    trades: unknown[];
-    haltedByDailyLossLimit?: boolean;
-    metrics: {
-      totalReturn: number;
-      winRate: number;
-      profitFactor: number;
-      expectancy: number;
-      maxDrawdown: number;
-      sharpe: number;
-      averageHoldMinutes: number;
-      tradesPerDay: number;
-      performanceBySymbol: Record<string, BacktestAggregateBucket>;
-      performanceByRegime: Record<string, BacktestAggregateBucket>;
-      performanceByHourOfDay: Record<string, BacktestAggregateBucket>;
-      performanceByVolatilityBucket: Record<string, BacktestAggregateBucket>;
-    };
-  } | null;
+  trades: number;
+  netPnl: number;
   error: string | null;
+}
+
+export interface BacktestMetricsBlock {
+  totalReturn: number;
+  winRate: number;
+  profitFactor: number;
+  expectancy: number;
+  maxDrawdown: number;
+  sharpe: number;
+  averageHoldMinutes: number;
+  tradesPerDay: number;
+  performanceBySymbol: Record<string, BacktestAggregateBucket>;
+  performanceByRegime: Record<string, BacktestAggregateBucket>;
+  performanceByHourOfDay: Record<string, BacktestAggregateBucket>;
+  performanceByVolatilityBucket: Record<string, BacktestAggregateBucket>;
 }
 
 export interface BacktestPerExchangeSummary {
@@ -69,19 +68,18 @@ export interface BacktestPerExchangeSummary {
 }
 
 export interface BacktestRunResponse {
+  runId?: string | null;
   timeframe: string;
   exchange: string;
   exchangesRan?: string[];
-  perExchange?: Record<string, BacktestPerExchangeSummary>;
+  perExchange?: Record<string, BacktestPerExchangeSummary & { signalsSkipped?: number; haltedByDailyLossLimit?: boolean }>;
   limit: number;
   equity: number;
   pairs: BacktestPairResult[];
   aggregate: {
     trades: number;
     candles: number;
-    metrics: BacktestPairResult['result'] extends infer R
-      ? R extends { metrics: infer M } ? M : never
-      : never;
+    metrics: BacktestMetricsBlock;
     totalNetPnl: number;
     totalGrossPnl: number;
     totalFees: number;
@@ -90,6 +88,8 @@ export interface BacktestRunResponse {
     totalCapitalUsd: number;
     winningPairs: number;
     losingPairs: number;
+    signalsSkippedForOpenPosition?: number;
+    haltedByDailyLossLimit?: boolean;
   };
   summary: { succeeded: number; skipped: number; failed: number; pairsRequested: number; durationMs: number };
 }

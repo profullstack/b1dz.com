@@ -84,16 +84,13 @@ function formatBucketTable(title: string, buckets: Record<string, { trades: numb
 
 function printPairSummary(pair: BacktestRunResponse['pairs'][number]): void {
   const label = `${pair.exchange ?? '?'}:${pair.pair}`;
-  if (!pair.result) {
-    console.log(`  ${label.padEnd(30)} ${pair.error ?? 'no result'}`);
+  if (pair.error) {
+    console.log(`  ${label.padEnd(30)} ${pair.error}`);
     return;
   }
-  const m = pair.result.metrics;
-  const pf = Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : '∞';
-  const trades = String(pair.result.trades.length).padStart(3);
-  const ret = fmtPct(m.totalReturn).padStart(8);
-  const win = `${m.winRate.toFixed(0).padStart(3)}%`;
-  console.log(`  ${label.padEnd(30)} trades=${trades}  ret=${ret}  win=${win}  pf=${pf.padStart(5)}  DD=${m.maxDrawdown.toFixed(1).padStart(4)}%`);
+  const trades = String(pair.trades ?? 0).padStart(3);
+  const net = fmtUsd(pair.netPnl ?? 0).padStart(10);
+  console.log(`  ${label.padEnd(30)} trades=${trades}  net=${net}  candles=${pair.candles}`);
 }
 
 function buildClient(): B1dzClient {
@@ -170,5 +167,14 @@ export async function runBacktestCli(argv: string[]): Promise<void> {
   console.log(`  Max drawdown:    ${m.maxDrawdown.toFixed(2)}%   Sharpe: ${m.sharpe.toFixed(2)}`);
   console.log(`  Avg hold:        ${m.averageHoldMinutes.toFixed(1)}m   Trades/day: ${m.tradesPerDay.toFixed(2)}`);
   console.log(`  Pairs:           ${succeeded} ran (${agg.winningPairs} profitable, ${agg.losingPairs} losing), ${skipped} skipped, ${failed} failed — of ${pairsRequested}`);
+  if (typeof agg.signalsSkippedForOpenPosition === 'number') {
+    console.log(`  Signals skipped: ${agg.signalsSkippedForOpenPosition} (another pair already held the exchange position)`);
+  }
+  if (agg.haltedByDailyLossLimit) {
+    console.log(`  ${'\x1b[33m'}Daily loss limit tripped during run${reset}`);
+  }
+  if (response.runId) {
+    console.log(`  Run ID:          ${response.runId}`);
+  }
   console.log(line);
 }
