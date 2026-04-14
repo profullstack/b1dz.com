@@ -1,7 +1,69 @@
 import Link from 'next/link';
 import Image from 'next/image';
 
-export default function LandingPage(): JSX.Element {
+const platformMentions = ['reddit', 'X', 'Bluesky', 'Stacker News', 'Hacker News', 'dev.to'];
+
+const supportedFeatures = [
+  {
+    title: 'Realtime Multi-Exchange Data',
+    desc: 'Persistent WebSocket feeds, live prices, balances, spreads, activity logs, and raw daemon status across Kraken, Coinbase, and Binance.US.',
+    icon: 'chart',
+  },
+  {
+    title: 'Deterministic Analysis Engine',
+    desc: 'EMA, RSI, MACD, ATR, VWAP, volume checks, and market-regime classification score setups before they ever reach execution.',
+    icon: 'brain',
+  },
+  {
+    title: 'Automated Risk Controls',
+    desc: 'Trailing stops, take-profit targets, dust filtering, cooldowns, daily equity loss limits, and exchange minimum-size guards.',
+    icon: 'shield',
+  },
+  {
+    title: 'Cross-Exchange Opportunity Scanner',
+    desc: 'Tracks theoretical spread arbitrage and executable inventory-backed arbitrage routes separately, so discovery and action stay clear.',
+    icon: 'arrows',
+  },
+  {
+    title: 'OHLC Charts + Trade Context',
+    desc: 'Realtime terminal charts with timeframe switching, live price lines, volume overlays, entry and exit markers, and pair selection from the dashboard.',
+    icon: 'candles',
+  },
+  {
+    title: 'Backtesting + Analytics',
+    desc: 'The same deterministic signal engine can run in backtests with fees, slippage, spread assumptions, and performance breakdowns by regime and symbol.',
+    icon: 'search',
+  },
+];
+
+const supportedStrategies = [
+  {
+    title: 'Trend Continuation',
+    desc: 'Long and short setups aligned with higher-timeframe bias, VWAP, EMA structure, momentum, and volume confirmation.',
+  },
+  {
+    title: 'Mean Reversion',
+    desc: 'Pullback and exhaustion entries in range-bound or recovery contexts when price stretches away from local fair value.',
+  },
+  {
+    title: 'Breakout / Breakdown',
+    desc: 'Expansion setups gated by volatility, volume, and regime so compressed pairs can break cleanly instead of chopping you up.',
+  },
+  {
+    title: 'Spread Arbitrage',
+    desc: 'Cross-exchange spread discovery highlights raw price dislocations across supported venues for manual or future automated action.',
+  },
+  {
+    title: 'Inventory Arbitrage',
+    desc: 'Inventory-aware routes only fire when you already hold the asset on one exchange and quote balance on another.',
+  },
+  {
+    title: 'Legacy Multi-Signal Fallback',
+    desc: 'Composite scalp and momentum heuristics still exist as a fallback path while the deterministic analysis engine takes the lead.',
+  },
+];
+
+export default function LandingPage() {
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
       {/* Nav */}
@@ -39,6 +101,17 @@ export default function LandingPage(): JSX.Element {
         </p>
       </section>
 
+      <section className="max-w-6xl mx-auto px-6 pb-12">
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 px-6 py-5">
+          <p className="text-center text-xs uppercase tracking-[0.35em] text-zinc-500 mb-4">As seen on</p>
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 text-sm md:text-base text-zinc-300">
+            {platformMentions.map((name) => (
+              <span key={name} className="font-medium text-zinc-300/90">{name}</span>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* Terminal Screenshot */}
       <section className="max-w-5xl mx-auto px-6 pb-8">
         <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Terminal Interface</h3>
@@ -67,39 +140,30 @@ export default function LandingPage(): JSX.Element {
       {/* Features */}
       <section id="features" className="max-w-6xl mx-auto px-6 py-16">
         <h2 className="text-3xl font-bold text-center mb-12">
-          <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">How it works</span>
+          <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Supported features</span>
         </h2>
         <div className="grid md:grid-cols-3 gap-8">
-          <FeatureCard
-            title="Multi-Exchange Scanning"
-            desc="Monitors prices across Kraken, Coinbase, Binance, and Gemini in real-time via WebSocket feeds."
-            icon="chart"
-          />
-          <FeatureCard
-            title="AI-Powered Strategies"
-            desc="Composite strategy engine combines RSI, EMA crossover, mean reversion, and scalp signals for high-probability entries."
-            icon="brain"
-          />
-          <FeatureCard
-            title="Risk Management"
-            desc="Trailing stop-loss, take-profit targets, daily loss limits, and position sizing — all automated."
-            icon="shield"
-          />
-          <FeatureCard
-            title="Cross-Exchange Arbitrage"
-            desc="Detects price gaps between exchanges and executes simultaneous buy/sell for risk-free profit."
-            icon="arrows"
-          />
-          <FeatureCard
-            title="Dynamic Pair Discovery"
-            desc="Automatically finds the best trading pairs by volume, market cap, and momentum — including meme coins when they pump."
-            icon="search"
-          />
-          <FeatureCard
-            title="Terminal + Web + Mobile"
-            desc="Monitor from the blessed TUI, web dashboard, or PWA on your phone. Same data, any device."
-            icon="devices"
-          />
+          {supportedFeatures.map((feature) => (
+            <FeatureCard key={feature.title} title={feature.title} desc={feature.desc} icon={feature.icon} />
+          ))}
+        </div>
+      </section>
+
+      {/* Strategies */}
+      <section className="max-w-6xl mx-auto px-6 py-16">
+        <h2 className="text-3xl font-bold text-center mb-4">
+          <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Trading strategies</span>
+        </h2>
+        <p className="text-center text-zinc-400 max-w-3xl mx-auto mb-12">
+          b1dz supports deterministic setup scoring for directional trades plus separate spread and inventory arbitrage paths.
+        </p>
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {supportedStrategies.map((strategy) => (
+            <div key={strategy.title} className="rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-5">
+              <h3 className="text-lg font-semibold mb-2 text-zinc-100">{strategy.title}</h3>
+              <p className="text-sm leading-relaxed text-zinc-400">{strategy.desc}</p>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -145,9 +209,9 @@ export default function LandingPage(): JSX.Element {
   );
 }
 
-function FeatureCard({ title, desc, icon }: { title: string; desc: string; icon: string }): JSX.Element {
+function FeatureCard({ title, desc, icon }: { title: string; desc: string; icon: string }) {
   const icons: Record<string, string> = {
-    chart: '📊', brain: '🧠', shield: '🛡️', arrows: '🔄', search: '🔍', devices: '📱',
+    chart: '📊', brain: '🧠', shield: '🛡️', arrows: '🔄', search: '🔍', devices: '📱', candles: '🕯️',
   };
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 hover:border-orange-500/30 transition">
