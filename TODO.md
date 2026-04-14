@@ -227,12 +227,14 @@ v6 adds two major addendums on top of the original PRD:
 
 ## Phase 3 — Live EVM Execution (PRD §29 Phase 3)
 
-- [~] Wallet service — `wallet-provider` abstraction + CoinPay and
-      direct-EVM/Solana implementations shipped; still need a
-      coordinating "wallet service" that picks provider per operation
-      and caches addresses
+- [x] Wallet service — `@b1dz/wallet-service` orchestrates
+      build → digest → signDigest → assemble → broadcast → trackReceipt
+      with restart-safe `NonceManager` (in-flight coalescing, store
+      hook for Supabase persistence). Direct-EVM/Solana + CoinPay all
+      pluggable as the underlying provider.
 - [~] Approval manager — module shipped in `packages/adapters-evm/`,
-      not yet wired into live submission flow
+      Executor implementations should call `checkApproval()` before
+      submitting the swap tx
 - [x] Transaction builder — `packages/adapters-evm/src/tx-builder.ts`:
       `buildUnsignedTx` (pure, validates chain/nonce/gas),
       `digestForSigning` (keccak256 of RLP-encoded EIP-1559 payload
@@ -247,23 +249,39 @@ v6 adds two major addendums on top of the original PRD:
       outcome as `success` / `reverted` / `timeout`.
       `outcomeToStatus()` maps to the event-channel terminal-status
       vocabulary (`filled` / `reverted` / `stuck`)
-- [ ] Wallet-service layer that orchestrates build → digest → sign →
-      assemble → broadcast → trackReceipt using a `WalletProvider`
-      implementation and a `PublicClient`
-- [ ] Nonce manager (per-chain, per-wallet; persisted so a restart
-      doesn't nonce-collide)
-- [ ] Kill switch controls wired to live EVM path (repeated tx
-      failures → disable, gas spike → pause)
+- [x] Wallet-service layer that orchestrates build → digest → sign →
+      assemble → broadcast → trackReceipt → resolve. Daemon's
+      `Executor` interface is the integration seam.
+- [x] Nonce manager — `@b1dz/wallet-service` `NonceManager`. Pluggable
+      `NonceStore` (in-memory by default; Supabase implementation can
+      be added) so a restart doesn't nonce-collide. Race-safe for
+      concurrent allocations to the same wallet.
+- [x] Kill switch wired to daemon — `CircuitBreaker` in trade-daemon.
+      Trips on consecutive failures or daily loss; external `trip()`
+      hook for gas spike / RPC degradation / wallet too low.
+- [ ] Auto-trip on gas spike via `isGasSpike()` (manual hook only
+      right now — operator must call `circuit.trip()` themselves)
 
 ---
 
 ## Phase 4 — Live Solana Execution (PRD §29 Phase 4)
 
-- [ ] Solana wallet service
-- [ ] Jupiter prepared-tx signing + submission flow
-- [ ] Confirmation tracking
-- [ ] Priority fee controls
-- [ ] Solana-specific safety filters enforced in live path
+- [x] Solana wallet service — `DirectSolanaWalletProvider` via Node
+      ed25519, signs raw VersionedMessage bytes
+- [x] Jupiter prepared-tx flow — `fetchJupiterSwap` (POST /swap/v1/swap)
+      + `signAndSendJupiterTx` (parses the wire format, replaces
+      slot 0 with our sig, submits via JSON-RPC sendTransaction)
+- [x] Confirmation tracking — `trackSolanaTransaction` polls
+      `getSignatureStatuses` with configurable commitment
+      (processed/confirmed/finalized) and timeout
+- [x] Priority fee — `fetchJupiterSwap` accepts
+      `prioritizationFeeLamports` (default 'auto')
+- [ ] Solana Executor that wraps the above into the daemon's
+      `Executor` contract (modules ship; nobody has wired the
+      one-line wrapper)
+- [ ] Solana safety filters enforced (mint allowlist + freeze-authority
+      check + decimal verification still hardcoded in adapter, not
+      enforced pre-submit)
 
 ---
 
@@ -327,12 +345,19 @@ and unwind cost per §4 non-goal.
 
 ## Inventory ledger (PRD §21)
 
-- [ ] Per-(venue, chain, token) balance tracking with: available,
+- [x] Per-(venue, chain, token) balance tracking with: available,
       reserved, pending settlement, pending tx state, USD reference
-      value
-- [ ] Integration with every adapter's balance endpoint
-- [ ] Honors capital-not-freely-movable rule (no assumed transfers
-      mid-trade)
+      value — `@b1dz/inventory` `InventoryLedger`
+- [x] EVM balance source via viem (`EvmWalletBalanceSource`, native +
+      ERC20 via `balanceOf`)
+- [x] Atomic `reserve()` / `release()` / `markPending()` / `settle()`
+      so the daemon doesn't double-spend across in-flight opportunities
+- [ ] Solana balance source (mirror EVM source via SPL `getTokenAccountBalance`)
+- [ ] CEX balance source (per-venue REST API; current adapters only
+      do quotes)
+- [ ] Auto-wire from daemon: call `markPending` after broadcast and
+      `settle` after receipt (currently the operator's Executor must
+      call these manually)
 
 ---
 
