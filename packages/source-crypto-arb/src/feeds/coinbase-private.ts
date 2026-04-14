@@ -20,6 +20,7 @@ export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 import { getCoinbasePem } from './coinbase-pem.js';
 let productFetchedAt = 0;
 let tradableProducts = new Set<string>();
+let productMetaById = new Map<string, CoinbaseProduct>();
 
 export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid: boolean; hasPem: boolean } {
   const keyName = process.env.COINBASE_API_KEY_NAME ?? '';
@@ -138,6 +139,11 @@ interface CoinbaseProduct {
   is_disabled?: boolean;
   cancel_only?: boolean;
   auction_mode?: boolean;
+  base_increment?: string;
+  quote_increment?: string;
+  price_increment?: string;
+  base_min_size?: string;
+  quote_min_size?: string;
 }
 
 interface CoinbaseProductsResponse {
@@ -147,6 +153,11 @@ interface CoinbaseProductsResponse {
 async function syncProducts(force = false): Promise<void> {
   if (!force && Date.now() - productFetchedAt < PRODUCT_CACHE_TTL_MS && tradableProducts.size > 0) return;
   const data = await coinbasePrivate<CoinbaseProductsResponse>('GET', '/api/v3/brokerage/products?limit=250');
+  productMetaById = new Map(
+    (data.products ?? [])
+      .filter((p) => !!p?.product_id)
+      .map((p) => [p.product_id, p] as const),
+  );
   tradableProducts = new Set(
     (data.products ?? [])
       .filter((p) => p?.product_id && p.trading_disabled !== true && p.is_disabled !== true && p.cancel_only !== true && p.auction_mode !== true)
@@ -179,6 +190,57 @@ export interface OrderOpts {
   limitPrice?: string;   // required for limit orders
 }
 
+function decimalPlaces(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed.includes('.')) return 0;
+  return trimmed.split('.')[1]!.replace(/0+$/, '').length;
+}
+
+function floorToStep(value: number, step: string): number {
+  const places = decimalPlaces(step);
+  const scale = 10 ** places;
+  const scaledValue = Math.floor((value + 1e-12) * scale);
+  const scaledStep = Math.max(1, Math.round(parseFloat(step) * scale));
+  return Math.floor(scaledValue / scaledStep) * scaledStep / scale;
+}
+
+function trimDecimals(value: number, places: number): string {
+  return value.toFixed(places).replace(/\.?0+$/, '');
+}
+
+async function normalizeOrderParams(opts: OrderOpts): Promise<OrderOpts> {
+  await syncProducts();
+  const product = productMetaById.get(opts.productId);
+  if (!product) return opts;
+
+  let size = parseFloat(opts.size);
+  if (!Number.isFinite(size) || size <= 0) {
+    throw new Error(`Coinbase ${opts.productId}: invalid size ${opts.size}`);
+  }
+
+  const baseIncrement = product.base_increment ?? '0';
+  if (parseFloat(baseIncrement) > 0) {
+    size = floorToStep(size, baseIncrement);
+  }
+  const baseMinSize = parseFloat(product.base_min_size ?? '');
+  if (Number.isFinite(baseMinSize) && baseMinSize > 0 && size < baseMinSize) {
+    throw new Error(`Coinbase ${opts.productId}: size ${size} below base_min_size ${product.base_min_size}`);
+  }
+
+  let limitPrice = opts.limitPrice;
+  const priceIncrement = product.price_increment ?? product.quote_increment ?? '0';
+  if (limitPrice && parseFloat(priceIncrement) > 0) {
+    const adjustedPrice = floorToStep(parseFloat(limitPrice), priceIncrement);
+    limitPrice = trimDecimals(adjustedPrice, decimalPlaces(priceIncrement));
+  }
+
+  return {
+    ...opts,
+    size: trimDecimals(size, parseFloat(baseIncrement) > 0 ? decimalPlaces(baseIncrement) : 8),
+    ...(limitPrice ? { limitPrice } : {}),
+  };
+}
+
 interface OrderResponse {
   success: boolean;
   order_id: string;
@@ -187,23 +249,24 @@ interface OrderResponse {
 }
 
 export async function placeOrder(opts: OrderOpts): Promise<OrderResponse> {
+  const normalized = await normalizeOrderParams(opts);
   // Safety check
-  const price = opts.limitPrice ? parseFloat(opts.limitPrice) : 0;
-  const size = parseFloat(opts.size);
+  const price = normalized.limitPrice ? parseFloat(normalized.limitPrice) : 0;
+  const size = parseFloat(normalized.size);
   if (price > 0 && size * price > MAX_POSITION_USD) {
     throw new Error(`Order cost $${(size * price).toFixed(2)} exceeds $${MAX_POSITION_USD} limit`);
   }
 
   const clientOrderId = `b1dz-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
-  const orderConfig = opts.limitPrice
-    ? { limit_limit_gtc: { base_size: opts.size, limit_price: opts.limitPrice } }
-    : { market_market_ioc: { base_size: opts.size } };
+  const orderConfig = normalized.limitPrice
+    ? { limit_limit_gtc: { base_size: normalized.size, limit_price: normalized.limitPrice } }
+    : { market_market_ioc: { base_size: normalized.size } };
 
   const body = {
     client_order_id: clientOrderId,
-    product_id: opts.productId,
-    side: opts.side,
+    product_id: normalized.productId,
+    side: normalized.side,
     order_configuration: orderConfig,
   };
 
