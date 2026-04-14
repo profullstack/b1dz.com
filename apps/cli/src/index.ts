@@ -137,6 +137,16 @@ Pump.fun discovery (observe-only, opt-in scrape):
     --limit 20                             rows to show (default 20)
   Requires PUMPFUN_ENABLE_SCRAPE=true (PRD §27 opt-in)
 
+v2 trade daemon (observer + decision loop):
+  b1dz v2-daemon                           run observer + daemon in one process
+    --mode observe|paper|live              default paper (live currently stubbed)
+    --pair SOL-USDC                        pair to scan
+    --amount 1                             trade notional
+    --chain all|cex|solana|base|...        adapter set
+    --interval 3000                        tick ms (default 3000)
+    --min-net 0.01                         min $ net edge (daemon risk gate)
+    --min-bps 1                            min bps net edge
+
 Sources:
   b1dz <source> run        start headless
   Available sources: crypto-arb, crypto-trade, all
@@ -228,6 +238,15 @@ if (source === 'backtest') {
     process.exit(0);
   } catch (e) {
     console.error(`pumpfun failed: ${(e as Error).message}`);
+    process.exit(1);
+  }
+} else if (source === 'v2-daemon') {
+  const { runV2DaemonCli } = await import('./v2-daemon.js');
+  try {
+    await runV2DaemonCli(process.argv.slice(3));
+    process.exit(0);
+  } catch (e) {
+    console.error(`v2-daemon failed: ${(e as Error).message}`);
     process.exit(1);
   }
 } else if (source === 'tui') {

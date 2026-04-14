@@ -29,6 +29,7 @@
     "@b1dz/profitability": "workspace:*",
     "@b1dz/event-channel": "workspace:*",
     "@b1dz/observe-engine": "workspace:*",
+    "@b1dz/trade-daemon": "workspace:*",
     "@supabase/supabase-js": "latest",
     "chalk": "latest",
     "cli-table3": "latest",
