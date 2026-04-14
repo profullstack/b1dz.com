@@ -130,6 +130,12 @@ importers:
       '@b1dz/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@b1dz/source-crypto-arb':
+        specifier: workspace:*
+        version: link:../../packages/source-crypto-arb
+      '@b1dz/source-crypto-trade':
+        specifier: workspace:*
+        version: link:../../packages/source-crypto-trade
       '@b1dz/storage-json':
         specifier: workspace:*
         version: link:../../packages/storage-json

@@ -1,20 +1,16 @@
-import {
-  computeBacktestMetrics,
-  fetchHistoricalCandles,
-  runBacktest,
-  type AnalysisTimeframe,
-  type BacktestResult,
-  type Candle,
-} from '@b1dz/source-crypto-trade';
-import { getActivePairs } from '@b1dz/source-crypto-arb';
+import { B1dzClient, type BacktestRunOptions, type BacktestRunResponse } from '@b1dz/sdk';
+import { loadCredentials } from './auth.js';
 
-const TIMEFRAMES: readonly AnalysisTimeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'];
+const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
 const EXCHANGES = ['kraken', 'binance-us', 'coinbase'] as const;
 
+type Timeframe = typeof TIMEFRAMES[number];
+type Exchange = typeof EXCHANGES[number];
+
 function parseArgs(argv: string[]): {
-  timeframe: AnalysisTimeframe;
-  pairs: string[] | null;
-  exchange: string;
+  timeframe: Timeframe;
+  pairs: string[] | undefined;
+  exchange: Exchange;
   limit: number;
   equity: number;
 } {
@@ -36,16 +32,16 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  const timeframe = (positional[0] ?? flags.timeframe ?? '5m') as AnalysisTimeframe;
+  const timeframe = (positional[0] ?? flags.timeframe ?? '5m') as Timeframe;
   if (!TIMEFRAMES.includes(timeframe)) {
     throw new Error(`invalid timeframe "${timeframe}" — expected one of ${TIMEFRAMES.join(', ')}`);
   }
   const pairsArg = flags.pair ?? flags.pairs;
   const pairs = pairsArg
     ? pairsArg.split(',').map((p) => p.trim()).filter(Boolean)
-    : null;
-  const exchange = (flags.exchange ?? 'kraken').toLowerCase();
-  if (!EXCHANGES.includes(exchange as typeof EXCHANGES[number])) {
+    : undefined;
+  const exchange = ((flags.exchange ?? 'kraken').toLowerCase()) as Exchange;
+  if (!EXCHANGES.includes(exchange)) {
     throw new Error(`invalid exchange "${exchange}" — expected one of ${EXCHANGES.join(', ')}`);
   }
   const limit = Math.max(50, Math.min(1000, Number.parseInt(flags.limit ?? '500', 10)));
@@ -75,75 +71,64 @@ function formatBucketTable(title: string, buckets: Record<string, { trades: numb
   return lines.join('\n');
 }
 
-function printPairSummary(label: string, result: BacktestResult): void {
-  const m = result.metrics;
+function printPairSummary(label: string, pair: BacktestRunResponse['pairs'][number]): void {
+  if (!pair.result) {
+    console.log(`  ${label.padEnd(22)} ${pair.error ?? 'no result'}`);
+    return;
+  }
+  const m = pair.result.metrics;
   const pf = Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : '∞';
-  const trades = String(result.trades.length).padStart(3);
+  const trades = String(pair.result.trades.length).padStart(3);
   const ret = fmtPct(m.totalReturn).padStart(8);
   const win = `${m.winRate.toFixed(0).padStart(3)}%`;
   console.log(`  ${label.padEnd(22)} trades=${trades}  ret=${ret}  win=${win}  pf=${pf.padStart(5)}  DD=${m.maxDrawdown.toFixed(1).padStart(4)}%`);
 }
 
-function printAggregateReport(label: string, result: BacktestResult, candles: number): void {
-  const m = result.metrics;
-  const profitFactor = Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : '∞';
-  console.log(`\n── ${label} ──  candles=${candles}  trades=${result.trades.length}`);
-  console.log(`  return=${fmtPct(m.totalReturn)}  win=${m.winRate.toFixed(1)}%  pf=${profitFactor}  exp=${fmtUsd(m.expectancy)}`);
+function buildClient(): B1dzClient {
+  const baseUrl = process.env.B1DZ_API_URL;
+  if (!baseUrl) throw new Error('B1DZ_API_URL missing in .env');
+  const creds = loadCredentials();
+  if (!creds) throw new Error('not signed in — run `b1dz login` first');
+  return new B1dzClient({
+    baseUrl,
+    tokens: { accessToken: creds.accessToken, refreshToken: creds.refreshToken },
+  });
+}
+
+export async function runBacktestCli(argv: string[]): Promise<void> {
+  const { timeframe, pairs, exchange, limit, equity } = parseArgs(argv);
+  const client = buildClient();
+
+  const opts: BacktestRunOptions = { timeframe, exchange, limit, equity };
+  if (pairs) opts.pairs = pairs;
+
+  console.log(`b1dz backtest → api  tf=${timeframe}  exchange=${exchange}  pairs=${pairs ? pairs.length : 'active'}  limit=${limit}  equity=$${equity}`);
+  process.stdout.write('  running on server...');
+
+  const start = Date.now();
+  let response: BacktestRunResponse;
+  try {
+    response = await client.backtest.run(opts);
+  } catch (e) {
+    console.log(' FAILED');
+    throw e;
+  }
+  console.log(` done in ${((Date.now() - start) / 1000).toFixed(1)}s (server ${response.summary.durationMs}ms)\n`);
+
+  for (const pair of response.pairs) {
+    printPairSummary(`${response.exchange}:${pair.pair}`, pair);
+  }
+
+  const m = response.aggregate.metrics;
+  const pf = Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : '∞';
+  console.log(`\n── AGGREGATE ──  candles=${response.aggregate.candles}  trades=${response.aggregate.trades}`);
+  console.log(`  return=${fmtPct(m.totalReturn)}  win=${m.winRate.toFixed(1)}%  pf=${pf}  exp=${fmtUsd(m.expectancy)}`);
   console.log(`  sharpe=${m.sharpe.toFixed(2)}  maxDD=${m.maxDrawdown.toFixed(2)}%  avgHold=${m.averageHoldMinutes.toFixed(1)}m  trades/day=${m.tradesPerDay.toFixed(2)}`);
-  if (result.trades.length > 0) {
+  if (response.aggregate.trades > 0) {
     console.log(formatBucketTable('by regime', m.performanceByRegime));
     console.log(formatBucketTable('by volatility', m.performanceByVolatilityBucket));
     console.log(formatBucketTable('by symbol', m.performanceBySymbol));
   }
-}
-
-export async function runBacktestCli(argv: string[]): Promise<void> {
-  const { timeframe, pairs: pairOverride, exchange, limit, equity } = parseArgs(argv);
-  let pairs = pairOverride;
-  if (!pairs) {
-    process.stdout.write('discovering active pairs...');
-    pairs = await getActivePairs();
-    console.log(` ${pairs.length} pairs`);
-    if (pairs.length === 0) {
-      console.log('no active pairs discovered — pass --pair BTC-USD,ETH-USD to override');
-      return;
-    }
-  }
-  console.log(`b1dz backtest  tf=${timeframe}  exchange=${exchange}  pairs=${pairs.length}  limit=${limit}  equity=$${equity}`);
-
-  const aggregateTrades: BacktestResult['trades'] = [];
-  let aggregateCandles = 0;
-  let succeeded = 0;
-  let failed = 0;
-  let skipped = 0;
-
-  for (const pair of pairs) {
-    let candles: Candle[];
-    try {
-      candles = await fetchHistoricalCandles(exchange, pair, timeframe, limit);
-    } catch (e) {
-      console.log(`  ${`${exchange}:${pair}`.padEnd(22)} FAILED: ${(e as Error).message.slice(0, 60)}`);
-      failed++;
-      continue;
-    }
-    if (candles.length < 50) {
-      console.log(`  ${`${exchange}:${pair}`.padEnd(22)} skipped (${candles.length} candles, need >=50)`);
-      skipped++;
-      continue;
-    }
-    const result = runBacktest({
-      symbol: pair,
-      exchange,
-      candles,
-      assumptions: { startingEquityUsd: equity },
-    });
-    aggregateCandles += candles.length;
-    aggregateTrades.push(...result.trades);
-    succeeded++;
-    printPairSummary(`${exchange}:${pair}`, result);
-  }
-
-  const aggregateMetrics = computeBacktestMetrics(aggregateTrades, equity * Math.max(1, succeeded));
-  printAggregateReport('AGGREGATE', { trades: aggregateTrades, metrics: aggregateMetrics }, aggregateCandles);
-  console.log(`\n  pairs: ${succeeded} ran, ${skipped} skipped, ${failed} failed`);
+  const { succeeded, skipped, failed, pairsRequested } = response.summary;
+  console.log(`\n  pairs: ${succeeded} ran, ${skipped} skipped, ${failed} failed (of ${pairsRequested})`);
 }

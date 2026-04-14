@@ -19,6 +19,54 @@ export interface B1dzClientOptions {
 }
 
 export interface DealDashCreds { phpsessid: string; rememberme: string; savedAt?: string; }
+
+export interface BacktestRunOptions {
+  timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
+  pairs?: string[];
+  exchange?: 'kraken' | 'binance-us' | 'coinbase';
+  limit?: number;
+  equity?: number;
+}
+
+export interface BacktestAggregateBucket { trades: number; netPnl: number; wins: number; losses: number; }
+export interface BacktestPairResult {
+  pair: string;
+  candles: number;
+  result: {
+    trades: unknown[];
+    metrics: {
+      totalReturn: number;
+      winRate: number;
+      profitFactor: number;
+      expectancy: number;
+      maxDrawdown: number;
+      sharpe: number;
+      averageHoldMinutes: number;
+      tradesPerDay: number;
+      performanceBySymbol: Record<string, BacktestAggregateBucket>;
+      performanceByRegime: Record<string, BacktestAggregateBucket>;
+      performanceByHourOfDay: Record<string, BacktestAggregateBucket>;
+      performanceByVolatilityBucket: Record<string, BacktestAggregateBucket>;
+    };
+  } | null;
+  error: string | null;
+}
+
+export interface BacktestRunResponse {
+  timeframe: string;
+  exchange: string;
+  limit: number;
+  equity: number;
+  pairs: BacktestPairResult[];
+  aggregate: {
+    trades: number;
+    candles: number;
+    metrics: BacktestPairResult['result'] extends infer R
+      ? R extends { metrics: infer M } ? M : never
+      : never;
+  };
+  summary: { succeeded: number; skipped: number; failed: number; pairsRequested: number; durationMs: number };
+}
 export interface MarketEntry { min: number; median: number; mean?: number; count: number; }
 export interface AuctionPageInfo {
   name?: string;
@@ -126,6 +174,12 @@ export class B1dzClient {
       this.request<{ ok: true }>('DELETE', `/api/storage/${encodeURIComponent(collection)}/${encodeURIComponent(key)}`),
     list: <T>(collection: string) =>
       this.request<{ items: T[] }>('GET', `/api/storage/${encodeURIComponent(collection)}`).then(r => r.items),
+  };
+
+  // ----- backtest (server-side run against public exchange data) -----
+  backtest = {
+    run: (opts: BacktestRunOptions) =>
+      this.request<BacktestRunResponse>('POST', '/api/backtest', opts),
   };
 
   // ----- dealdash actions (server-side proxies the user's session) -----

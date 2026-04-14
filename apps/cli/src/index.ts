@@ -156,7 +156,9 @@ if (source === 'login') { await login(); process.exit(0); }
 if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
 
-// Backtest hits public exchange APIs — no auth required
+// Everything else requires a signed-in user
+requireAuth();
+
 if (source === 'backtest') {
   const { runBacktestCli } = await import('./backtest.js');
   try {
@@ -166,12 +168,7 @@ if (source === 'backtest') {
     console.error(`backtest failed: ${(e as Error).message}`);
     process.exit(1);
   }
-}
-
-// Everything else requires a signed-in user
-requireAuth();
-
-if (source === 'tui') {
+} else if (source === 'tui') {
   const env = isProd ? 'production' : 'development';
   console.log('b1dz tui starting...');
   console.log(`  Version:    ${getB1dzVersion()}`);

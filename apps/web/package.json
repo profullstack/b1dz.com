@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@b1dz/core": "workspace:*",
+    "@b1dz/source-crypto-arb": "workspace:*",
+    "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/storage-json": "workspace:*",
     "@b1dz/storage-supabase": "workspace:*",
     "@supabase/supabase-js": "latest",
