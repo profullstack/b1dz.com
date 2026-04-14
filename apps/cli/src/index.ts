@@ -114,6 +114,15 @@ Cross-exchange arb audit:
     --pair BTC-USD,ETH-USD                 optional: specific pairs
     --position 100                         position size for $ estimates
 
+Multi-venue quote observer (v2 DEX engine):
+  b1dz observe                             fetch DEX quotes from enabled adapters
+    --pair ETH-USDC                        canonical pair
+    --side buy|sell                        buy = spend quote to get base
+    --amount 100                           amount in input asset
+    --chain base|avalanche|solana|...      target chain
+    --slippage 50                          max slippage in bps (default 50)
+  Current adapters: 0x (EVM), jupiter (Solana) — more coming per PRD v2.
+
 Sources:
   b1dz <source> run        start headless
   Available sources: crypto-arb, crypto-trade, all
@@ -187,6 +196,15 @@ if (source === 'backtest') {
     process.exit(0);
   } catch (e) {
     console.error(`audit-arb failed: ${(e as Error).message}`);
+    process.exit(1);
+  }
+} else if (source === 'observe') {
+  const { runObserveCli } = await import('./observe.js');
+  try {
+    await runObserveCli(process.argv.slice(3));
+    process.exit(0);
+  } catch (e) {
+    console.error(`observe failed: ${(e as Error).message}`);
     process.exit(1);
   }
 } else if (source === 'tui') {
