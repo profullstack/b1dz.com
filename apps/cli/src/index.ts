@@ -94,12 +94,13 @@ Dashboard:
   b1dz tui --dev           live crypto dashboard (local API)
 
 Backtest:
-  b1dz backtest <tf>                       run backtest on default pairs
-    --pair BTC-USD,ETH-USD                 comma-separated pairs
+  b1dz backtest <tf>                       backtest on all active pairs
+    --pair BTC-USD,ETH-USD                 override: specific pairs only
     --exchange kraken|binance-us|coinbase  data source (default kraken)
-    --limit 500                            max candles to fetch (50-1000)
-    --equity 100                           starting equity in USD
+    --limit 500                            max candles per pair (50-1000)
+    --equity 100                           starting equity per pair (USD)
   timeframes: 1m, 5m, 15m, 1h, 4h, 1d, 1w
+  Active pairs are discovered the same way the live daemon picks them.
 
 Sources:
   b1dz <source> run        start headless
