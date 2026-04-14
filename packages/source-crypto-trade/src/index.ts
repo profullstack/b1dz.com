@@ -39,6 +39,11 @@ import type { Candle } from './analysis/candles.js';
 import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
 import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
+import {
+  publishEntrySignal,
+  publishExitSignal,
+  publishLiquidationSignal,
+} from './analysis/signalPublisher.js';
 
 export interface Signal {
   side: 'buy' | 'sell';
@@ -552,20 +557,17 @@ function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): 
   const exitReason = `rotate to ${item.pair}: ${sig.reason}`;
   attemptedExchangeActions.add(item.exchange);
   console.log(`[trade] ROTATE ${item.exchange}:${current.pair} -> ${item.pair} gross=$${grossPnl.toFixed(4)} net=$${netPnl.toFixed(4)} sig=${sig.strength.toFixed(2)}`);
-  return {
-    id: `crypto-trade:${item.exchange}:${current.pair}:rotate-sell:${Date.now()}`,
-    sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
-    externalId: `${current.pair}:rotate-sell:${Date.now()}`,
-    title: `SELL ${current.pair} @ ${currentSnap.bid.toFixed(2)} — ${exitReason}`,
-    category: 'crypto-trade',
-    costNow: 0,
+  return publishExitSignal({
+    strategyId,
+    exchange: item.exchange,
+    pair: current.pair,
+    snap: currentSnap,
+    signal: { side: 'sell', strength: sig.strength, reason: exitReason },
+    position: current,
     projectedReturn: currentSnap.bid * current.volume,
     projectedProfit: netPnl,
-    confidence: Math.max(0.8, sig.strength),
-    metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: sig.strength, reason: exitReason }, snap: currentSnap, position: current },
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
+    titleReason: exitReason,
+  });
 }
 
 async function refreshSpendableQuoteBalances(): Promise<void> {
@@ -1188,20 +1190,18 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const grossPnl = (item.snap.bid - pos.entryPrice) * pos.volume;
           const netPnl = grossPnl - sellFee;
           console.log(`[trade] EXIT ${item.pair}: ${exitReason} gross=$${grossPnl.toFixed(4)} net=$${netPnl.toFixed(4)}`);
-          return {
-            id: `crypto-trade:${item.exchange}:${item.pair}:sell:${Date.now()}`,
-            sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
-            externalId: `${item.pair}:sell:${Date.now()}`,
-            title: `SELL ${item.pair} @ ${item.snap.bid.toFixed(2)} — ${exitReason}`,
-            category: 'crypto-trade',
-            costNow: 0,
+          return publishExitSignal({
+            strategyId,
+            exchange: item.exchange,
+            pair: item.pair,
+            snap: item.snap,
+            signal: { side: 'sell', strength: 1, reason: exitReason },
+            position: pos,
+            analysis: item.analysis,
             projectedReturn: item.snap.bid * pos.volume,
             projectedProfit: netPnl,
-            confidence: 1,
-            metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: 1, reason: exitReason }, snap: item.snap, position: pos, analysis: item.analysis },
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
+            titleReason: exitReason,
+          });
         }
         return null; // hold position
       }
@@ -1211,20 +1211,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (liquidation && !currentPositionOnExchange(item.exchange)) {
         attemptedExchangeActions.add(item.exchange);
         console.log(`[trade] LIQUIDATE ${item.exchange}:${item.pair} untracked volume=${liquidation.volume.toFixed(8)}`);
-        return {
-          id: `crypto-trade:${item.exchange}:${item.pair}:liquidate:${Date.now()}`,
-          sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
-          externalId: `${item.pair}:liquidate:${Date.now()}`,
-          title: `SELL ${item.pair} @ ${item.snap.bid.toFixed(2)} — liquidate untracked holding`,
-          category: 'crypto-trade',
-          costNow: 0,
-          projectedReturn: item.snap.bid * liquidation.volume,
-          projectedProfit: 0,
-          confidence: 1,
-          metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: 1, reason: 'liquidate untracked holding' }, snap: item.snap, liquidation },
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
+        return publishLiquidationSignal({
+          strategyId,
+          exchange: item.exchange,
+          pair: item.pair,
+          snap: item.snap,
+          signal: { side: 'sell', strength: 1, reason: 'liquidate untracked holding' },
+          liquidation,
+        });
       }
 
       // ── Check entries ──
@@ -1284,20 +1278,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       pendingBuyExchange = tradeExchange;
       attemptedExchangeActions.add(tradeExchange);
       console.log(`[trade] ENTRY SIGNAL ${item.pair} @ $${price.toFixed(2)}: ${sig.reason} (str=${sig.strength.toFixed(2)})`);
-      return {
-        id: `crypto-trade:${item.exchange}:${item.pair}:buy:${Date.now()}`,
-        sourceId: `crypto-trade:${item.exchange}:${strategyId}`,
-        externalId: `${item.pair}:buy:${Date.now()}`,
-        title: `BUY ${item.pair} @ ${price.toFixed(2)} — ${sig.reason}`,
-        category: 'crypto-trade',
-        costNow: price,
+      return publishEntrySignal({
+        strategyId,
+        exchange: item.exchange,
+        pair: item.pair,
+        snap: item.snap,
+        signal: sig,
+        analysis: item.analysis,
         projectedReturn: item.analysis?.takeProfit ?? (price * (1 + TAKE_PROFIT_PCT)),
         projectedProfit: price * netTakeProfit,
-        confidence: sig.strength,
-        metadata: { strategy: strategyId, signal: sig, snap: item.snap, analysis: item.analysis },
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
+      });
     },
 
     async act(opp): Promise<ActionResult> {
