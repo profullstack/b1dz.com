@@ -18,7 +18,8 @@
 import { ZeroExAdapter, OneInchAdapter, type EvmChain, isEvmChain } from '@b1dz/adapters-evm';
 import { JupiterAdapter } from '@b1dz/adapters-solana';
 import { defaultCexAdapters } from '@b1dz/adapters-cex';
-import type { NormalizedQuote, QuoteRequest, VenueAdapter } from '@b1dz/venue-types';
+import { rankCrossVenueOpportunities } from '@b1dz/profitability';
+import type { NormalizedQuote, QuoteRequest, VenueAdapter, Opportunity } from '@b1dz/venue-types';
 
 interface ObserveArgs {
   pair: string;
@@ -26,6 +27,9 @@ interface ObserveArgs {
   amount: string;
   chain: string;
   slippageBps: number;
+  rank: boolean;
+  minNetUsd: number;
+  minNetBps: number;
 }
 
 function parseArgs(argv: string[]): ObserveArgs {
@@ -50,7 +54,10 @@ function parseArgs(argv: string[]): ObserveArgs {
   const amount = flags.amount ?? '100';
   const chain = flags.chain ?? 'base';
   const slippageBps = Number.parseInt(flags.slippage ?? '50', 10);
-  return { pair, side, amount, chain, slippageBps };
+  const rank = flags.rank === 'true' || flags.rank === '1' || !!flags.rank;
+  const minNetUsd = Number.parseFloat(flags['min-net'] ?? '0');
+  const minNetBps = Number.parseFloat(flags['min-bps'] ?? '0');
+  return { pair, side, amount, chain, slippageBps, rank, minNetUsd, minNetBps };
 }
 
 function buildAdaptersFor(chain: string): VenueAdapter[] {
@@ -148,4 +155,71 @@ export async function runObserveCli(argv: string[]): Promise<void> {
     const best = quotes.reduce((a, b) => Number.parseFloat(a.amountOut) > Number.parseFloat(b.amountOut) ? a : b);
     console.log(`\n  best fill: ${best.venue} at ${Number.parseFloat(best.amountOut).toFixed(6)} ${best.quoteAsset}`);
   }
+
+  if (!args.rank) return;
+
+  // --rank mode: fetch the opposite side as well and score every cross-venue
+  // (buy, sell) combo through the profitability engine.
+  const oppositeSide: 'buy' | 'sell' = args.side === 'buy' ? 'sell' : 'buy';
+  // For the opposite side the amount needs to be in the OTHER asset. When
+  // we asked for "sell 1 SOL → USDC", the reverse ask is "buy SOL with
+  // USDC"; we use the highest amountOut we just observed as the input
+  // size so both sides are sizing the same trade.
+  const reverseInput = quotes.length > 0
+    ? quotes.reduce((max, q) => Math.max(max, Number.parseFloat(q.amountOut)), 0).toString()
+    : args.amount;
+
+  console.log(`\n── opposite-side quotes (${oppositeSide} ${reverseInput}) ──`);
+  const reverseResults = await Promise.all(adapters.map(async (a) => {
+    const req: QuoteRequest = {
+      pair: args.pair,
+      side: oppositeSide,
+      amountIn: reverseInput,
+      ...(scopedChain !== undefined ? { chain: scopedChain } : {}),
+      maxSlippageBps: args.slippageBps,
+    };
+    try {
+      const q = await a.quote(req);
+      return { adapter: a, quote: q };
+    } catch {
+      return { adapter: a, quote: null };
+    }
+  }));
+  for (const r of reverseResults) {
+    if (r.quote) console.log(renderRow(r.quote));
+  }
+  const reverseQuotes = reverseResults.map((r) => r.quote).filter((q): q is NormalizedQuote => !!q);
+
+  const buyQuotes = args.side === 'buy' ? quotes : reverseQuotes;
+  const sellQuotes = args.side === 'sell' ? quotes : reverseQuotes;
+
+  const tradeSizeUsd = Number.parseFloat(args.amount);
+  const opportunities = rankCrossVenueOpportunities(buyQuotes, sellQuotes, {
+    tradeSizeUsd,
+    minNetUsd: args.minNetUsd,
+    minNetBps: args.minNetBps,
+  });
+
+  console.log(`\n── ranked cross-venue opportunities ──`);
+  if (opportunities.length === 0) {
+    console.log('  no opportunities found');
+    return;
+  }
+  for (const opp of opportunities.slice(0, 10)) {
+    renderOpportunity(opp);
+  }
+}
+
+function renderOpportunity(opp: Opportunity): void {
+  const status = opp.executable ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
+  const route = `${opp.buyVenue}→${opp.sellVenue}`.padEnd(24);
+  const net = opp.expectedNetUsd >= 0
+    ? `\x1b[32m+$${opp.expectedNetUsd.toFixed(4)}\x1b[0m`
+    : `\x1b[31m-$${Math.abs(opp.expectedNetUsd).toFixed(4)}\x1b[0m`;
+  const bps = `${opp.expectedNetBps.toFixed(1)}bps`.padEnd(10);
+  const gross = `gross=$${opp.grossEdgeUsd.toFixed(4)}`.padEnd(18);
+  const fees = `fees=$${opp.totalFeesUsd.toFixed(4)}`.padEnd(15);
+  const gas = `gas=$${opp.totalGasUsd.toFixed(4)}`.padEnd(14);
+  const blockers = opp.blockers.length ? ` blockers=[${opp.blockers.slice(0, 2).join('; ')}]` : '';
+  console.log(`  ${status} ${route} net=${net.padEnd(26)} ${bps}${gross}${fees}${gas}${blockers}`);
 }

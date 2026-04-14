@@ -121,6 +121,9 @@ Multi-venue quote observer (v2 DEX engine):
     --amount 100                           amount in input asset
     --chain cex|base|solana|all|...        target (cex=all 4 CEXs, all=everything)
     --slippage 50                          max slippage in bps (default 50)
+    --rank                                 fetch both sides + rank cross-venue opps
+    --min-net 1                            min $ net edge to mark executable
+    --min-bps 10                           min bps net edge to mark executable
   Adapters: kraken, coinbase, binance-us, gemini, 0x, 1inch, jupiter
   Env: ZEROX_API_KEY, ONEINCH_API_KEY (free at portal.1inch.dev / 0x.org)
 
