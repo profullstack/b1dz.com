@@ -90,6 +90,25 @@ function timeframeToBinanceInterval(timeframe: AnalysisTimeframe): string {
   return timeframe;
 }
 
+function timeframeToGeminiInterval(timeframe: AnalysisTimeframe): string | null {
+  // Gemini supports: 1m, 5m, 15m, 30m, 1hr, 6hr, 1day. No 4h or 1w.
+  return ({
+    '1m': '1m',
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1hr',
+    '4h': '1hr',   // fetch 1hr, aggregate to 4h
+    '1d': '1day',
+    '1w': '1day',  // fetch 1day, aggregate to 1w
+  } as Record<AnalysisTimeframe, string>)[timeframe] ?? '5m';
+}
+
+function chooseGeminiFetchTimeframe(timeframe: AnalysisTimeframe): { fetchTimeframe: AnalysisTimeframe; aggregate: AnalysisTimeframe | null } {
+  if (timeframe === '4h') return { fetchTimeframe: '1h', aggregate: '4h' };
+  if (timeframe === '1w') return { fetchTimeframe: '1d', aggregate: '1w' };
+  return { fetchTimeframe: timeframe, aggregate: null };
+}
+
 function timeframeToCoinbaseGranularity(timeframe: AnalysisTimeframe): number {
   return {
     '1m': 60,
@@ -182,6 +201,27 @@ export async function fetchHistoricalCandles(
           low: Number(row[1]),
           high: Number(row[2]),
           open: Number(row[3]),
+          close: Number(row[4]),
+          volume: Number(row[5] ?? 0),
+        }))
+        .filter((bar) => Number.isFinite(bar.close))
+        .sort((a, b) => a.time - b.time);
+      return aggregate ? aggregateCandles(rawBars, aggregate).slice(-limit) : rawBars.slice(-limit);
+    }
+
+    if (exchange === 'gemini') {
+      const symbol = normalizePair(pair, 'gemini');
+      const { fetchTimeframe, aggregate } = chooseGeminiFetchTimeframe(timeframe);
+      const interval = timeframeToGeminiInterval(fetchTimeframe);
+      if (!interval) return [];
+      // Gemini returns [time_ms, open, high, low, close, volume], newest-first.
+      const data = await fetchJson(`https://api.gemini.com/v2/candles/${symbol}/${interval}`);
+      const rawBars = (Array.isArray(data) ? data : [])
+        .map((row: unknown[]) => ({
+          time: Number(row[0]),
+          open: Number(row[1]),
+          high: Number(row[2]),
+          low: Number(row[3]),
           close: Number(row[4]),
           volume: Number(row[5] ?? 0),
         }))

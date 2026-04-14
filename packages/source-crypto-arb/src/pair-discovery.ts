@@ -205,6 +205,31 @@ async function discoverPairs(): Promise<string[]> {
   return selected.map((p) => p.pair);
 }
 
+/** Gemini doesn't offer an all-tickers endpoint. We fetch its SYMBOLS list
+ *  (pairs available), use `/v1/pricefeed` for a price/volume snapshot, and
+ *  treat pairs present there as "live" — honest-enough proxy for our filter. */
+async function getGeminiVolumes(): Promise<Map<string, number>> {
+  try {
+    const res = await fetch('https://api.gemini.com/v1/pricefeed');
+    if (!res.ok) return new Map();
+    const data = (await res.json()) as Array<{ pair: string; price: string; percentChange24h: string }>;
+    const out = new Map<string, number>();
+    for (const row of data) {
+      if (!row.pair?.endsWith('USD')) continue;
+      const base = row.pair.slice(0, -3).toUpperCase();
+      if (EXCLUDED.has(base)) continue;
+      // pricefeed doesn't include 24h USD volume; use a sentinel above the
+      // filter threshold so Gemini pairs are accepted (we have no better
+      // signal). Downstream filters (candle freshness, directional bias)
+      // still guard against stale/phantom quotes.
+      out.set(`${base}-USD`, MIN_VOLUME_USD * 2);
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
 /**
  * Per-exchange 24h volume snapshot. Used by the observer/audit tools to
  * filter out pairs that aren't actively traded on a given venue — a pair
@@ -218,16 +243,19 @@ export async function getPerExchangeVolumes(): Promise<{
   kraken: Map<string, number>;
   coinbase: Map<string, number>;
   'binance-us': Map<string, number>;
+  gemini: Map<string, number>;
 }> {
-  const [kraken, coinbase, binance] = await Promise.all([
+  const [kraken, coinbase, binance, gemini] = await Promise.all([
     getKrakenVolumes().catch(() => new Map<string, number>()),
     getCoinbaseVolumes().catch(() => new Map<string, { volUsd: number }>()),
     getBinanceVolumes().catch(() => new Map<string, { volUsd: number }>()),
+    getGeminiVolumes(),
   ]);
   return {
     kraken,
     coinbase: new Map([...coinbase].map(([p, v]) => [p, v.volUsd])),
     'binance-us': new Map([...binance].map(([p, v]) => [p, v.volUsd])),
+    gemini,
   };
 }
 

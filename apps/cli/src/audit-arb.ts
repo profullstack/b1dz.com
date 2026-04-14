@@ -28,7 +28,11 @@ const TAKER_FEES: Record<string, number> = {
   kraken: 0.0026,
   'binance-us': 0.001,
   coinbase: 0.006,
+  gemini: 0.004,
 };
+/** Exchanges we can place orders on. Gemini is observe-only: we use its
+ *  prices for signal but can't execute there (no trading credentials). */
+const EXECUTABLE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase']);
 const EXCHANGES = Object.keys(TAKER_FEES) as Array<keyof typeof TAKER_FEES>;
 
 interface AuditArgs {
@@ -121,7 +125,7 @@ async function auditPair(
   pair: string,
   timeframe: AnalysisTimeframe,
   limit: number,
-  volumes: { kraken: Map<string, number>; coinbase: Map<string, number>; 'binance-us': Map<string, number> },
+  volumes: { kraken: Map<string, number>; coinbase: Map<string, number>; 'binance-us': Map<string, number>; gemini: Map<string, number> },
 ): Promise<PairAuditResult | { skip: true; reason: string } | null> {
   // Sanity filter #1: both exchanges must clear a minimum 24h volume. If
   // one exchange has a stale/delisted product the candles will still
@@ -213,7 +217,17 @@ async function auditPair(
 function topRouteLabel(topRoute: Record<string, number>): string {
   const entries = Object.entries(topRoute).sort((a, b) => b[1] - a[1]);
   if (entries.length === 0) return '-';
-  return entries.slice(0, 2).map(([route, n]) => `${route}(${n})`).join(', ');
+  // Mark non-executable routes (Gemini is observe-only) with a ~ prefix.
+  return entries.slice(0, 2).map(([route, n]) => {
+    const [buy, sell] = route.split('->');
+    const executable = EXECUTABLE_EXCHANGES.has(buy) && EXECUTABLE_EXCHANGES.has(sell);
+    return `${executable ? '' : '~'}${route}(${n})`;
+  }).join(', ');
+}
+
+function isExecutableRoute(route: string): boolean {
+  const [buy, sell] = route.split('->');
+  return EXECUTABLE_EXCHANGES.has(buy) && EXECUTABLE_EXCHANGES.has(sell);
 }
 
 export async function runAuditArbCli(argv: string[]): Promise<void> {
@@ -234,7 +248,7 @@ export async function runAuditArbCli(argv: string[]): Promise<void> {
 
   process.stdout.write('fetching 24h volumes for sanity filter...');
   const volumes = await getPerExchangeVolumes();
-  console.log(` ok (kraken=${volumes.kraken.size} coinbase=${volumes.coinbase.size} binance-us=${volumes['binance-us'].size})\n`);
+  console.log(` ok (kraken=${volumes.kraken.size} coinbase=${volumes.coinbase.size} binance-us=${volumes['binance-us'].size} gemini=${volumes.gemini.size})\n`);
 
   const results: PairAuditResult[] = [];
   let skippedCount = 0;
@@ -270,6 +284,17 @@ export async function runAuditArbCli(argv: string[]): Promise<void> {
   const sumOfAvgWeighted = results.reduce((s, r) => s + r.sumNetPct, 0);
   const avgAcrossArbBars = totalArbBars > 0 ? sumOfAvgWeighted / totalArbBars : 0;
 
+  // Executable-only tally: opportunities where BOTH buy and sell legs land
+  // on exchanges we can actually place orders on. Gemini counts for signal
+  // but a Gemini-only route is not capturable.
+  let executableCrossings = 0;
+  for (const r of results) {
+    for (const [route, count] of Object.entries(r.topRoute)) {
+      if (isExecutableRoute(route)) executableCrossings += count;
+    }
+  }
+  const executableShare = totalArbBars > 0 ? executableCrossings / totalArbBars : 0;
+
   // Rough expected daily $ edge (if we captured every arb bar at position size):
   const barMinutes = { '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440, '1w': 10080 }[args.timeframe] ?? 60;
   const windowHours = (totalBars * barMinutes) / results.length / 60;
@@ -288,10 +313,13 @@ export async function runAuditArbCli(argv: string[]): Promise<void> {
   console.log(line);
   console.log(`  Bars sampled:      ${totalBars} across ${results.length} pairs`);
   console.log(`  Bars w/ arb edge:  ${totalArbBars} (${((totalArbBars / Math.max(1, totalBars)) * 100).toFixed(1)}%)`);
+  console.log(`  Executable arb:    ${executableCrossings} of ${totalArbBars} (${(executableShare * 100).toFixed(1)}%) — routes we can actually place orders on`);
   console.log(`  Avg edge per arb bar: ${fmtPct(avgAcrossArbBars)} (${fmtUsd((avgAcrossArbBars / 100) * args.positionUsd)} on $${args.positionUsd})`);
   console.log(`  Theoretical total:    ${fmtUsd(totalEdgeUsd)} over ~${windowHours.toFixed(1)}h`);
   console.log(`  Theoretical $/day:    ${fmtUsd(edgePerDay)} (if every opportunity captured, which is optimistic)`);
+  console.log(`  Executable $/day:     ${fmtUsd(edgePerDay * executableShare)} (only routes we can trade)`);
   console.log('');
+  console.log('  Exchanges: kraken, binance-us, coinbase, gemini (observe-only)');
   console.log('  NOTE: bar-close mid-price UNDERCOUNTS opportunities. Real bid/ask');
   console.log('  crossings occur more often intra-bar. But actual execution LOSES');
   console.log('  some opportunities to latency/fills, so the real number is in');
