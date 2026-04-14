@@ -39,6 +39,7 @@ export interface BacktestPairResult {
   candles: number;
   result: {
     trades: unknown[];
+    haltedByDailyLossLimit?: boolean;
     metrics: {
       totalReturn: number;
       winRate: number;

@@ -37,6 +37,17 @@ import {
 } from '@b1dz/source-crypto-arb';
 import type { Candle } from './analysis/candles.js';
 import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
+import {
+  TAKE_PROFIT_PCT,
+  INITIAL_STOP_PCT,
+  BREAKEVEN_TRIGGER_PCT,
+  LOCK_TRIGGER_PCT,
+  LOCK_STOP_PCT,
+  TIME_EXIT_MS,
+  TIME_EXIT_FLAT_PCT,
+  COOLDOWN_MS,
+  dailyLossLimitPctFromEnv,
+} from './trade-config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
 import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
 import {
@@ -78,32 +89,10 @@ interface TradeItem {
 }
 
 // ─── Exit parameters ───────────────────────────────────────────
+// Defined in ./trade-config.js so the backtest simulator applies the
+// identical rules live trading does.
 
-/** Take-profit target. */
-const TAKE_PROFIT_PCT = 0.008;  // +0.8% (lowered from 1.5% — more achievable)
-
-/** Initial stop-loss. */
-const INITIAL_STOP_PCT = 0.004; // -0.4%
-
-/** Move stop to breakeven when position reaches this profit. */
-const BREAKEVEN_TRIGGER_PCT = 0.003; // +0.3%
-
-/** Lock in profit: move stop to this level when position reaches LOCK_TRIGGER. */
-const LOCK_TRIGGER_PCT = 0.005;  // +0.5%
-const LOCK_STOP_PCT = 0.002;     // stop at +0.2% (lock in small profit)
-
-/** Close at market if position has been open this long and is flat. */
-const TIME_EXIT_MS = 15 * 60 * 1000; // 15 minutes (was 30)
-const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%
-
-/** Cooldown after closing a position before opening another. */
-const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes (was 10)
-
-/** Max daily realized loss before halting new entries, as % of start-of-day total equity. */
-const DAILY_LOSS_LIMIT_PCT = (() => {
-  const value = Number.parseFloat(process.env.DAILY_LOSS_LIMIT_PCT ?? '5');
-  return Number.isFinite(value) && value > 0 ? value : 5;
-})();
+const DAILY_LOSS_LIMIT_PCT = dailyLossLimitPctFromEnv();
 const WARMUP_TICKS = 20;
 
 // ─── State ─────────────────────────────────────────────────────
