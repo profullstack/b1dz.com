@@ -21,6 +21,18 @@ interface Strategy {
   evaluate(snap: MarketSnapshot, history: MarketSnapshot[]): Signal | null;
 }
 
+const FIFTEEN_MIN_TICKS = 180;
+const SIDEWAYS_MIN_TICKS = 60;
+const SIDEWAYS_MAX_RANGE_PCT = 1.2;
+const SIDEWAYS_MAX_DRIFT_PCT = 0.45;
+const SIDEWAYS_STRONG_BUY_THRESHOLD = 0.85;
+
+export interface TrendRegime {
+  regime: 'sideways' | 'trending';
+  rangePct: number;
+  driftPct: number;
+}
+
 // ─── Indicator helpers ─────────────────────────────────────────
 
 function ema(values: number[], period: number): number[] {
@@ -62,6 +74,44 @@ function rsi(prices: number[], period = 14): number {
 function spreadPct(snap: MarketSnapshot): number {
   const mid = (snap.bid + snap.ask) / 2;
   return ((snap.ask - snap.bid) / mid) * 100;
+}
+
+export function analyze15mTrend(history: MarketSnapshot[]): TrendRegime {
+  const window = history.slice(-FIFTEEN_MIN_TICKS);
+  if (window.length < SIDEWAYS_MIN_TICKS) {
+    return { regime: 'trending', rangePct: Infinity, driftPct: Infinity };
+  }
+
+  const bids = window.map((snap) => snap.bid).filter((bid) => Number.isFinite(bid) && bid > 0);
+  if (bids.length < SIDEWAYS_MIN_TICKS) {
+    return { regime: 'trending', rangePct: Infinity, driftPct: Infinity };
+  }
+
+  const high = Math.max(...bids);
+  const low = Math.min(...bids);
+  const mid = (high + low) / 2;
+  const first = bids[0]!;
+  const last = bids[bids.length - 1]!;
+  const rangePct = mid > 0 ? ((high - low) / mid) * 100 : Infinity;
+  const driftPct = first > 0 ? Math.abs((last - first) / first) * 100 : Infinity;
+
+  return {
+    regime: rangePct <= SIDEWAYS_MAX_RANGE_PCT && driftPct <= SIDEWAYS_MAX_DRIFT_PCT ? 'sideways' : 'trending',
+    rangePct,
+    driftPct,
+  };
+}
+
+export function apply15mTrendFilter(signal: Signal | null, snap: MarketSnapshot, history: MarketSnapshot[]): Signal | null {
+  if (!signal || signal.side !== 'buy') return signal;
+  const regime = analyze15mTrend(history);
+  if (regime.regime !== 'sideways') return signal;
+  if (signal.strength >= SIDEWAYS_STRONG_BUY_THRESHOLD) {
+    console.log(`[trend] ${snap.pair} 15m sideways but allowing strong buy str=${signal.strength.toFixed(2)} range=${regime.rangePct.toFixed(2)}% drift=${regime.driftPct.toFixed(2)}%`);
+    return signal;
+  }
+  console.log(`[trend] ${snap.pair} 15m sideways, suppress buy str=${signal.strength.toFixed(2)} range=${regime.rangePct.toFixed(2)}% drift=${regime.driftPct.toFixed(2)}%`);
+  return null;
 }
 
 // ─── Multi-Signal Strategy (loosened thresholds) ───────────────
@@ -214,11 +264,11 @@ export const compositeStrategy: Strategy = {
   evaluate(snap: MarketSnapshot, history: MarketSnapshot[]): Signal | null {
     // Try scalp first (faster signals)
     const scalp = scalpStrategy.evaluate(snap, history);
-    if (scalp) return scalp;
+    if (scalp) return apply15mTrendFilter(scalp, snap, history);
 
     // Then multi-signal (swing)
     const multi = multiSignalStrategy.evaluate(snap, history);
-    if (multi) return multi;
+    if (multi) return apply15mTrendFilter(multi, snap, history);
 
     return null;
   },
