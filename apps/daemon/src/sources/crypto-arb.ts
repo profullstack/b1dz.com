@@ -164,12 +164,12 @@ export const cryptoArbWorker: SourceWorker = {
       const top = spreads[0];
       const feeThreshold = 0.36;
       const gap = (feeThreshold - top.spread).toFixed(3);
-      logActivity(`[arb] ${wsCacheSize()} ws prices | ${prices.length} total | best: ${top.pair} ${top.spread.toFixed(4)}% (${top.buyExchange}→${top.sellExchange}) need ${gap}% more`, 'crypto-arb');
+      logActivity(`[arb][spread] ${wsCacheSize()} ws prices | ${prices.length} total | best: ${top.pair} ${top.spread.toFixed(4)}% (${top.buyExchange}→${top.sellExchange}) need ${gap}% more`, 'crypto-arb');
       }
       if (spreads.some((s) => s.profitable)) {
       const profitable = spreads.filter((s) => s.profitable);
       for (const s of profitable) {
-        logActivity(`[arb] ★ PROFITABLE: ${s.pair} ${s.spread.toFixed(4)}% ${s.buyExchange}→${s.sellExchange}`, 'crypto-arb');
+        logActivity(`[arb][spread] ★ PROFITABLE: ${s.pair} ${s.spread.toFixed(4)}% ${s.buyExchange}→${s.sellExchange}`, 'crypto-arb');
       }
       }
 
@@ -187,13 +187,14 @@ export const cryptoArbWorker: SourceWorker = {
       const strategies = evaluateArbStrategies(item, sourceCtx);
       for (const opp of strategies) {
         opps.push(opp);
-        logActivity(`[arb] ⚡ opportunity: ${opp.title} profit=$${opp.projectedProfit.toFixed(4)}`, 'crypto-arb');
         const meta = (opp.metadata as { strategy?: string } | undefined) ?? {};
+        const strategyTag = meta.strategy ?? 'spread';
+        logActivity(`[arb][${strategyTag}] ⚡ opportunity: ${opp.title} profit=$${opp.projectedProfit.toFixed(4)}`, 'crypto-arb');
         if (meta.strategy !== 'inventory-arb') continue;
         if (cryptoArbSource.act) {
           const result = await cryptoArbSource.act(opp, sourceCtx);
-          if (result.ok) logActivity(`[arb] ✓ EXECUTED: ${result.message}`, 'crypto-arb');
-          else logActivity(`[arb] ✗ skipped: ${result.message}`, 'crypto-arb');
+          if (result.ok) logActivity(`[arb][inventory-arb] ✓ EXECUTED: ${result.message}`, 'crypto-arb');
+          else logActivity(`[arb][inventory-arb] ✗ skipped: ${result.message}`, 'crypto-arb');
         }
       }
       }
