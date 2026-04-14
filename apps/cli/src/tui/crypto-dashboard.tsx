@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { tuiEvents } from './events.js';
 import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
@@ -79,7 +79,15 @@ interface TradeStatusData {
 }
 
 interface TradeState {
-  signals: { title: string; confidence: number; createdAt: number }[];
+  signals: {
+    title: string;
+    confidence: number;
+    createdAt: number;
+    metadata?: {
+      snap?: { pair?: string; exchange?: string };
+      position?: { pair?: string; exchange?: string };
+    };
+  }[];
   activityLog: { at: string; text: string }[];
   rawLog?: { at: string; text: string }[];
   tradeStatus: TradeStatusData;
@@ -158,6 +166,14 @@ function padRight(value: string, width: number): string {
 const CHART_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
 type ChartTimeframe = typeof CHART_TIMEFRAMES[number];
 type ClosedTradeRow = NonNullable<NonNullable<TradeState['tradeState']>['closedTrades']>[number];
+const CHART_AUTO_CYCLE_MS = 30_000;
+const CHART_MANUAL_PAUSE_MS = 5 * 60_000;
+const SIGNAL_CANDIDATE_WINDOW_MS = 15 * 60_000;
+
+interface ChartCandidate {
+  pair: string;
+  exchange?: string;
+}
 
 function preferredChartExchange(pair: string, positions: TradeStatusData['positions'], prices: ArbState['prices'], closedTrades: NonNullable<TradeState['tradeState']>['closedTrades'] = []) {
   const priceExchanges = new Set(prices.filter((price) => price.pair === pair).map((price) => price.exchange));
@@ -169,6 +185,42 @@ function preferredChartExchange(pair: string, positions: TradeStatusData['positi
   if (open) return open.exchange;
   const recentClosed = [...closedTrades].sort((a, b) => b.exitTime - a.exitTime).find((trade) => trade.pair === pair);
   return recentClosed?.exchange ?? 'kraken';
+}
+
+function toSignalChartCandidate(signal: unknown): ChartCandidate | null {
+  const data = signal as {
+    title?: string;
+    createdAt?: number;
+    metadata?: {
+      snap?: { pair?: string; exchange?: string };
+      position?: { pair?: string; exchange?: string };
+    };
+  };
+  if ((data.createdAt ?? 0) < Date.now() - SIGNAL_CANDIDATE_WINDOW_MS) return null;
+  const pair = data.metadata?.snap?.pair
+    ?? data.metadata?.position?.pair
+    ?? (/^(?:BUY|SELL)\s+([A-Z0-9-]+)/.exec(data.title ?? '')?.[1] ?? null);
+  const exchange = data.metadata?.snap?.exchange ?? data.metadata?.position?.exchange;
+  return pair ? { pair, exchange } : null;
+}
+
+function candidateKey(candidate: ChartCandidate): string {
+  return `${candidate.exchange ?? ''}:${candidate.pair}`;
+}
+
+function nextChartCandidate(
+  candidates: ChartCandidate[],
+  currentPair: string | null,
+  currentExchange: string | null,
+  excludeKey?: string,
+): ChartCandidate | null {
+  const filtered = excludeKey
+    ? candidates.filter((candidate) => candidateKey(candidate) !== excludeKey)
+    : candidates;
+  if (filtered.length === 0) return null;
+  const currentKey = currentPair ? `${currentExchange ?? ''}:${currentPair}` : null;
+  const currentIndex = currentKey ? filtered.findIndex((candidate) => candidateKey(candidate) === currentKey) : -1;
+  return filtered[(currentIndex + 1 + filtered.length) % filtered.length] ?? filtered[0] ?? null;
 }
 
 function ClickablePair({
@@ -223,6 +275,8 @@ function DashboardInner() {
   const [chartTimeframe, setChartTimeframe] = useState<ChartTimeframe>('1m');
   const [showTimeframeMenu, setShowTimeframeMenu] = useState(false);
   const [chartTarget, setChartTarget] = useState<'A' | 'B'>('A');
+  const [chartPauseUntilA, setChartPauseUntilA] = useState(0);
+  const [chartPauseUntilB, setChartPauseUntilB] = useState(0);
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -237,16 +291,29 @@ function DashboardInner() {
     return () => setWsLogger(null);
   }, []);
 
-  const selectChartPair = (next: string, exchange?: string) => {
-    if (chartTarget === 'A') {
+  const pauseChart = (target: 'A' | 'B') => {
+    const until = Date.now() + CHART_MANUAL_PAUSE_MS;
+    if (target === 'A') setChartPauseUntilA(until);
+    else setChartPauseUntilB(until);
+    addLog(`{cyan-fg}Chart ${target}{/cyan-fg} auto-cycle paused 5m`);
+  };
+
+  const selectChartPair = (
+    next: string,
+    exchange?: string,
+    opts?: { target?: 'A' | 'B'; manual?: boolean },
+  ) => {
+    const target = opts?.target ?? chartTarget;
+    if (target === 'A') {
       setChartPair(next);
       setChartExchangeA(exchange ?? null);
     } else {
       setChartPairB(next);
       setChartExchangeB(exchange ?? null);
     }
+    if (opts?.manual) pauseChart(target);
     setShowTimeframeMenu(false);
-    addLog(`{cyan-fg}Chart ${chartTarget}{/cyan-fg} pair → ${next}${exchange ? ` @ ${exchange}` : ''}`);
+    addLog(`{cyan-fg}Chart ${target}{/cyan-fg} pair → ${next}${exchange ? ` @ ${exchange}` : ''}`);
   };
 
   const selectChartTimeframe = (next: ChartTimeframe) => {
@@ -291,6 +358,7 @@ function DashboardInner() {
         const next = pairs[(start + delta + pairs.length) % pairs.length];
         setShowTimeframeMenu(false);
         setChartExchangeA(null);
+        setChartPauseUntilA(0);
         addLog(`{cyan-fg}Chart{/cyan-fg} pair → ${next}`);
         return next;
       });
@@ -523,6 +591,74 @@ function DashboardInner() {
       setChartExchangeB(null);
     }
   }, [chartPairs, chartPairB, activeChartPair]);
+
+  const chartCandidates = useMemo(() => {
+    const candidates: ChartCandidate[] = [];
+    const seen = new Set<string>();
+    for (const pos of visiblePositions) {
+      const candidate = { pair: pos.pair, exchange: pos.exchange };
+      const key = candidateKey(candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
+    }
+    for (const signal of signals) {
+      const candidate = toSignalChartCandidate(signal);
+      if (!candidate) continue;
+      const resolved = {
+        pair: candidate.pair,
+        exchange: candidate.exchange ?? preferredChartExchange(candidate.pair, positions, prices, closedTrades),
+      };
+      const key = candidateKey(resolved);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(resolved);
+    }
+    for (const pair of chartPairs) {
+      const candidate = {
+        pair,
+        exchange: preferredChartExchange(pair, positions, prices, closedTrades),
+      };
+      const key = candidateKey(candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(candidate);
+    }
+    return candidates;
+  }, [visiblePositions, signals, positions, prices, closedTrades, chartPairs]);
+
+  useEffect(() => {
+    if (chartCandidates.length === 0) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (chartPauseUntilA <= now) {
+        const nextA = nextChartCandidate(chartCandidates, activeChartPair, chartExchange, `${secondaryChartExchange ?? ''}:${secondaryChartPair}`);
+        if (nextA && candidateKey(nextA) !== `${chartExchange ?? ''}:${activeChartPair}`) {
+          selectChartPair(nextA.pair, nextA.exchange, { target: 'A' });
+        }
+      }
+      if (chartPauseUntilB <= now) {
+        const nextB = nextChartCandidate(chartCandidates, secondaryChartPair, secondaryChartExchange, `${chartExchange ?? ''}:${activeChartPair}`);
+        if (nextB && candidateKey(nextB) !== `${secondaryChartExchange ?? ''}:${secondaryChartPair}`) {
+          selectChartPair(nextB.pair, nextB.exchange, { target: 'B' });
+        }
+      }
+    }, CHART_AUTO_CYCLE_MS);
+    return () => clearInterval(timer);
+  }, [
+    chartCandidates,
+    activeChartPair,
+    chartExchange,
+    secondaryChartPair,
+    secondaryChartExchange,
+    chartPauseUntilA,
+    chartPauseUntilB,
+  ]);
+
+  const chartAPauseRemainingSec = Math.max(0, Math.ceil((chartPauseUntilA - Date.now()) / 1000));
+  const chartBPauseRemainingSec = Math.max(0, Math.ceil((chartPauseUntilB - Date.now()) / 1000));
+  const chartAPauseLabel = chartAPauseRemainingSec > 0 ? `paused ${chartAPauseRemainingSec}s` : 'auto 30s';
+  const chartBPauseLabel = chartBPauseRemainingSec > 0 ? `paused ${chartBPauseRemainingSec}s` : 'auto 30s';
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [
@@ -782,7 +918,7 @@ function DashboardInner() {
           pair={pos.pair}
           exchange={pos.exchange}
           active={pos.pair === activeChartPair}
-          onSelect={selectChartPair}
+          onSelect={(nextPair, exchange) => selectChartPair(nextPair, exchange, { manual: true })}
           width={pos.pair.length + 2}
         />
       ))}
@@ -799,6 +935,12 @@ function DashboardInner() {
         timeframe={chartTimeframe}
         positions={positions as any}
         closedTrades={closedTrades as any}
+        mouse={true}
+        clickable={true}
+        onClick={() => {
+          setChartTarget('A');
+          pauseChart('A');
+        }}
       />
       <RealtimeOHLCChartContainer
         top={chartTop}
@@ -812,6 +954,12 @@ function DashboardInner() {
         timeframe={chartTimeframe}
         positions={positions as any}
         closedTrades={closedTrades as any}
+        mouse={true}
+        clickable={true}
+        onClick={() => {
+          setChartTarget('B');
+          pauseChart('B');
+        }}
       />
       <box
         top={chartTop}
@@ -824,9 +972,11 @@ function DashboardInner() {
         content={[
           ` Pair A ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}`,
           ` A: ${activeChartPair} @ ${chartExchange}`,
+          `    ${chartAPauseLabel}`,
           ` B: ${secondaryChartPair} @ ${secondaryChartExchange}`,
+          `    ${chartBPauseLabel}`,
           ` Target: ${chartTarget}`,
-          ` Controls: click pair or timeframe`,
+          ` Controls: click pair/timeframe/chart`,
           '',
           ' Timeframe',
         ].join('\n')}
@@ -862,8 +1012,7 @@ function DashboardInner() {
         active={chartTarget === 'A'}
         onSelect={(pair) => {
           setChartTarget('A');
-          setChartPair(pair);
-          setChartExchangeA(null);
+          selectChartPair(pair, undefined, { target: 'A', manual: true });
         }}
         width={Math.max(activeChartPair.length + 2, 12)}
       />
@@ -874,8 +1023,7 @@ function DashboardInner() {
         active={chartTarget === 'B'}
         onSelect={(pair) => {
           setChartTarget('B');
-          setChartPairB(pair);
-          setChartExchangeB(null);
+          selectChartPair(pair, undefined, { target: 'B', manual: true });
         }}
         width={Math.max(secondaryChartPair.length + 2, 12)}
       />
@@ -937,7 +1085,7 @@ function DashboardInner() {
             left={0}
             pair={pair}
             active={pair === activeChartPair}
-            onSelect={selectChartPair}
+            onSelect={(nextPair, exchange) => selectChartPair(nextPair, exchange, { manual: true })}
             width={Math.max(pair.length + 2, 10)}
           />
         ))}
@@ -954,7 +1102,7 @@ function DashboardInner() {
           pair={s.pair}
           exchange={s.buyExchange || undefined}
           active={s.pair === activeChartPair}
-          onSelect={selectChartPair}
+          onSelect={(nextPair, exchange) => selectChartPair(nextPair, exchange, { manual: true })}
           width={s.pair.length + 2}
         />
       ))}
@@ -982,7 +1130,7 @@ function DashboardInner() {
           pair={trade.pair}
           exchange={trade.exchange}
           active={trade.pair === activeChartPair}
-          onSelect={selectChartPair}
+          onSelect={(nextPair, exchange) => selectChartPair(nextPair, exchange, { manual: true })}
           width={trade.pair.length + 2}
         />
       ))}

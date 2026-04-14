@@ -38,6 +38,7 @@ export function RealtimeOHLCChartContainer({
   top = 0,
   left = 0,
   label = ' OHLC Chart ',
+  ...boxProps
 }) {
   const activeTimeframe = timeframe || defaultTimeframe;
   const storeRef = useRef(createCandleStore({ timeframe: activeTimeframe, maxBars: Math.max(bootstrapBars * 2, 500) }));
@@ -164,6 +165,7 @@ export function RealtimeOHLCChartContainer({
     currentPriceDirection,
     lastUpdateTime,
     ascii: process.env.B1DZ_ASCII_CHARTS === 'true',
+    ...boxProps,
   });
 }
 
