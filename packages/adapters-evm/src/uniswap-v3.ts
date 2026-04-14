@@ -26,6 +26,7 @@ import {
   isEvmChain,
   type EvmChain,
 } from './tokens.js';
+import { estimateTxCostUsd, type GasOracle } from './gas.js';
 
 /**
  * Uniswap V3 fee tiers. 500 = 0.05% (stable-stable), 3000 = 0.3%
@@ -109,6 +110,17 @@ export interface UniswapV3AdapterOptions {
    *  PublicClient's chain generic surface conflicts across chains and
    *  we don't need the inferred type precision at the call sites. */
   client?: unknown;
+  /** Optional gas oracle. When supplied, the adapter uses real
+   *  `maxFeePerGas` × `gasEstimate` from the chain; otherwise it falls
+   *  back to a hardcoded 1-gwei assumption (the old behavior). */
+  gasOracle?: GasOracle;
+  /** Native-token USD price resolver. When `gasOracle` is supplied the
+   *  adapter calls this to convert wei cost → USD. Defaults to the
+   *  adapter's built-in hardcoded table. */
+  nativeUsd?: (chain: EvmChain) => Promise<number> | number;
+  /** Safety buffer on the USD gas estimate (bps). Default 2000 (+20%) —
+   *  EIP-1559 base fees can double between quote and submit. */
+  gasBufferBps?: number;
 }
 
 interface TierQuote {
@@ -128,6 +140,9 @@ export class UniswapV3Adapter implements VenueAdapter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly client: any;
   private readonly feeTiers: readonly UniswapV3FeeTier[];
+  private readonly gasOracle: GasOracle | null;
+  private readonly nativeUsdResolver: (chain: EvmChain) => Promise<number> | number;
+  private readonly gasBufferBps: number;
 
   constructor(opts: UniswapV3AdapterOptions) {
     const cfg = CHAIN_CONFIG[opts.chain];
@@ -139,6 +154,9 @@ export class UniswapV3Adapter implements VenueAdapter {
       chain: cfg.viemChain,
       transport: http(opts.rpcUrl ?? process.env[cfg.rpcEnvVar]),
     });
+    this.gasOracle = opts.gasOracle ?? null;
+    this.nativeUsdResolver = opts.nativeUsd ?? ((c: EvmChain) => this.nativeUsdPrice(c));
+    this.gasBufferBps = opts.gasBufferBps ?? 2_000;
   }
 
   async health(): Promise<AdapterHealth> {
@@ -179,11 +197,15 @@ export class UniswapV3Adapter implements VenueAdapter {
     const amountOutDecimal = fromBaseUnits(best.amountOut.toString(), tokenOut.decimals);
     const unitPrice = Number.parseFloat(amountOutDecimal) / Number.parseFloat(amountInDecimal);
 
-    // Gas USD estimate — for MVP reuse the same rough native price we
-    // use in the 0x/1inch adapters until the shared gas oracle lands.
-    const nativeUsd = this.nativeUsdPrice();
-    const gasWei = best.gasEstimate * 1_000_000_000n; // assume 1 gwei
-    const gasUsd = (Number(gasWei) / 1e18) * nativeUsd;
+    const nativeUsd = await this.nativeUsdResolver(this.chain);
+    const gasUsd = this.gasOracle
+      ? estimateTxCostUsd(
+          await this.gasOracle.getFeeData(this.chain),
+          best.gasEstimate,
+          nativeUsd,
+          { bufferBps: this.gasBufferBps },
+        )
+      : (Number(best.gasEstimate * 1_000_000_000n) / 1e18) * nativeUsd;
 
     const feePctString = (best.fee / 10_000).toFixed(2) + '%';
 
@@ -262,7 +284,10 @@ export class UniswapV3Adapter implements VenueAdapter {
     return this.config.quoter as Hex;
   }
 
-  private nativeUsdPrice(): number {
+  /** Hardcoded native-token USD fallback used only when the caller
+   *  doesn't wire a `nativeUsd` resolver. Pricing service integration
+   *  (CEX reference / Pyth / chainlink) belongs one layer up. */
+  private nativeUsdPrice(chain: EvmChain = this.chain): number {
     const prices: Record<EvmChain, number> = {
       ethereum: 2500,
       base: 2500,
@@ -271,6 +296,6 @@ export class UniswapV3Adapter implements VenueAdapter {
       optimism: 2500,
       polygon: 0.5,
     };
-    return prices[this.chain];
+    return prices[chain];
   }
 }

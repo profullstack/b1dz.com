@@ -121,4 +121,68 @@ describe('UniswapV3Adapter', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(() => new UniswapV3Adapter({ chain: 'avalanche' as any, client: mockClient(async () => null) })).toThrow(/not configured/);
   });
+
+  it('gasUsd uses the injected gas oracle instead of the 1-gwei fallback', async () => {
+    const client = mockClient(async (args: unknown) => {
+      const call = args as { args: readonly [{ fee: number }] };
+      if (call.args[0].fee !== 500) return { result: [0n, 0n, 0, 0n] };
+      // 1 ETH in → 2500 USDC out, 150k gas
+      return { result: [2_500_000_000n, 0n, 0, 150_000n] };
+    });
+    // Oracle reports 20 gwei → should dominate the 1-gwei fallback.
+    const gasOracle = {
+      getFeeData: async () => ({
+        chain: 'base' as const,
+        maxFeePerGas: 20_000_000_000n,
+        maxPriorityFeePerGas: 1_000_000_000n,
+        baseFeePerGas: 19_000_000_000n,
+        observedAt: Date.now(),
+      }),
+    };
+    const adapter = new UniswapV3Adapter({
+      chain: 'base',
+      client,
+      feeTiers: [500],
+      gasOracle,
+      nativeUsd: () => 2_500,
+      gasBufferBps: 0, // disable buffer so the math is exact
+    });
+    const q = await adapter.quote({ pair: 'ETH-USDC', side: 'sell', amountIn: '1' });
+    // 150000 * 20e9 wei = 3e15 wei = 0.003 ETH = $7.50 at $2500/ETH
+    expect(q?.gasUsd).toBeCloseTo(7.5, 3);
+  });
+
+  it('gas buffer inflates the reported gasUsd by the configured bps', async () => {
+    const client = mockClient(async () => ({ result: [2_500_000_000n, 0n, 0, 150_000n] }));
+    const gasOracle = {
+      getFeeData: async () => ({
+        chain: 'base' as const,
+        maxFeePerGas: 1_000_000_000n,
+        maxPriorityFeePerGas: 100_000_000n,
+        baseFeePerGas: 900_000_000n,
+        observedAt: Date.now(),
+      }),
+    };
+    const a0 = new UniswapV3Adapter({
+      chain: 'base', client, feeTiers: [500],
+      gasOracle, nativeUsd: () => 2_500, gasBufferBps: 0,
+    });
+    const a20 = new UniswapV3Adapter({
+      chain: 'base', client, feeTiers: [500],
+      gasOracle, nativeUsd: () => 2_500, gasBufferBps: 2_000,
+    });
+    const q0 = await a0.quote({ pair: 'ETH-USDC', side: 'sell', amountIn: '1' });
+    const q20 = await a20.quote({ pair: 'ETH-USDC', side: 'sell', amountIn: '1' });
+    expect(q20!.gasUsd).toBeCloseTo(q0!.gasUsd * 1.2, 4);
+  });
+
+  it('falls back to the hardcoded 1-gwei path when no gas oracle is wired', async () => {
+    const adapter = makeAdapter((fee) => {
+      if (fee === 500) return { amountOut: 2_500_000_000n, gas: 150_000n };
+      return 'revert';
+    });
+    const q = await adapter.quote({ pair: 'ETH-USDC', side: 'sell', amountIn: '1' });
+    // 150000 * 1e9 wei = 1.5e14 wei = 0.00015 ETH = $0.375 @ $2500
+    expect(q?.gasUsd).toBeCloseTo(0.375, 3);
+  });
 });

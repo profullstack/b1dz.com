@@ -17,3 +17,45 @@ export {
   type EvmChain,
   type TokenInfo,
 } from './tokens.js';
+export {
+  ViemGasOracle,
+  estimateTxCostUsd,
+  isFeeDataStale,
+  exceedsGasBudget,
+  gasEatsTheEdge,
+  isGasSpike,
+  type FeeData,
+  type GasOracle,
+} from './gas.js';
+export {
+  ERC20_APPROVAL_ABI,
+  APPROVAL_GAS_LIMIT,
+  UINT256_MAX,
+  readAllowance,
+  checkApproval,
+  buildApprovalTx,
+  approvalCostKillsEdge,
+  safeApproveCalls,
+  type ApprovalMode,
+  type ApprovalNeed,
+  type ApprovalTx,
+  type CheckApprovalArgs,
+  type AllowanceReadArgs,
+} from './approvals.js';
+export {
+  buildUnsignedTx,
+  toSerializable,
+  digestForSigning,
+  assembleSignedTx,
+  type UnsignedTx,
+  type BuildTxArgs,
+} from './tx-builder.js';
+export {
+  trackReceipt,
+  classifyReceipt,
+  outcomeToStatus,
+  describeOutcome,
+  type ReceiptOutcome,
+  type TerminalTxStatus,
+  type TrackReceiptArgs,
+} from './receipts.js';
