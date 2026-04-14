@@ -12,8 +12,46 @@
 
 import type { EventChannel, QueuedOpportunity, OpportunityStatus } from '@b1dz/event-channel';
 import type { ExecutionMode, Opportunity } from '@b1dz/venue-types';
+import { CircuitBreaker, type CircuitConfig } from './circuit.js';
+
+export { CircuitBreaker, DEFAULT_CIRCUIT_CONFIG, type CircuitConfig, type CircuitState, type CircuitTrip } from './circuit.js';
 
 export type TradeMode = 'observe' | 'paper' | 'live';
+
+// ─── Executor contract (PRD §29 Phase 3) ──────────────────────────
+//
+// The daemon is venue-agnostic; live execution per opportunity
+// category (cex_dex, dex_dex, pumpfun_*) is delegated to an injected
+// Executor. The daemon calls `canExecute(opp)` to decide whether this
+// executor is the right one, then `execute(opp)` to perform the trade
+// and get back a structured outcome the channel can store.
+
+export type ExecutorOutcomeStatus = 'filled' | 'reverted' | 'stuck' | 'aborted';
+
+export interface ExecutorOutcome {
+  status: ExecutorOutcomeStatus;
+  resolvedReason: string;
+  /** Optional audit trail: tx hash (EVM/Solana) or order id (CEX). */
+  externalId?: string;
+}
+
+export interface Executor {
+  /** Cheap predicate — daemon uses it to pick the right executor from
+   *  a list. Keep this synchronous and free of I/O. */
+  canExecute(opp: Opportunity): boolean;
+  /** Perform the trade. Must resolve (never throw) — serialize the
+   *  error into `status: 'aborted'` with a human-readable reason. */
+  execute(opp: Opportunity): Promise<ExecutorOutcome>;
+}
+
+// ─── Inventory contract ───────────────────────────────────────────
+// Matches the shape of @b1dz/inventory's InventoryLedger without
+// pulling the whole package as a type dep — lets tests mock cheaply.
+
+export interface InventoryCheck {
+  /** Return null to allow, or a blocker string to abort. */
+  canAfford(opp: Opportunity): Promise<string | null> | string | null;
+}
 
 export interface RiskLimits {
   maxTradeUsd: number;
@@ -86,6 +124,23 @@ export interface TradeDaemonConfig {
   /** Max rows to claim per tick. Default 5. */
   batchSize?: number;
   log?: (msg: string) => void;
+  /** Ordered list of executors tried in sequence; the first whose
+   *  `canExecute(opp)` returns true wins. In live mode, if no executor
+   *  matches, the opportunity is aborted with a clear reason rather
+   *  than silently accepted. Not consulted in observe/paper modes. */
+  executors?: readonly Executor[];
+  /** Optional inventory check run BEFORE the executor. Aborts the
+   *  trade when the daemon can't prove the wallet has the asset. */
+  inventory?: InventoryCheck;
+  /** Circuit breaker. If omitted, the daemon uses defaults. Pass an
+   *  existing instance to share a breaker across multiple daemon
+   *  workers (e.g. if you run observe-side health checks that can
+   *  trip it out-of-band). */
+  circuit?: CircuitBreaker;
+  /** Optional: derive realized PnL from a finished trade so the
+   *  circuit's daily-loss counter can update. Called after every live
+   *  execution. Default returns null (no PnL tracking). */
+  pnlFromOutcome?: (opp: Opportunity, outcome: ExecutorOutcome) => number | null;
 }
 
 /**
@@ -162,13 +217,16 @@ export function decideOpportunity(
       resolvedReason: `paper fill expected=$${opp.expectedNetUsd.toFixed(4)}`,
     };
   }
+  // Live mode: pass the risk gates here; real execution happens in
+  // TradeDaemon.tick() via the injected Executor. Terminal status is
+  // provisional; the tick loop replaces it with the real outcome.
   return {
     queueId: queued.queueId,
     opportunity: opp,
     decision: 'execute',
     reasons: [],
     terminalStatus: 'filled',
-    resolvedReason: 'live execution path not yet implemented — treat as paper',
+    resolvedReason: 'pending live execution',
   };
 }
 
@@ -180,6 +238,10 @@ export class TradeDaemon {
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
   private readonly log: (msg: string) => void;
+  private readonly executors: readonly Executor[];
+  private readonly inventory: InventoryCheck | null;
+  private readonly circuit: CircuitBreaker;
+  private readonly pnlFromOutcome: NonNullable<TradeDaemonConfig['pnlFromOutcome']>;
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
@@ -191,6 +253,16 @@ export class TradeDaemon {
     this.pollIntervalMs = cfg.pollIntervalMs ?? 1000;
     this.batchSize = cfg.batchSize ?? 5;
     this.log = cfg.log ?? ((m) => console.log(m));
+    this.executors = cfg.executors ?? [];
+    this.inventory = cfg.inventory ?? null;
+    this.circuit = cfg.circuit ?? new CircuitBreaker();
+    this.pnlFromOutcome = cfg.pnlFromOutcome ?? (() => null);
+  }
+
+  /** Access the daemon's circuit breaker — for dashboards, external
+   *  trip signals, or manual reset. */
+  getCircuit(): CircuitBreaker {
+    return this.circuit;
   }
 
   /** Process one batch of pending opportunities. Returns the decisions
@@ -201,15 +273,76 @@ export class TradeDaemon {
     const decisions: TradeDecision[] = [];
     for (const q of claimed) {
       const d = decideOpportunity(q, this.mode, this.risk);
-      decisions.push(d);
+
+      let finalStatus: TradeDecision['terminalStatus'] = d.terminalStatus;
+      let finalReason = d.resolvedReason;
+
+      // Live mode + decision=execute: run inventory check then dispatch
+      // to the first matching executor. Observe/paper skip this branch.
+      if (d.decision === 'execute' && this.mode === 'live') {
+        const tripReason = this.circuit.canExecute();
+        if (tripReason) {
+          finalStatus = 'rejected';
+          finalReason = tripReason;
+        } else {
+          const outcome = await this.runLive(d);
+          finalStatus = mapExecutorStatus(outcome.status);
+          finalReason = outcome.externalId
+            ? `${outcome.resolvedReason} (ref=${outcome.externalId})`
+            : outcome.resolvedReason;
+          this.circuit.recordExecution({
+            filled: outcome.status === 'filled',
+            realizedPnlUsd: this.pnlFromOutcome(d.opportunity, outcome) ?? undefined,
+          });
+        }
+      }
+
+      decisions.push({ ...d, terminalStatus: finalStatus, resolvedReason: finalReason });
       try {
-        await this.channel.resolve(q.queueId, d.terminalStatus, d.resolvedReason);
+        await this.channel.resolve(q.queueId, finalStatus, finalReason);
       } catch (e) {
         this.log(`[daemon] resolve FAILED ${(e as Error).message.slice(0, 120)}`);
       }
-      this.log(`[daemon] ${d.decision.toUpperCase()} ${q.queueId.slice(0, 8)} ${q.opportunity.buyVenue}→${q.opportunity.sellVenue} ${q.opportunity.asset} net=$${q.opportunity.expectedNetUsd.toFixed(4)} ${d.reasons.length ? `reasons=[${d.reasons.slice(0, 2).join('; ')}]` : ''}`);
+      this.log(`[daemon] ${d.decision.toUpperCase()}→${finalStatus} ${q.queueId.slice(0, 8)} ${q.opportunity.buyVenue}→${q.opportunity.sellVenue} ${q.opportunity.asset} net=$${q.opportunity.expectedNetUsd.toFixed(4)} ${d.reasons.length ? `reasons=[${d.reasons.slice(0, 2).join('; ')}]` : ''}`);
     }
     return decisions;
+  }
+
+  private async runLive(decision: TradeDecision): Promise<ExecutorOutcome> {
+    const opp = decision.opportunity;
+
+    if (this.inventory) {
+      try {
+        const block = await this.inventory.canAfford(opp);
+        if (block) {
+          return { status: 'aborted', resolvedReason: block };
+        }
+      } catch (e) {
+        return { status: 'aborted', resolvedReason: `inventory check failed: ${(e as Error).message.slice(0, 160)}` };
+      }
+    }
+
+    if (this.executors.length === 0) {
+      return {
+        status: 'aborted',
+        resolvedReason: 'live mode enabled but no Executor wired — daemon refuses to silently skip',
+      };
+    }
+    const executor = this.executors.find((e) => e.canExecute(opp));
+    if (!executor) {
+      return {
+        status: 'aborted',
+        resolvedReason: `no executor can handle category=${opp.category} buy=${opp.buyVenue} sell=${opp.sellVenue}`,
+      };
+    }
+    try {
+      return await executor.execute(opp);
+    } catch (e) {
+      // Executor contract says execute() must not throw — this is a
+      // bug on the executor side. Catch anyway to keep the tick loop
+      // alive.
+      return { status: 'aborted', resolvedReason: `executor threw: ${(e as Error).message.slice(0, 160)}` };
+    }
   }
 
   start(): void {
@@ -233,5 +366,19 @@ export class TradeDaemon {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.log('[daemon] stop');
+  }
+}
+
+/** Map an Executor's outcome status to the event-channel's terminal
+ *  status vocabulary. 'stuck' maps to 'rejected' because the channel
+ *  doesn't yet model "submitted but never confirmed" as distinct from
+ *  "rejected pre-submit"; the tx hash lives in the resolved reason
+ *  for later audit. */
+function mapExecutorStatus(status: ExecutorOutcomeStatus): TradeDecision['terminalStatus'] {
+  switch (status) {
+    case 'filled': return 'filled';
+    case 'reverted': return 'failed';
+    case 'stuck': return 'failed';
+    case 'aborted': return 'rejected';
   }
 }
