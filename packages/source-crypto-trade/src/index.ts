@@ -23,6 +23,7 @@ import {
   getOpenOrders as getKrakenOpenOrders,
   cancelKrakenOrder,
   getCoinbaseBalance,
+  getCoinbaseAvailableBalance,
   getBinanceBalance,
   getCoinbaseFills,
   getBinanceTrades,
@@ -495,12 +496,12 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
   }
 
   try {
-    const bal = await getCoinbaseBalance();
-    accountBalances.coinbase = bal;
+    const [availableBal, totalBal] = await Promise.all([getCoinbaseAvailableBalance(), getCoinbaseBalance()]);
+    accountBalances.coinbase = totalBal;
     spendableQuoteBalances.coinbase = {
-      USD: parseFloat(bal.USD ?? '0'),
-      USDC: parseFloat(bal.USDC ?? '0'),
-      USDT: parseFloat(bal.USDT ?? '0'),
+      USD: parseFloat(availableBal.USD ?? '0'),
+      USDC: parseFloat(availableBal.USDC ?? '0'),
+      USDT: parseFloat(availableBal.USDT ?? '0'),
     };
   } catch {
     spendableQuoteBalances.coinbase = {};
@@ -594,7 +595,7 @@ async function maybeAutoConvertBinanceQuote(targetQuote: string, neededQuote: nu
 }
 
 async function maybeAutoConvertCoinbaseQuote(targetQuote: string, neededQuote: number): Promise<number> {
-  const bal = await getCoinbaseBalance();
+  const bal = await getCoinbaseAvailableBalance();
   let direct = parseFloat(bal[targetQuote] ?? '0') * 0.995;
   if (direct >= Math.min(neededQuote, MAX_POSITION_USD)) return Math.min(direct, 99.50);
   if (targetQuote !== 'USD') return Math.min(direct, 99.50);
@@ -607,7 +608,7 @@ async function maybeAutoConvertCoinbaseQuote(targetQuote: string, neededQuote: n
     const convertQty = Math.min(sourceFree, Math.max(neededQuote, MIN_SPENDABLE_QUOTE_USD), 99.50);
     console.log(`[trade] AUTO-CONVERT coinbase ${source}->USD via ${productId} qty=${convertQty.toFixed(8)}`);
     await placeCoinbaseOrder({ productId, side: 'SELL', size: convertQty.toFixed(8) });
-    const refreshed = await getCoinbaseBalance();
+    const refreshed = await getCoinbaseAvailableBalance();
     direct = parseFloat(refreshed.USD ?? '0') * 0.995;
     if (direct >= MIN_SPENDABLE_QUOTE_USD) return Math.min(direct, 99.50);
   }
@@ -1322,7 +1323,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const result = await placeKrakenOrder({ pair: krakenPair, type: 'buy', ordertype: 'limit', volume: volume.toFixed(8), price: price.toFixed(2) });
           txInfo = `${result.descr.order} txid=${result.txid}`;
         } else if (exchange === 'coinbase') {
-          const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volume.toFixed(8), limitPrice: price.toFixed(2) });
+          const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volume.toFixed(8), limitPrice: String(price) });
           txInfo = `orderId=${result.order_id}`;
         } else if (exchange === 'binance-us') {
           const symbol = pair.replace('-', '');

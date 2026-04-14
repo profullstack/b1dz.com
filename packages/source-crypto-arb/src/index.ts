@@ -26,7 +26,7 @@ export {
   BINANCE_TAKER_FEE,
   type BinanceTrade,
 } from './feeds/binance-us-private.js';
-export { getBalance as getCoinbaseBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE, getCoinbaseAuthDebug, hasTradingProduct as hasCoinbaseTradingProduct } from './feeds/coinbase-private.js';
+export { getBalance as getCoinbaseBalance, getAvailableBalance as getCoinbaseAvailableBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE, getCoinbaseAuthDebug, hasTradingProduct as hasCoinbaseTradingProduct } from './feeds/coinbase-private.js';
 import { placeOrder as placeKrakenOrder } from './feeds/kraken-private.js';
 import { placeOrder as placeBinanceOrder } from './feeds/binance-us-private.js';
 import { placeOrder as placeCoinbaseOrder } from './feeds/coinbase-private.js';

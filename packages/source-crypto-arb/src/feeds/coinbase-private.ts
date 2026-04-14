@@ -183,6 +183,16 @@ export async function getBalance(): Promise<Record<string, string>> {
   return result;
 }
 
+export async function getAvailableBalance(): Promise<Record<string, string>> {
+  const data = await coinbasePrivate<AccountsResponse>('GET', '/api/v3/brokerage/accounts?limit=50');
+  const result: Record<string, string> = {};
+  for (const acct of data.accounts) {
+    const available = parseFloat(acct.available_balance.value);
+    if (available > 0) result[acct.currency] = available.toFixed(8);
+  }
+  return result;
+}
+
 export interface OrderOpts {
   productId: string;     // e.g. 'BTC-USD'
   side: 'BUY' | 'SELL';
@@ -231,6 +241,9 @@ async function normalizeOrderParams(opts: OrderOpts): Promise<OrderOpts> {
   const priceIncrement = product.price_increment ?? product.quote_increment ?? '0';
   if (limitPrice && parseFloat(priceIncrement) > 0) {
     const adjustedPrice = floorToStep(parseFloat(limitPrice), priceIncrement);
+    if (!(adjustedPrice > 0)) {
+      throw new Error(`Coinbase ${opts.productId}: adjusted limit price ${adjustedPrice} invalid for increment ${priceIncrement}`);
+    }
     limitPrice = trimDecimals(adjustedPrice, decimalPlaces(priceIncrement));
   }
 
