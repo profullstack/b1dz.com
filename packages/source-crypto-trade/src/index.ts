@@ -35,6 +35,10 @@ import {
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
+import type { Candle } from './analysis/candles.js';
+import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
+import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
+import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
 
 export interface Signal {
   side: 'buy' | 'sell';
@@ -65,6 +69,7 @@ interface TradeItem {
   exchange: string;
   snap: MarketSnapshot;
   history: MarketSnapshot[];
+  analysis: AnalysisSignal | null;
 }
 
 // ─── Exit parameters ───────────────────────────────────────────
@@ -108,6 +113,20 @@ const TRADE_FEEDS: { feed: PriceFeed; exchange: string }[] = [
   { feed: binanceFeed, exchange: 'binance-us' },
 ];
 const histories = new Map<string, MarketSnapshot[]>();
+interface AnalysisPairState {
+  entryCandles: Candle[];
+  confirmCandles: Candle[];
+  biasCandles: Candle[];
+  pendingSnapshots: MarketSnapshot[];
+  bootstrapPromise: Promise<void> | null;
+  bootstrapped: boolean;
+  lastAnalysis: AnalysisSignal | null;
+  lastLogAt: number;
+}
+const analysisStates = new Map<string, AnalysisPairState>();
+const ANALYSIS_ENTRY_LIMIT = 220;
+const ANALYSIS_CONFIRM_LIMIT = 220;
+const ANALYSIS_BIAS_LIMIT = 180;
 
 interface Position {
   pair: string;
@@ -338,6 +357,107 @@ function latestUsdBidForPair(pair: string, preferredExchange: string): number {
     if (Number.isFinite(bid) && bid! > 0) return bid!;
   }
   return 0;
+}
+
+function analysisStateFor(exchange: string, pair: string): AnalysisPairState {
+  const key = `${exchange}:${pair}`;
+  let state = analysisStates.get(key);
+  if (!state) {
+    state = {
+      entryCandles: [],
+      confirmCandles: [],
+      biasCandles: [],
+      pendingSnapshots: [],
+      bootstrapPromise: null,
+      bootstrapped: false,
+      lastAnalysis: null,
+      lastLogAt: 0,
+    };
+    analysisStates.set(key, state);
+  }
+  return state;
+}
+
+async function bootstrapAnalysisState(exchange: string, pair: string, state: AnalysisPairState): Promise<void> {
+  const entryTf = DEFAULT_ANALYSIS_CONFIG.timeframes.entry;
+  const confirmTf = DEFAULT_ANALYSIS_CONFIG.timeframes.confirm;
+  const biasTf = DEFAULT_ANALYSIS_CONFIG.timeframes.bias;
+  const [entryCandles, confirmCandles, biasCandles] = await Promise.all([
+    fetchHistoricalCandles(exchange, pair, entryTf, ANALYSIS_ENTRY_LIMIT),
+    fetchHistoricalCandles(exchange, pair, confirmTf, ANALYSIS_CONFIRM_LIMIT),
+    fetchHistoricalCandles(exchange, pair, biasTf, ANALYSIS_BIAS_LIMIT),
+  ]);
+  state.entryCandles = entryCandles;
+  state.confirmCandles = confirmCandles;
+  state.biasCandles = biasCandles;
+  state.bootstrapped = true;
+  const pending = [...state.pendingSnapshots];
+  state.pendingSnapshots = [];
+  for (const snap of pending) {
+    state.entryCandles = applySnapshotToCandles(state.entryCandles, snap, entryTf, ANALYSIS_ENTRY_LIMIT);
+    state.confirmCandles = applySnapshotToCandles(state.confirmCandles, snap, confirmTf, ANALYSIS_CONFIRM_LIMIT);
+    state.biasCandles = applySnapshotToCandles(state.biasCandles, snap, biasTf, ANALYSIS_BIAS_LIMIT);
+  }
+  if (entryCandles.length === 0 && confirmCandles.length === 0 && biasCandles.length === 0) {
+    console.log(`[analysis] ${exchange}:${pair} bootstrap empty`);
+  }
+}
+
+function ensureAnalysisBootstrap(exchange: string, pair: string): void {
+  const state = analysisStateFor(exchange, pair);
+  if (state.bootstrapped || state.bootstrapPromise) return;
+  state.bootstrapPromise = bootstrapAnalysisState(exchange, pair, state)
+    .catch((error) => {
+      console.log(`[analysis] ${exchange}:${pair} bootstrap failed: ${(error as Error).message}`);
+    })
+    .finally(() => {
+      state.bootstrapPromise = null;
+    });
+}
+
+function updateAnalysisState(exchange: string, pair: string, snap: MarketSnapshot): void {
+  const state = analysisStateFor(exchange, pair);
+  if (!state.bootstrapped) {
+    state.pendingSnapshots.push(snap);
+    while (state.pendingSnapshots.length > 500) state.pendingSnapshots.shift();
+    return;
+  }
+  state.entryCandles = applySnapshotToCandles(state.entryCandles, snap, DEFAULT_ANALYSIS_CONFIG.timeframes.entry, ANALYSIS_ENTRY_LIMIT);
+  state.confirmCandles = applySnapshotToCandles(state.confirmCandles, snap, DEFAULT_ANALYSIS_CONFIG.timeframes.confirm, ANALYSIS_CONFIRM_LIMIT);
+  state.biasCandles = applySnapshotToCandles(state.biasCandles, snap, DEFAULT_ANALYSIS_CONFIG.timeframes.bias, ANALYSIS_BIAS_LIMIT);
+}
+
+function getAnalysisForItem(item: TradeItem, cooldownActive: boolean): AnalysisSignal | null {
+  const state = analysisStates.get(`${item.exchange}:${item.pair}`);
+  if (!state?.bootstrapped) return null;
+  const analysis = analyzeSignal({
+    symbol: item.pair,
+    exchange: item.exchange,
+    latest: item.snap,
+    entryCandles: state.entryCandles,
+    confirmCandles: state.confirmCandles,
+    biasCandles: state.biasCandles,
+    cooldownActive,
+    killSwitchActive: isDailyLossLimitHit(),
+  });
+  state.lastAnalysis = analysis;
+  const shouldLogSignal = !analysis.rejected && analysis.score >= DEFAULT_ANALYSIS_CONFIG.thresholds.minScore;
+  const shouldLogReject = analysis.rejected && analysis.rejectReasons.some((reason) => reason.includes('sideways') || reason.includes('score'));
+  if ((shouldLogSignal || shouldLogReject) && Date.now() - state.lastLogAt >= 15_000) {
+    const reasons = analysis.rejected ? analysis.rejectReasons.join('; ') : analysis.reasons.join('; ');
+    console.log(`[analysis] ${item.exchange}:${item.pair} regime=${analysis.regime} setup=${analysis.setupType ?? 'none'} score=${analysis.score} dir=${analysis.direction ?? 'flat'} ${analysis.rejected ? 'reject' : 'signal'}: ${reasons}`);
+    state.lastLogAt = Date.now();
+  }
+  return analysis;
+}
+
+function analysisToTradeSignal(analysis: AnalysisSignal | null): Signal | null {
+  if (!analysis || analysis.rejected || !analysis.direction || !analysis.setupType) return null;
+  const reason = `${analysis.setupType} score=${analysis.score} regime=${analysis.regime}${analysis.reasons.length ? ` — ${analysis.reasons[0]}` : ''}`;
+  if (analysis.direction === 'long') {
+    return { side: 'buy', strength: analysis.score / 100, reason };
+  }
+  return { side: 'sell', strength: analysis.score / 100, reason };
 }
 
 function clearTrackedPosition(posKey: string, exchange: string) {
@@ -974,12 +1094,17 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const snap = await feed.snapshot(pair);
           if (!snap) continue;
           if (!isFinite(snap.bid) || !isFinite(snap.ask) || snap.bid <= 0 || snap.ask <= 0) continue;
+          ensureAnalysisBootstrap(exchange, pair);
+          updateAnalysisState(exchange, pair, snap);
           const histKey = `${exchange}:${pair}`;
           const hist = histories.get(histKey) ?? [];
           hist.push(snap);
-          while (hist.length > 200) hist.shift();
+          while (hist.length > 300) hist.shift();
           histories.set(histKey, hist);
-          items.push({ pair, exchange, snap, history: [...hist] });
+          const cooldownActive = (Date.now() - (lastExitAt.get(pair) ?? 0)) < COOLDOWN_MS;
+          const item: TradeItem = { pair, exchange, snap, history: [...hist], analysis: null };
+          item.analysis = getAnalysisForItem(item, cooldownActive);
+          items.push(item);
 
           // Update high water mark for open positions
           const posKey = `${exchange}:${pair}`;
@@ -1017,6 +1142,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
     evaluate(item): Opportunity | null {
       const activeStrategy = strategy ?? defaultStrategy ?? momentumStrategy;
+      const analysisSignal = analysisToTradeSignal(item.analysis);
 
       // ── Check exits first ──
       const posKey = `${item.exchange}:${item.pair}`;
@@ -1050,8 +1176,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
         // Strategy sell signal
         else {
-          const sig = activeStrategy.evaluate(item.snap, item.history);
-          if (sig?.side === 'sell' && sig.strength >= 0.8) {
+          const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
+          if (sig?.side === 'sell' && sig.strength >= 0.75) {
             exitReason = `strategy sell: ${sig.reason}`;
           }
         }
@@ -1072,7 +1198,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             projectedReturn: item.snap.bid * pos.volume,
             projectedProfit: netPnl,
             confidence: 1,
-            metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: 1, reason: exitReason }, snap: item.snap, position: pos },
+            metadata: { strategy: strategyId, signal: { side: 'sell' as const, strength: 1, reason: exitReason }, snap: item.snap, position: pos, analysis: item.analysis },
             createdAt: Date.now(),
             updatedAt: Date.now(),
           };
@@ -1125,9 +1251,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (currentLiquidationOnExchange(tradeExchange)) return null;
 
       // Run strategy
-      const sig = activeStrategy.evaluate(item.snap, item.history);
+      const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
       if (!sig || sig.side !== 'buy') return null;
-      if (sig.strength < 0.7) return null;
+      if (sig.strength < (DEFAULT_ANALYSIS_CONFIG.thresholds.minScore / 100)) return null;
 
       // Already have a position for this pair on this exchange
       const posKey2 = `${tradeExchange}:${item.pair}`;
@@ -1165,10 +1291,10 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         title: `BUY ${item.pair} @ ${price.toFixed(2)} — ${sig.reason}`,
         category: 'crypto-trade',
         costNow: price,
-        projectedReturn: price * (1 + TAKE_PROFIT_PCT),
+        projectedReturn: item.analysis?.takeProfit ?? (price * (1 + TAKE_PROFIT_PCT)),
         projectedProfit: price * netTakeProfit,
         confidence: sig.strength,
-        metadata: { strategy: strategyId, signal: sig, snap: item.snap },
+        metadata: { strategy: strategyId, signal: sig, snap: item.snap, analysis: item.analysis },
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
