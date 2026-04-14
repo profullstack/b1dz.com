@@ -126,8 +126,10 @@ Multi-venue quote observer (v2 DEX engine):
     --interval 3000                        stream tick interval in ms (default 3000)
     --min-net 1                            min $ net edge to mark executable
     --min-bps 10                           min bps net edge to mark executable
-  Adapters: kraken, coinbase, binance-us, gemini, 0x, 1inch, jupiter
+  Adapters: kraken, coinbase, binance-us, gemini, 0x, 1inch, jupiter,
+            uniswap-v3 (enables when BASE_RPC_URL / ETHEREUM_RPC_URL set)
   Env: ZEROX_API_KEY, ONEINCH_API_KEY (free at portal.1inch.dev / 0x.org)
+       BASE_RPC_URL / ETHEREUM_RPC_URL / ARBITRUM_RPC_URL etc.
 
 Pump.fun discovery (observe-only, opt-in scrape):
   b1dz pumpfun discover                    list new launches + lifecycle

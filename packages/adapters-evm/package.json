@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@b1dz/venue-types": "workspace:*"
+    "@b1dz/venue-types": "workspace:*",
+    "viem": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",

@@ -15,7 +15,7 @@
  *   b1dz observe --pair SOL-USDC --amount 100 --side buy --chain solana
  *   b1dz observe --pair USDC-ETH --amount 0.01 --side sell --chain base
  */
-import { ZeroExAdapter, OneInchAdapter, type EvmChain, isEvmChain } from '@b1dz/adapters-evm';
+import { ZeroExAdapter, OneInchAdapter, UniswapV3Adapter, type EvmChain, isEvmChain } from '@b1dz/adapters-evm';
 import { JupiterAdapter } from '@b1dz/adapters-solana';
 import { defaultCexAdapters } from '@b1dz/adapters-cex';
 import { rankCrossVenueOpportunities } from '@b1dz/profitability';
@@ -71,18 +71,18 @@ function buildAdaptersFor(chain: string): VenueAdapter[] {
     return defaultCexAdapters();
   }
   if (chain === 'all') {
-    // Compare every venue in parallel — CEXs + EVM aggregators (Base is the
-    // default evm chain here since it's cheap and MVP-scoped) + Jupiter.
-    const zerox = new ZeroExAdapter({ chain: 'base', apiKey: process.env.ZEROX_API_KEY });
-    const oneinch = process.env.ONEINCH_API_KEY
-      ? new OneInchAdapter({ chain: 'base', apiKey: process.env.ONEINCH_API_KEY })
-      : null;
-    return [
-      ...defaultCexAdapters(),
-      zerox,
-      ...(oneinch ? [oneinch] : []),
-      new JupiterAdapter(),
-    ];
+    // Compare every venue in parallel — CEXs + EVM aggregators + direct
+    // Uniswap V3 on Base + Jupiter. Base is the default EVM chain since
+    // it's cheap and MVP-scoped.
+    const list: VenueAdapter[] = [...defaultCexAdapters(), new JupiterAdapter()];
+    list.push(new ZeroExAdapter({ chain: 'base', apiKey: process.env.ZEROX_API_KEY }));
+    if (process.env.ONEINCH_API_KEY) {
+      list.push(new OneInchAdapter({ chain: 'base', apiKey: process.env.ONEINCH_API_KEY }));
+    }
+    if (process.env.BASE_RPC_URL) {
+      list.push(new UniswapV3Adapter({ chain: 'base' }));
+    }
+    return list;
   }
   if (isEvmChain(chain)) {
     const adapters: VenueAdapter[] = [
@@ -90,6 +90,14 @@ function buildAdaptersFor(chain: string): VenueAdapter[] {
     ];
     if (process.env.ONEINCH_API_KEY) {
       adapters.push(new OneInchAdapter({ chain: chain as EvmChain, apiKey: process.env.ONEINCH_API_KEY }));
+    }
+    const rpcEnv = `${chain.toUpperCase()}_RPC_URL`;
+    if (process.env[rpcEnv]) {
+      try {
+        adapters.push(new UniswapV3Adapter({ chain: chain as EvmChain }));
+      } catch {
+        // chain not configured in Uniswap adapter — skip silently
+      }
     }
     return adapters;
   }
