@@ -120,15 +120,31 @@ export async function runBacktestCli(argv: string[]): Promise<void> {
   }
 
   const m = response.aggregate.metrics;
+  const agg = response.aggregate;
   const pf = Number.isFinite(m.profitFactor) ? m.profitFactor.toFixed(2) : '∞';
-  console.log(`\n── AGGREGATE ──  candles=${response.aggregate.candles}  trades=${response.aggregate.trades}`);
-  console.log(`  return=${fmtPct(m.totalReturn)}  win=${m.winRate.toFixed(1)}%  pf=${pf}  exp=${fmtUsd(m.expectancy)}`);
-  console.log(`  sharpe=${m.sharpe.toFixed(2)}  maxDD=${m.maxDrawdown.toFixed(2)}%  avgHold=${m.averageHoldMinutes.toFixed(1)}m  trades/day=${m.tradesPerDay.toFixed(2)}`);
   if (response.aggregate.trades > 0) {
+    console.log('');
     console.log(formatBucketTable('by regime', m.performanceByRegime));
     console.log(formatBucketTable('by volatility', m.performanceByVolatilityBucket));
     console.log(formatBucketTable('by symbol', m.performanceBySymbol));
   }
+
   const { succeeded, skipped, failed, pairsRequested } = response.summary;
-  console.log(`\n  pairs: ${succeeded} ran, ${skipped} skipped, ${failed} failed (of ${pairsRequested})`);
+  const verdict = agg.totalNetPnl >= 0 ? 'PROFITABLE' : 'LOSING';
+  const verdictColor = agg.totalNetPnl >= 0 ? '\x1b[32m' : '\x1b[31m';
+  const reset = '\x1b[0m';
+  const bold = '\x1b[1m';
+  const line = '═'.repeat(60);
+  console.log(`\n${line}`);
+  console.log(`  ${bold}${verdictColor}STRATEGY VERDICT: ${verdict}${reset}`);
+  console.log(line);
+  console.log(`  ${bold}Net P&L:${reset}         ${verdictColor}${fmtUsd(agg.totalNetPnl)}${reset}  (${fmtPct(m.totalReturn)} on $${agg.totalCapitalUsd.toFixed(0)} deployed)`);
+  console.log(`  Gross P&L:       ${fmtUsd(agg.totalGrossPnl)}`);
+  console.log(`  Fees paid:       ${fmtUsd(-agg.totalFees)}`);
+  console.log(`  Trades:          ${agg.trades}  (${agg.winningTrades} win / ${agg.losingTrades} loss, ${m.winRate.toFixed(1)}% win rate)`);
+  console.log(`  Profit factor:   ${pf}   Expectancy: ${fmtUsd(m.expectancy)}/trade`);
+  console.log(`  Max drawdown:    ${m.maxDrawdown.toFixed(2)}%   Sharpe: ${m.sharpe.toFixed(2)}`);
+  console.log(`  Avg hold:        ${m.averageHoldMinutes.toFixed(1)}m   Trades/day: ${m.tradesPerDay.toFixed(2)}`);
+  console.log(`  Pairs:           ${succeeded} ran (${agg.winningPairs} profitable, ${agg.losingPairs} losing), ${skipped} skipped, ${failed} failed — of ${pairsRequested}`);
+  console.log(line);
 }

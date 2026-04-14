@@ -96,8 +96,14 @@ export async function POST(req: NextRequest) {
   }
 
   const aggregateMetrics = computeBacktestMetrics(aggregateTrades, equity * Math.max(1, succeeded));
+  const totalNetPnl = aggregateTrades.reduce((sum, t) => sum + t.netPnl, 0);
+  const totalGrossPnl = aggregateTrades.reduce((sum, t) => sum + t.grossPnl, 0);
+  const totalFees = aggregateTrades.reduce((sum, t) => sum + t.fees, 0);
+  const winningTrades = aggregateTrades.filter((t) => t.netPnl >= 0);
+  const losingTrades = aggregateTrades.filter((t) => t.netPnl < 0);
+  const totalCapitalUsd = equity * Math.max(1, succeeded);
   const durationMs = Date.now() - startedAt;
-  console.log(`[api/backtest] done user=${auth.userId.slice(0, 8)} ok=${succeeded} skip=${skipped} fail=${failed} trades=${aggregateTrades.length} duration=${durationMs}ms`);
+  console.log(`[api/backtest] done user=${auth.userId.slice(0, 8)} ok=${succeeded} skip=${skipped} fail=${failed} trades=${aggregateTrades.length} net=$${totalNetPnl.toFixed(2)} duration=${durationMs}ms`);
 
   return Response.json({
     timeframe,
@@ -109,6 +115,14 @@ export async function POST(req: NextRequest) {
       trades: aggregateTrades.length,
       candles: totalCandles,
       metrics: aggregateMetrics,
+      totalNetPnl,
+      totalGrossPnl,
+      totalFees,
+      winningTrades: winningTrades.length,
+      losingTrades: losingTrades.length,
+      totalCapitalUsd,
+      winningPairs: perPair.filter((p) => p.result && p.result.metrics.totalReturn > 0).length,
+      losingPairs: perPair.filter((p) => p.result && p.result.metrics.totalReturn < 0).length,
     },
     summary: { succeeded, skipped, failed, pairsRequested: pairs.length, durationMs },
   });

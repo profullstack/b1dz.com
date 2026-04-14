@@ -64,6 +64,14 @@ export interface BacktestRunResponse {
     metrics: BacktestPairResult['result'] extends infer R
       ? R extends { metrics: infer M } ? M : never
       : never;
+    totalNetPnl: number;
+    totalGrossPnl: number;
+    totalFees: number;
+    winningTrades: number;
+    losingTrades: number;
+    totalCapitalUsd: number;
+    winningPairs: number;
+    losingPairs: number;
   };
   summary: { succeeded: number; skipped: number; failed: number; pairsRequested: number; durationMs: number };
 }
