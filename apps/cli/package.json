@@ -27,6 +27,8 @@
     "@b1dz/adapters-cex": "workspace:*",
     "@b1dz/adapters-pumpfun": "workspace:*",
     "@b1dz/profitability": "workspace:*",
+    "@b1dz/event-channel": "workspace:*",
+    "@b1dz/observe-engine": "workspace:*",
     "@supabase/supabase-js": "latest",
     "chalk": "latest",
     "cli-table3": "latest",

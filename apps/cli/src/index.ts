@@ -122,6 +122,8 @@ Multi-venue quote observer (v2 DEX engine):
     --chain cex|base|solana|all|...        target (cex=all 4 CEXs, all=everything)
     --slippage 50                          max slippage in bps (default 50)
     --rank                                 fetch both sides + rank cross-venue opps
+    --stream                               continuous loop (observer mode, PRD §11A.1)
+    --interval 3000                        stream tick interval in ms (default 3000)
     --min-net 1                            min $ net edge to mark executable
     --min-bps 10                           min bps net edge to mark executable
   Adapters: kraken, coinbase, binance-us, gemini, 0x, 1inch, jupiter

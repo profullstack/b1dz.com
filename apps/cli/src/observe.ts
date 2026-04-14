@@ -19,6 +19,8 @@ import { ZeroExAdapter, OneInchAdapter, type EvmChain, isEvmChain } from '@b1dz/
 import { JupiterAdapter } from '@b1dz/adapters-solana';
 import { defaultCexAdapters } from '@b1dz/adapters-cex';
 import { rankCrossVenueOpportunities } from '@b1dz/profitability';
+import { InMemoryEventChannel } from '@b1dz/event-channel';
+import { ObserveEngine } from '@b1dz/observe-engine';
 import type { NormalizedQuote, QuoteRequest, VenueAdapter, Opportunity } from '@b1dz/venue-types';
 
 interface ObserveArgs {
@@ -30,6 +32,8 @@ interface ObserveArgs {
   rank: boolean;
   minNetUsd: number;
   minNetBps: number;
+  stream: boolean;
+  intervalMs: number;
 }
 
 function parseArgs(argv: string[]): ObserveArgs {
@@ -57,7 +61,9 @@ function parseArgs(argv: string[]): ObserveArgs {
   const rank = flags.rank === 'true' || flags.rank === '1' || !!flags.rank;
   const minNetUsd = Number.parseFloat(flags['min-net'] ?? '0');
   const minNetBps = Number.parseFloat(flags['min-bps'] ?? '0');
-  return { pair, side, amount, chain, slippageBps, rank, minNetUsd, minNetBps };
+  const stream = flags.stream === 'true' || flags.stream === '1' || !!flags.stream;
+  const intervalMs = Math.max(500, Number.parseInt(flags.interval ?? '3000', 10));
+  return { pair, side, amount, chain, slippageBps, rank, minNetUsd, minNetBps, stream, intervalMs };
 }
 
 function buildAdaptersFor(chain: string): VenueAdapter[] {
@@ -107,6 +113,12 @@ function renderRow(q: NormalizedQuote): string {
 
 export async function runObserveCli(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
+
+  if (args.stream) {
+    await runStreamMode(args);
+    return;
+  }
+
   console.log(`b1dz observe  pair=${args.pair} side=${args.side} amount=${args.amount} chain=${args.chain} slippage=${args.slippageBps}bps\n`);
 
   const adapters = buildAdaptersFor(args.chain);
@@ -208,6 +220,57 @@ export async function runObserveCli(argv: string[]): Promise<void> {
   for (const opp of opportunities.slice(0, 10)) {
     renderOpportunity(opp);
   }
+}
+
+async function runStreamMode(args: ObserveArgs): Promise<void> {
+  const adapters = buildAdaptersFor(args.chain);
+  if (adapters.length === 0) {
+    console.log(`no adapters enabled for chain "${args.chain}"`);
+    return;
+  }
+  // For MVP streaming we use the in-memory channel so the user can run
+  // `observe --stream` without standing up a daemon+DB. The daemon
+  // command wires Supabase when it lands.
+  const channel = new InMemoryEventChannel();
+  const engine = new ObserveEngine({
+    pairs: [{
+      pair: args.pair,
+      sizeUsd: Number.parseFloat(args.amount),
+      baseAmountForSellSide: args.amount,
+      quoteAmountForBuySide: args.amount,
+      maxSlippageBps: args.slippageBps,
+    }],
+    adapters,
+    channel,
+    intervalMs: args.intervalMs,
+    minNetUsd: args.minNetUsd,
+    minNetBps: args.minNetBps,
+  });
+  console.log(`b1dz observe --stream  pair=${args.pair} chain=${args.chain} interval=${args.intervalMs}ms  venues=${adapters.map((a) => a.venue).join(',')}`);
+  console.log('  Ctrl+C to stop\n');
+
+  engine.start();
+  // Also poll the channel for inspection output on the same cadence.
+  const reportTimer = setInterval(async () => {
+    const pending = await channel.inspect('pending');
+    const latestTop = pending.slice(0, 3);
+    if (latestTop.length === 0) {
+      console.log(`  [stream] no executable opps right now`);
+      return;
+    }
+    for (const q of latestTop) {
+      const o = q.opportunity;
+      console.log(`  [stream] ${o.buyVenue}→${o.sellVenue} ${o.asset}  net=$${o.expectedNetUsd.toFixed(4)}  bps=${o.expectedNetBps.toFixed(1)}  id=${q.queueId.slice(0, 8)}`);
+    }
+  }, args.intervalMs);
+
+  process.on('SIGINT', () => {
+    engine.stop();
+    clearInterval(reportTimer);
+    process.exit(0);
+  });
+
+  await new Promise(() => {}); // run forever
 }
 
 function renderOpportunity(opp: Opportunity): void {
