@@ -1,8 +1,17 @@
 # TODO
 
-Tracks PRD v2 build-out. Organized by PRD section / phase. The v1
+Tracks PRD v6 build-out. Organized by PRD section / phase. The v1
 composite-scalper engine stays in-tree but live-disabled via the `[d]`
-TUI toggle while v2 is built alongside.
+TUI toggle while v6 is built alongside.
+
+v6 adds two major addendums on top of the original PRD:
+- **Addendum A**: execution realism, MEV, reachable retail edge —
+  realizability scoring, execution-mode labels (public/private/bundle/
+  paper_only), smaller-chain and long-tail focus, private-flow/bundle
+  hooks, cross-chain lag windows
+- **Addendum B**: anti-bagholder policy for TGEs, fresh listings, new
+  pools, Pump.fun-style launches — observe-first, pre-validated exit,
+  time-based kill, dump-protection signals, no-average-down
 
 ## Legend
 - [x] shipped
@@ -59,22 +68,35 @@ TUI toggle while v2 is built alongside.
 - [ ] Regime-aware stricter thresholds during gas spikes / high volatility
 
 ### Observe / daemon split (PRD §11A)
-- [~] `b1dz observe` CLI — one-shot quote + rank pass (good enough for
-      manual use). See `apps/cli/src/observe.ts`
-- [ ] Streaming observe loop — continuous quote cycle at configurable
-      cadence per venue, emits events
-- [ ] Event channel — Redis streams / NATS / Postgres queue (pick one)
-- [ ] Trade daemon: subscribes to events, applies final risk+balance
-      checks, decides execute / paper / reject, tracks receipts
-- [ ] Top-N live opportunity feed + health/latency metrics per venue
+- [x] `b1dz observe` CLI — one-shot quote + rank pass.
+      See `apps/cli/src/observe.ts`
+- [x] Streaming observe loop — continuous quote cycle emitting events.
+      See `packages/observe-engine/src/index.ts` (commit b28c255)
+- [x] Event channel — in-memory + Supabase-backed queue.
+      See `packages/event-channel/src/` (commit b28c255)
+- [x] Trade daemon: subscribes to events, applies final risk+balance
+      checks, decides execute / paper / reject.
+      See `packages/trade-daemon/src/index.ts` (commit 93fdf50)
+- [ ] Top-N live opportunity feed (ranked view, not just raw stream)
+- [ ] Health/latency metrics per venue surfaced to the operator
+- [ ] Redis/NATS event-channel option (currently Supabase + in-memory
+      only — fine for MVP, revisit if latency matters)
 
 ### Wallet provider abstraction (PRD §11B, §15A)
-- [ ] `packages/wallet-provider` with: getAddress, getBalance,
+- [x] `packages/wallet-provider` interface: getAddress, getBalance,
       signTransaction, signMessage, broadcastTransaction, capability
-      discovery
-- [ ] `packages/coinpay-wallet-provider` — CoinPay CLI implementation
-- [ ] Direct EVM signer provider (fallback)
-- [ ] Direct Solana signer provider (fallback)
+      discovery. See `packages/wallet-provider/src/index.ts`
+      (commit 51bef3f)
+- [x] `packages/wallet-coinpay` — CoinPay CLI implementation
+      (commit 51bef3f)
+- [x] Direct EVM signer provider (viem-backed) —
+      `packages/wallet-direct/src/evm.ts`. Signs digests + EIP-191
+      messages with a raw secp256k1 private key for server-daemon
+      non-interactive signing
+- [x] Direct Solana signer provider (pure Node crypto, no `@solana/web3.js`
+      dep) — `packages/wallet-direct/src/solana.ts`. Accepts
+      solana-keygen JSON / hex / base58 secrets, validates embedded
+      pubkey, ed25519-signs via PKCS8 DER import
 
 ---
 
@@ -105,18 +127,35 @@ TUI toggle while v2 is built alongside.
 - [x] 0x quote adapter — `packages/adapters-evm/src/zeroex.ts`
 - [x] 1inch quote adapter — `packages/adapters-evm/src/oneinch.ts`
 - [x] Decimal <-> base-units helpers
-- [ ] Direct Uniswap v3 integration on Base (PRD §14.5 ABI workflow)
-      — proves the end-to-end contract path before Curve / Balancer
+- [x] Direct Uniswap v3 quote adapter on Base (PRD §14.5 ABI workflow)
+      — `packages/adapters-evm/src/uniswap-v3.ts` (commit 8737b9c).
+      Proves end-to-end contract path before Curve / Balancer
+- [ ] Uniswap v3 execution path (quote works; swap-submit + receipt
+      tracking still open — belongs in Phase 3 live-EVM)
 - [ ] Direct Curve integration
 - [ ] Direct Balancer integration
 - [ ] Trader Joe on Avalanche
 - [ ] EVM pool graph + 2/3-hop route enumeration (PRD §12A) with
       configurable pruning
 - [ ] Firm-quote / calldata fetch (not just indicative)
-- [ ] Approval manager — detect allowance, exact vs safe policy, gas
-      cost tracking, optional pre-approve via config (PRD §15.2)
-- [ ] EIP-1559 gas strategy + max-gas thresholds + stale-quote
-      rejection (PRD §15.3)
+- [x] Approval manager (PRD §15.2) — `packages/adapters-evm/src/approvals.ts`:
+      `readAllowance`, `checkApproval`, `buildApprovalTx`,
+      `safeApproveCalls` (USDT zero-first pattern), `approvalCostKillsEdge`
+      profitability gate, `exact` / `unlimited` modes
+- [x] EIP-1559 gas strategy (PRD §15.3) —
+      `packages/adapters-evm/src/gas.ts`: `ViemGasOracle` over a viem
+      `PublicClient`, `estimateTxCostUsd` (with bps buffer), stale-fee
+      rejection, `exceedsGasBudget` + `gasEatsTheEdge` gates, `isGasSpike`
+      baseline comparator
+- [x] Wire gas oracle into `UniswapV3Adapter.quote()` — adapter now
+      accepts optional `gasOracle`, `nativeUsd` resolver, and
+      `gasBufferBps` (default 2000 bps / +20% EIP-1559 safety margin).
+      Falls back to the old 1-gwei hardcoded path when unwired.
+      `ViemGasOracle` got TTL-based caching + in-flight coalescing so
+      per-quote RPC overhead is bounded
+- [ ] Wire gas oracle into 0x + 1inch adapters (same pattern)
+- [ ] Wire approval manager into live-EVM execution path (module
+      exists; no caller yet because live execution isn't assembled)
 - [ ] Transaction simulation before send (PRD §15.4)
 - [ ] Transaction submission + receipt tracking + failure classification
 - [ ] Shared gas oracle replacing the hardcoded native-USD prices in the
@@ -144,10 +183,11 @@ TUI toggle while v2 is built alongside.
 
 ## Pump.fun (PRD §6.4, §14.4, §17)
 
-- [ ] Pump.fun discovery adapter — detects new launches, bonding-curve
-      state, migration events
-- [ ] Lifecycle classifier: `new_launch` / `bonding_curve` / `migrating`
-      / `pumpswap` / `external_pool`
+- [x] Pump.fun discovery adapter + `b1dz pumpfun discover` CLI —
+      `packages/adapters-pumpfun/src/discovery.ts` (commit 5b04bb3)
+- [x] Lifecycle classifier: `new_launch` / `bonding_curve` / `migrating`
+      / `pumpswap` / `external_pool` —
+      `packages/adapters-pumpfun/src/lifecycle.ts` (commit 5b04bb3)
 - [ ] Rule engine + mode flag: `observe_only` / `paper_only` /
       `guarded_live` / `disabled` (default observe_only)
 - [ ] Entry filters (PRD §17.2): routeable liquidity, acceptable
@@ -187,11 +227,33 @@ TUI toggle while v2 is built alongside.
 
 ## Phase 3 — Live EVM Execution (PRD §29 Phase 3)
 
-- [ ] Wallet service (depends on wallet-provider abstraction)
-- [ ] Approval manager wired to live submissions
-- [ ] Transaction builder
-- [ ] Receipt tracker
-- [ ] Kill switch controls wired to live EVM path
+- [~] Wallet service — `wallet-provider` abstraction + CoinPay and
+      direct-EVM/Solana implementations shipped; still need a
+      coordinating "wallet service" that picks provider per operation
+      and caches addresses
+- [~] Approval manager — module shipped in `packages/adapters-evm/`,
+      not yet wired into live submission flow
+- [x] Transaction builder — `packages/adapters-evm/src/tx-builder.ts`:
+      `buildUnsignedTx` (pure, validates chain/nonce/gas),
+      `digestForSigning` (keccak256 of RLP-encoded EIP-1559 payload
+      for `WalletProvider.signDigest()`), `assembleSignedTx`
+      (reassembles r/s/v sig into broadcast-ready serialized tx).
+      Round-trip tested via viem's `parseTransaction` +
+      `recoverTransactionAddress`
+- [x] Receipt tracker — `packages/adapters-evm/src/receipts.ts`:
+      `trackReceipt()` polls `eth_getTransactionReceipt` with
+      configurable interval + hard timeout, tolerates viem's
+      `TransactionReceiptNotFoundError` while pending, classifies
+      outcome as `success` / `reverted` / `timeout`.
+      `outcomeToStatus()` maps to the event-channel terminal-status
+      vocabulary (`filled` / `reverted` / `stuck`)
+- [ ] Wallet-service layer that orchestrates build → digest → sign →
+      assemble → broadcast → trackReceipt using a `WalletProvider`
+      implementation and a `PublicClient`
+- [ ] Nonce manager (per-chain, per-wallet; persisted so a restart
+      doesn't nonce-collide)
+- [ ] Kill switch controls wired to live EVM path (repeated tx
+      failures → disable, gas spike → pause)
 
 ---
 
@@ -397,14 +459,14 @@ unguarded dynamic param changes, hype-driven buying.
 
 Tracking: we're MVP-complete when every item below flips to [x].
 
-- [ ] `b1dz observe` streams ranked live opportunities in real time
-  (currently one-shot; needs loop + event channel)
-- [ ] Trade daemon subscribes to those events and applies final
-  execution decisions
-- [ ] CoinPay CLI usable as wallet-provider implementation
+- [x] `b1dz observe` streams ranked live opportunities in real time
+  (commit b28c255)
+- [x] Trade daemon subscribes to those events and applies final
+  execution decisions (commit 93fdf50)
+- [x] CoinPay CLI usable as wallet-provider implementation
+  (commit 51bef3f)
 - [~] Quotes from every enabled CEX venue — Kraken/Coinbase/Binance.US/Gemini
-- [~] Quotes from 0x, 1inch, Jupiter (3 of 4 — Pump.fun discovery
-  still pending)
+- [x] Quotes from 0x, 1inch, Jupiter, Pump.fun discovery
 - [x] All quotes in single normalized format
 - [x] Profitability engine computes net expected value after all costs
 - [~] Unsafe routes rejected with explicit reasons (basic blockers
@@ -437,9 +499,16 @@ What we actually have as of this TODO:
 - [x] `/packages/adapters-evm`
 - [x] `/packages/adapters-solana`
 - [x] `/packages/profitability`
-- [ ] `/packages/adapters-pumpfun`
-- [ ] `/packages/wallet-provider`
-- [ ] `/packages/coinpay-wallet-provider`
+- [x] `/packages/adapters-pumpfun`
+- [x] `/packages/wallet-provider`
+- [x] `/packages/wallet-coinpay` (PRD calls it `coinpay-wallet-provider`
+      — rename later)
+- [x] `/packages/wallet-direct` (direct EVM + Solana signers,
+      fallback to CoinPay)
+- [x] `/packages/event-channel` (not in PRD §31 but needed for the
+      observe/daemon split)
+- [x] `/packages/observe-engine`
+- [x] `/packages/trade-daemon`
 - [ ] `/packages/config`
 - [ ] `/packages/token-registry` (currently embedded in adapter packages)
 - [ ] `/packages/risk`
@@ -462,3 +531,224 @@ What we actually have as of this TODO:
 - [ ] Eventually: migrate the v1 composite strategy into the new
       adapter/profitability framework so both trade-engine tracks live
       behind the same interface
+
+---
+
+## Addendum A — Execution realism, MEV, reachable retail edge (PRD §A1–A16)
+
+Core thesis update: realizability, not Node.js perf, is the bottleneck.
+An opportunity must score well on *both* theoretical profit and
+practical realizability before the daemon will act on it.
+
+### Realizability scoring layer (PRD §A3, §A6)
+- [x] Extend `Opportunity` type with `OpportunityExecutionMeta`:
+      `realizabilityScore`, `mevRiskScore`, `latencyRiskScore`,
+      `requiresPrivateFlow`, `recommendedExecutionMode`,
+      `simulationNotes[]` — `packages/venue-types/src/index.ts`
+- [x] `ExecutionMode` union: `"public" | "private" | "bundle" | "paper_only"`
+- [x] Heuristic scoring module `scoreExecutionMeta()` — MVP-grade
+      (flags mainnet dex↔dex as private, pump.fun as paper_only,
+      expired quotes + multi-hop routes downgraded)
+- [x] `buildOpportunity()` now auto-populates `execution` via the scorer
+- [ ] Proper simulator-driven scoring to replace heuristic (PRD §A8)
+
+### `b1dz observe` realizability duties (PRD §A4)
+- [ ] Classify mempool exposure risk per route
+- [ ] Classify backrun / sandwich exposure risk
+- [ ] Estimate whether private flow or bundling is required
+- [ ] Tag each opportunity with recommended execution mode before it
+      hits the event channel
+
+### Trade daemon execution-mode policy (PRD §A5)
+- [x] Reject opportunities that are profitable only in a frictionless
+      model (realizability threshold in `RiskLimits.minRealizabilityScore`)
+- [x] Refuse public execution for routes marked private-only or
+      bundle-only (`canSatisfy()` + `executionMode` config)
+- [x] Apply execution-mode policy before tx submission
+- [x] Extra skepticism gate for major-chain public-mempool routes
+      (`rejectPublicMevAbove` threshold)
+
+### Realizability filters (PRD §A7)
+- [ ] Reject: route requires private/bundle but only public flow is
+      available
+- [ ] Reject: estimated backrun risk too high
+- [ ] Reject: estimated sandwich risk too high
+- [ ] Reject: detection-to-submit latency > `MAX_DETECTION_TO_SUBMIT_MS`
+- [ ] Reject: simulated adverse selection erases most or all edge
+- [ ] Reject: route complexity makes the timing window unrealistic
+- [ ] Downgrade: public-mempool post would likely convert profit to loss
+
+### Simulation layer (PRD §A8)
+- [ ] Pre-trade route simulation with slippage + gas modeling
+- [ ] Latency-aware price-movement model
+- [ ] Adverse-selection model
+- [ ] Side-by-side public vs private vs bundled execution assumptions
+- [ ] Post-trade variance analysis: expected vs realized
+
+### Strategy priority update (PRD §A9)
+Preferred first, in order:
+- [ ] Smaller-chain new-pool monitoring (§A10)
+- [ ] Long-tail pair monitoring (§A11)
+- [ ] Guarded cross-chain lag strategies (§A12)
+- [ ] Private-flow / bundled execution support (§A13)
+- [ ] Public-mempool DEX routes — only when simulations show they
+      remain realistic
+- [ ] Do **not** prioritize beating pro MEV shops on obvious mainnet
+      triangular routes
+
+### New-pool launch monitoring (PRD §A10)
+- [ ] New pool discovery on smaller chains (Base, Avalanche first)
+- [ ] First-24h and first-48h monitoring windows
+- [ ] Liquidity + routeability scoring per new pool
+- [ ] Watchlist promotion flow: observe → paper → guarded_live
+- [ ] Strict size caps for launch-related strategies
+
+### Long-tail pair monitoring (PRD §A11)
+- [ ] Minimum-liquidity thresholds per pair
+- [ ] Maximum position caps
+- [ ] Validated exit routes before entry
+- [ ] Stricter bag-holder prevention rules (hook into Addendum B policy)
+- [ ] Paper-mode-first promotion path
+
+### Cross-chain lag windows (PRD §A12)
+- [ ] Finality-lag detection per supported chain pair
+- [ ] Explicit capital + settlement assumption modeling
+- [ ] Replay + paper modeling must exist before any live cross-chain
+- [ ] Opt-in strategy activation
+- [ ] Lower-than-normal risk caps
+
+### Execution infrastructure (PRD §A13)
+- [ ] Private-relay integration hook (Flashbots Protect / MEV-Share /
+      equivalent) — architecture only for MVP
+- [ ] Bundle-submission hook
+- [ ] Separate quote RPC vs execution RPC configurability
+- [ ] Self-hosted / lower-latency node option when provider quality
+      limits results
+
+### Config additions (PRD §A14)
+- [ ] `EXECUTION_MODE=public|private|bundle|paper_only`
+- [ ] `PRIVATE_FLOW_ENABLED=false`
+- [ ] `BUNDLE_EXECUTION_ENABLED=false`
+- [ ] `MAX_DETECTION_TO_SUBMIT_MS=500`
+- [ ] `REJECT_PUBLIC_HIGH_MEV_ROUTES=true`
+
+### Acceptance (PRD §A15)
+- [ ] Realizability scored separately from raw profitability
+- [ ] Opportunities labeled public / private / bundle / paper_only
+- [ ] Daemon refuses routes viable only in unavailable execution modes
+- [ ] Simulations include adverse-execution assumptions, not just fees
+      and slippage
+
+---
+
+## Addendum B — Anti-bagholder policy for new tokens / TGEs / fresh pools (PRD §B1–B15)
+
+b1dz must never become exit liquidity for insiders, unlock recipients,
+airdrop farmers, or early launch traders. For fresh tokens b1dz is a
+short-horizon scanner with pre-validated exits — not a thesis investor.
+
+### Core policy wrapper (PRD §B3, §B4, §B5)
+- [ ] Strategy class `anti_bagholder_new_token_policy` wrapping every
+      new-token strategy; overrides execution when risk is too high
+- [ ] Default mode for any token with limited live history:
+      observe_only → paper_only → guarded_live (explicit promotion only)
+- [ ] Hard rules: tiny max size, pre-defined exit plan before entry,
+      mandatory stop-loss, mandatory TP or timed exit, max hold in
+      minutes/hours not days
+- [ ] No averaging down, no martingale, no "wait for recovery"
+- [ ] No add after first failed breakout unless explicitly requalified
+- [ ] No live trade unless exit venue is already validated
+
+### Token lifecycle risk filter (PRD §B6)
+- [ ] Classify: token age, pool/listing age, unlock phase (pre / mid /
+      post), insider/airdrop distribution risk, supply expansion rate,
+      current liquidity depth for exit, route durability post-entry
+- [ ] Unknown or unstable lifecycle → force observe_only or paper_only
+
+### TGE / fresh listing policy (PRD §B7)
+- [ ] No market-buy at first print
+- [ ] Require post-launch observation window
+- [ ] Minimum liquidity threshold gate
+- [ ] Validated exit route gate
+- [ ] Adverse-move tolerance test in simulation
+- [ ] Prefer scalps and dislocations over holds
+
+### Exit-first architecture (PRD §B8)
+- [ ] Entry rejected unless engine can answer: where we exit, how fast,
+      expected exit slippage, behavior if liquidity drops 25% / 50%,
+      whether a second exit venue exists, CEX deposit/withdraw status
+- [ ] Low exit certainty → reject
+
+### Time-based kill switch (PRD §B9)
+- [ ] Scalp mode: max hold 60–300s
+- [ ] Guarded-live mode: max hold 15–120 min
+- [ ] Never auto-carry into the next major unlock window
+- [ ] At max hold: exit / reduce aggressively / mark strategy failed
+      and block re-entry until requalified
+
+### Dump-protection signals (PRD §B10)
+- [ ] Liquidity drops sharply → reduce/exit
+- [ ] Price impact rises sharply → reduce/exit
+- [ ] Spread widens abnormally → reduce/exit
+- [ ] Route disappears → exit
+- [ ] CEX deposit/withdraw status changes → exit
+- [ ] Large sell pressure on active venue → exit
+- [ ] Unlock or emissions event near → exit
+- [ ] Post-entry slippage exceeds expected band → exit
+- [ ] Volume one-sided to the downside → exit
+- [ ] Dead-cat-bounce pattern after sharp dump → block re-entry
+
+### No-emotion re-entry (PRD §B11)
+- [ ] Blocks automatic revenge trades
+- [ ] Blocks rebuy purely on lower price
+- [ ] Re-entry requires: new setup, fresh liquidity validation, fresh
+      exit validation, fresh risk score, cooldown period elapsed
+
+### Allowed vs disallowed strategies (PRD §B12)
+Allowed (tiny size only):
+- [ ] DEX ↔ CEX dislocation trades
+- [ ] Post-launch route mismatches
+- [ ] Early-listing spread capture
+- [ ] First-24h/48h monitored opportunities
+- [ ] Paper-only watch on new launches until promoted
+
+Blocked by default:
+- [ ] Blind launch sniping
+- [ ] Hold-and-hope
+- [ ] Averaging into weakness
+- [ ] Influencer-driven buys
+- [ ] Holding through unlocks
+
+### Config additions (PRD §B13)
+- [ ] `NEW_TOKEN_MODE=observe_only`
+- [ ] `NEW_TOKEN_MAX_TRADE_USD=25`
+- [ ] `NEW_TOKEN_MAX_HOLD_SECONDS=300`
+- [ ] `NEW_TOKEN_REQUIRE_EXIT_VALIDATION=true`
+- [ ] `NEW_TOKEN_REQUIRE_SECONDARY_EXIT=false`
+- [ ] `NEW_TOKEN_NO_AVERAGE_DOWN=true`
+- [ ] `NEW_TOKEN_COOLDOWN_MINUTES=30`
+- [ ] `NEW_TOKEN_STOP_LOSS_BPS=300`
+- [ ] `NEW_TOKEN_TAKE_PROFIT_BPS=500`
+- [ ] `NEW_TOKEN_FORCE_EXIT_ON_LIQUIDITY_DROP=true`
+- [ ] `NEW_TOKEN_FORCE_EXIT_ON_ROUTE_LOSS=true`
+
+### Acceptance (PRD §B14)
+- [ ] New tokens default to observe or paper mode
+- [ ] Live mode for fresh tokens requires explicit promotion
+- [ ] Every fresh-token trade has a pre-validated exit plan
+- [ ] Daemon refuses to hold past configured max-hold windows
+- [ ] Averaging down is blocked by policy
+- [ ] Dump-protection signals can force immediate exit
+- [ ] Re-entry requires cooldown and full requalification
+
+---
+
+## v6 cross-cutting follow-ups
+
+- [ ] Rename `packages/wallet-coinpay` → `packages/coinpay-wallet-provider`
+      to match PRD §31 (low priority — cosmetic)
+- [ ] Rename `packages/venue-types` → `packages/types` (PRD §31)
+- [ ] Document the execution-mode + realizability-score contract in the
+      `packages/venue-types` README so new adapters know what to emit
+- [ ] Reconcile `OpportunityExecutionMeta` fields with existing
+      `Opportunity` type without breaking the trade daemon consumer
