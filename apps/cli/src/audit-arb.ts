@@ -17,7 +17,12 @@
  * conservative lower bound.
  */
 import { fetchHistoricalCandles, type AnalysisTimeframe, type Candle } from '@b1dz/source-crypto-trade';
-import { getActivePairs } from '@b1dz/source-crypto-arb';
+import { getActivePairs, getPerExchangeVolumes } from '@b1dz/source-crypto-arb';
+
+/** Both exchanges must clear this 24h volume for a pair to be considered tradeable. */
+const MIN_EACH_EXCHANGE_VOL_USD = 100_000;
+/** Direction bias ratio: if >0.8 of crossings go one way, treat as stale/phantom. */
+const MAX_DIRECTION_BIAS = 0.8;
 
 const TAKER_FEES: Record<string, number> = {
   kraken: 0.0026,
@@ -112,9 +117,22 @@ interface PairAuditResult {
   topRoute: Record<string, number>; // "kraken->binance-us": count
 }
 
-async function auditPair(pair: string, timeframe: AnalysisTimeframe, limit: number): Promise<PairAuditResult | null> {
+async function auditPair(
+  pair: string,
+  timeframe: AnalysisTimeframe,
+  limit: number,
+  volumes: { kraken: Map<string, number>; coinbase: Map<string, number>; 'binance-us': Map<string, number> },
+): Promise<PairAuditResult | { skip: true; reason: string } | null> {
+  // Sanity filter #1: both exchanges must clear a minimum 24h volume. If
+  // one exchange has a stale/delisted product the candles will still
+  // return a price, but you can't actually trade against it.
+  const usableExchanges = EXCHANGES.filter((ex) => (volumes[ex as keyof typeof volumes].get(pair) ?? 0) >= MIN_EACH_EXCHANGE_VOL_USD);
+  if (usableExchanges.length < 2) {
+    return { skip: true, reason: `only ${usableExchanges.length} exchange(s) have >$${MIN_EACH_EXCHANGE_VOL_USD / 1000}k 24h vol` };
+  }
+
   const exchangeCandles = await Promise.all(
-    EXCHANGES.map(async (ex) => {
+    usableExchanges.map(async (ex) => {
       try {
         const c = await fetchHistoricalCandles(ex, pair, timeframe, limit);
         return { exchange: ex, candles: c };
@@ -124,7 +142,19 @@ async function auditPair(pair: string, timeframe: AnalysisTimeframe, limit: numb
     }),
   );
   const usable = exchangeCandles.filter((e) => e.candles.length >= 50);
-  if (usable.length < 2) return null;
+  if (usable.length < 2) return { skip: true, reason: 'insufficient candles' };
+
+  // Sanity filter #2: candle staleness. Each exchange's latest candle
+  // must be within 2x the bar interval of the latest overall. A lagging
+  // exchange implies its API is returning stale data.
+  const latestTimes = usable.map((e) => e.candles.at(-1)!.time);
+  const mostRecent = Math.max(...latestTimes);
+  const barMs = { '1m': 60_000, '5m': 300_000, '15m': 900_000, '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000, '1w': 604_800_000 }[timeframe];
+  const staleThresholdMs = 2 * barMs;
+  const allFresh = usable.every((e) => (mostRecent - e.candles.at(-1)!.time) <= staleThresholdMs);
+  if (!allFresh) {
+    return { skip: true, reason: 'stale candles on at least one exchange' };
+  }
 
   // Build a timestamp → {exchange: close} map.
   const byTs = new Map<number, Record<string, number>>();
@@ -156,6 +186,19 @@ async function auditPair(pair: string, timeframe: AnalysisTimeframe, limit: numb
   }
 
   if (barsSampled === 0) return null;
+
+  // Sanity filter #3: directional bias. Real arb oscillates both ways.
+  // If >MAX_DIRECTION_BIAS of crossings are in one direction, one side's
+  // quotes are drifting away from truth (stale or asset mismatch) and
+  // the "edge" isn't capturable.
+  const routeCounts = Object.values(topRoute);
+  const totalRoutes = routeCounts.reduce((a, b) => a + b, 0);
+  const maxDirection = Math.max(...routeCounts, 0);
+  const biased = totalRoutes > 0 && (maxDirection / totalRoutes) > MAX_DIRECTION_BIAS;
+  if (biased) {
+    return { skip: true, reason: `one-sided crossings (${((maxDirection / totalRoutes) * 100).toFixed(0)}% one direction — stale quote)` };
+  }
+
   return {
     pair,
     barsSampled,
@@ -187,14 +230,25 @@ export async function runAuditArbCli(argv: string[]): Promise<void> {
   }
 
   console.log(`b1dz audit-arb  tf=${args.timeframe}  limit=${args.limit}  position=$${args.positionUsd}  pairs=${pairs.length}`);
-  console.log(`(using bar-close as mid-price proxy — undercounts real opportunities)\n`);
+  console.log(`(using bar-close as mid-price proxy; filters: vol>$${MIN_EACH_EXCHANGE_VOL_USD / 1000}k both ex, fresh candles, no directional bias)\n`);
+
+  process.stdout.write('fetching 24h volumes for sanity filter...');
+  const volumes = await getPerExchangeVolumes();
+  console.log(` ok (kraken=${volumes.kraken.size} coinbase=${volumes.coinbase.size} binance-us=${volumes['binance-us'].size})\n`);
 
   const results: PairAuditResult[] = [];
+  let skippedCount = 0;
   for (const pair of pairs) {
     try {
-      const r = await auditPair(pair, args.timeframe, args.limit);
+      const r = await auditPair(pair, args.timeframe, args.limit, volumes);
       if (!r) {
-        console.log(`  ${pair.padEnd(16)} insufficient data across exchanges`);
+        console.log(`  ${pair.padEnd(16)} insufficient data`);
+        continue;
+      }
+      if ('skip' in r) {
+        skippedCount++;
+        // Only log a few so we don't drown the user in "skipped" lines.
+        if (skippedCount <= 5) console.log(`  ${pair.padEnd(16)} skipped — ${r.reason}`);
         continue;
       }
       results.push(r);
@@ -204,6 +258,7 @@ export async function runAuditArbCli(argv: string[]): Promise<void> {
       console.log(`  ${pair.padEnd(16)} FAILED: ${(e as Error).message.slice(0, 60)}`);
     }
   }
+  if (skippedCount > 5) console.log(`  ... and ${skippedCount - 5} more pairs skipped by sanity filters`);
 
   if (results.length === 0) {
     console.log('\nno pairs had usable data across exchanges.');

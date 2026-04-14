@@ -46,7 +46,7 @@ import { placeOrder as placeBinanceOrder } from './feeds/binance-us-private.js';
 import { placeOrder as placeCoinbaseOrder } from './feeds/coinbase-private.js';
 import { normalizePair } from './feeds/pairs.js';
 import { getActivePairs } from './pair-discovery.js';
-export { getActivePairs } from './pair-discovery.js';
+export { getActivePairs, getPerExchangeVolumes } from './pair-discovery.js';
 export { normalizePair } from './feeds/pairs.js';
 
 const MAX_POSITION_USD = 100;

@@ -206,6 +206,32 @@ async function discoverPairs(): Promise<string[]> {
 }
 
 /**
+ * Per-exchange 24h volume snapshot. Used by the observer/audit tools to
+ * filter out pairs that aren't actively traded on a given venue — a pair
+ * listed on Kraken with $5M volume but only $2k on Binance.US will
+ * produce phantom arb opportunities from stale Binance.US quotes.
+ *
+ * Returns Map<pair, volumeUsd>. Missing pair on exchange → pair is not
+ * traded there (or below the MIN_VOLUME_USD dust threshold).
+ */
+export async function getPerExchangeVolumes(): Promise<{
+  kraken: Map<string, number>;
+  coinbase: Map<string, number>;
+  'binance-us': Map<string, number>;
+}> {
+  const [kraken, coinbase, binance] = await Promise.all([
+    getKrakenVolumes().catch(() => new Map<string, number>()),
+    getCoinbaseVolumes().catch(() => new Map<string, { volUsd: number }>()),
+    getBinanceVolumes().catch(() => new Map<string, { volUsd: number }>()),
+  ]);
+  return {
+    kraken,
+    coinbase: new Map([...coinbase].map(([p, v]) => [p, v.volUsd])),
+    'binance-us': new Map([...binance].map(([p, v]) => [p, v.volUsd])),
+  };
+}
+
+/**
  * Get the current list of pairs to scan. Refreshes every 5 minutes.
  */
 export async function getActivePairs(): Promise<string[]> {
