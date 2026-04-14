@@ -20,6 +20,7 @@ This project adds:
 - Solana DEX routing and swap execution
 - liquidity-pool quote ingestion
 - Pump.fun discovery, quote monitoring, and guarded execution support
+- LP bot support for emission-paying pools
 - unified profitability modeling across CEX and DEX venues
 - paper trading and backtesting support for onchain routes
 - production-safe live execution with strict risk controls
@@ -68,6 +69,7 @@ The system must support Solana from the initial release, not as a later add-on.
 - No memecoin-first strategy in MVP outside guarded Pump.fun support
 - No AI-based trade placement in MVP
 - No blind buying of fresh Pump.fun launches without filters
+- No blind LP deployment without emissions, volatility, and unwind modeling
 
 ## 5. Why This Exists
 
