@@ -279,6 +279,9 @@ function DashboardInner() {
   const [chartTarget, setChartTarget] = useState<'A' | 'B'>('A');
   const [chartPauseUntilA, setChartPauseUntilA] = useState(0);
   const [chartPauseUntilB, setChartPauseUntilB] = useState(0);
+  const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(null);
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const [apiClient, setApiClient] = useState<B1dzClient | null>(null);
 
   const addLog = (text: string) => {
     setLogs((prev) => {
@@ -381,19 +384,83 @@ function DashboardInner() {
         return next;
       });
     };
+    const tradingToggleHandler = () => {
+      setTradingEnabled((prev) => {
+        const next = prev === true ? false : true;
+        addLog(next
+          ? '{black-fg}{yellow-bg} TRADING ENABLED — bypasses 5% daily loss limit {/}'
+          : '{white-fg}{red-bg} TRADING DISABLED — new entries halted {/}');
+        return next;
+      });
+    };
     tuiEvents.on('toggle-auto-trade', handler);
     tuiEvents.on('set-log-tab', tabHandler);
     tuiEvents.on('page-log', pageHandler);
     tuiEvents.on('set-chart-timeframe', timeframeHandler);
     tuiEvents.on('cycle-chart-pair', pairCycleHandler);
+    tuiEvents.on('toggle-trading-enabled', tradingToggleHandler);
     return () => {
       tuiEvents.off('toggle-auto-trade', handler);
       tuiEvents.off('set-log-tab', tabHandler);
       tuiEvents.off('page-log', pageHandler);
       tuiEvents.off('set-chart-timeframe', timeframeHandler);
       tuiEvents.off('cycle-chart-pair', pairCycleHandler);
+      tuiEvents.off('toggle-trading-enabled', tradingToggleHandler);
     };
   }, [logTab, arbState, tradeState]);
+
+  // ── Hydrate persisted UI settings on mount ──
+  useEffect(() => {
+    if (!apiClient || settingsHydrated) return;
+    let active = true;
+    apiClient.storage.get<{
+      tradingEnabled?: boolean | null;
+      chartPairA?: string | null;
+      chartPairB?: string | null;
+      chartExchangeA?: string | null;
+      chartExchangeB?: string | null;
+      chartTimeframe?: ChartTimeframe;
+      chartTarget?: 'A' | 'B';
+    }>('source-state', 'crypto-ui-settings').then((settings) => {
+      if (!active) return;
+      if (settings) {
+        if (settings.tradingEnabled === true || settings.tradingEnabled === false) {
+          setTradingEnabled(settings.tradingEnabled);
+        }
+        if (settings.chartPairA) setChartPair(settings.chartPairA);
+        if (settings.chartPairB) setChartPairB(settings.chartPairB);
+        if (settings.chartExchangeA) setChartExchangeA(settings.chartExchangeA);
+        if (settings.chartExchangeB) setChartExchangeB(settings.chartExchangeB);
+        if (settings.chartTimeframe && (CHART_TIMEFRAMES as readonly string[]).includes(settings.chartTimeframe)) {
+          setChartTimeframe(settings.chartTimeframe);
+        }
+        if (settings.chartTarget === 'A' || settings.chartTarget === 'B') {
+          setChartTarget(settings.chartTarget);
+        }
+      }
+      setSettingsHydrated(true);
+    }).catch(() => {
+      setSettingsHydrated(true);
+    });
+    return () => { active = false; };
+  }, [apiClient, settingsHydrated]);
+
+  // ── Persist UI settings on change (debounced) ──
+  useEffect(() => {
+    if (!apiClient || !settingsHydrated) return;
+    const handle = setTimeout(() => {
+      apiClient.storage.put('source-state', 'crypto-ui-settings', {
+        tradingEnabled,
+        chartPairA: chartPair,
+        chartPairB,
+        chartExchangeA,
+        chartExchangeB,
+        chartTimeframe,
+        chartTarget,
+      }).catch((e) => addLog(`{red-fg}Persist settings failed: ${(e as Error).message?.slice(0, 60)}{/red-fg}`));
+    }, 500);
+    return () => clearTimeout(handle);
+  }, [apiClient, settingsHydrated, tradingEnabled, chartPair, chartPairB, chartExchangeA, chartExchangeB, chartTimeframe, chartTarget]);
 
   // Poll API for daemon state
   useEffect(() => {
@@ -409,6 +476,7 @@ function DashboardInner() {
           addLog('{red-fg}No API credentials — run b1dz login first{/red-fg}');
           return;
         }
+        setApiClient(client);
         addLog(`{green-fg}Connected to API{/green-fg} cli=v${getB1dzVersion()}`);
         poll();
       } catch (e) {
@@ -568,7 +636,12 @@ function DashboardInner() {
   const haltStr = ts?.dailyLossLimitHit
     ? `  {black-fg}{yellow-bg} HALTED ${ts?.dailyLossLimitPct?.toFixed(1) ?? '5.0'}% daily limit {/}`
     : '';
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr} ${pnlPctStr}${haltStr}  fees:$${totalFees.toFixed(2)}  [t]rade [a]ctivity [l]ogs [q]uit`;
+  const tradingStr = tradingEnabled === true
+    ? `  {black-fg}{green-bg} TRADING: ENABLED (override) {/}`
+    : tradingEnabled === false
+      ? `  {white-fg}{red-bg} TRADING: DISABLED {/}`
+      : '';
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr} ${pnlPctStr}${haltStr}${tradingStr}  fees:$${totalFees.toFixed(2)}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
     ...visiblePositions.map((pos) => pos.pair),
@@ -867,9 +940,9 @@ function DashboardInner() {
   const screenRows = process.stdout.rows ?? 40;
   const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - row2H - row3H - 6));
   const chartTop = 2 + posH;
-  const primaryChartWidthPct = 39;
-  const secondaryChartWidthPct = 39;
-  const chartControlsWidthPct = 22;
+  const primaryChartWidthPct = 44;
+  const secondaryChartWidthPct = 44;
+  const chartControlsWidthPct = 12;
   const screenCols = process.stdout.columns ?? 120;
   const primaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (primaryChartWidthPct / 100)) - 3);
   const secondaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (secondaryChartWidthPct / 100)) - 3);
@@ -990,15 +1063,12 @@ function DashboardInner() {
         tags={true}
         style={{ border: { fg: 'cyan' }, bg: 'black', fg: 'white' }}
         content={[
-          ` Pair A ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}`,
-          ` A: ${activeChartPair} @ ${chartExchange}`,
-          `    ${chartAPauseLabel}`,
-          ` B: ${secondaryChartPair} @ ${secondaryChartExchange}`,
-          `    ${chartBPauseLabel}`,
-          ` Target: ${chartTarget}`,
-          ` Controls: click pair/timeframe/chart`,
+          ` ${chartPairIdx >= 0 ? chartPairIdx + 1 : 0}/${chartPairs.length || 1}`,
+          ` A:${activeChartPair}`,
+          ` B:${secondaryChartPair}`,
+          ` tgt ${chartTarget}`,
           '',
-          ' Timeframe',
+          ' TF',
         ].join('\n')}
       />
       <box

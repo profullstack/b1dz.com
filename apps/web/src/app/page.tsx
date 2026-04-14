@@ -140,7 +140,7 @@ export default function LandingPage() {
 
       <section className="max-w-6xl mx-auto px-6 pb-12">
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 px-6 py-6">
-          <p className="text-center text-xs uppercase tracking-[0.35em] text-zinc-500 mb-5">As seen on</p>
+          <p className="text-center text-xs uppercase tracking-[0.35em] text-zinc-500 mb-5">As mentioned on:</p>
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
             {platformMentions.map((p) => (
               <a

@@ -1,5 +1,5 @@
 import type { SourceWorker, UserContext } from '../types.js';
-import { cryptoTradeSource, getTradeStatus, serializeTradeState } from '@b1dz/source-crypto-trade';
+import { cryptoTradeSource, getTradeStatus, serializeTradeState, setTradingOverride } from '@b1dz/source-crypto-trade';
 import { AlertBus, getB1dzVersion } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
@@ -45,6 +45,10 @@ export const cryptoTradeWorker: SourceWorker = {
     };
 
     try {
+      const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
+      const override = uiSettings?.tradingEnabled;
+      setTradingOverride(override === true || override === false ? override : null);
+
       const items = await cryptoTradeSource.poll(sourceCtx);
       const signals: unknown[] = (ctx.payload?.signals as unknown[]) ?? [];
 

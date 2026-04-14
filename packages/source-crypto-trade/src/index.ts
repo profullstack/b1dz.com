@@ -1083,6 +1083,30 @@ function isDailyLossLimitHit(): boolean {
   return dailyPnlPct() <= -DAILY_LOSS_LIMIT_PCT;
 }
 
+/**
+ * Manual trading override set by the user via TUI.
+ *   null  → default behaviour (respect daily loss limit)
+ *   true  → bypass daily loss limit, keep trading
+ *   false → halt entries regardless of PnL
+ */
+let tradingOverride: boolean | null = null;
+let lastTradingOverrideLogAt = 0;
+
+export function setTradingOverride(value: boolean | null): void {
+  if (value !== tradingOverride) {
+    tradingOverride = value;
+    const label = value === true ? 'OVERRIDE: trading force-enabled'
+      : value === false ? 'OVERRIDE: trading halted by user'
+      : 'OVERRIDE: cleared (default behaviour)';
+    console.log(`[trade] ${label}`);
+    lastTradingOverrideLogAt = Date.now();
+  }
+}
+
+export function getTradingOverride(): boolean | null {
+  return tradingOverride;
+}
+
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
   positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
@@ -1097,6 +1121,7 @@ export interface TradeStatus {
   ticksPerPair: Record<string, number>;
   exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
+  tradingOverride: boolean | null;
 }
 
 export function getTradeStatus(): TradeStatus {
@@ -1154,6 +1179,7 @@ export function getTradeStatus(): TradeStatus {
     ticksPerPair,
     exchangeStates,
     lastSignal: null,
+    tradingOverride,
   };
 }
 
@@ -1338,8 +1364,17 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       // ── Check entries ──
 
-      // Daily loss limit
-      if (isDailyLossLimitHit()) {
+      // Manual halt overrides everything
+      if (tradingOverride === false) {
+        if (Date.now() - lastTradingOverrideLogAt >= 60_000) {
+          console.log('[trade] TRADING HALTED by user override — scanning only');
+          lastTradingOverrideLogAt = Date.now();
+        }
+        return null;
+      }
+
+      // Daily loss limit, unless user force-enabled
+      if (isDailyLossLimitHit() && tradingOverride !== true) {
         if (Date.now() - lastDailyLossLimitLogAt >= 60_000) {
           console.log(`[trade] DAILY LOSS LIMIT HIT ($${dailyPnl.toFixed(2)} / ${dailyPnlPct().toFixed(2)}%) — trading halted, scanning only`);
           lastDailyLossLimitLogAt = Date.now();

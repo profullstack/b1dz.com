@@ -24,6 +24,10 @@ export function startTui() {
     tuiEvents.emit('toggle-auto-trade');
   });
 
+  screen.key(['d'], () => {
+    tuiEvents.emit('toggle-trading-enabled');
+  });
+
   screen.key(['a'], () => {
     tuiEvents.emit('set-log-tab', 'activity');
   });
