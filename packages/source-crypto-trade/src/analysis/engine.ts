@@ -2,6 +2,7 @@ import type { MarketSnapshot } from '@b1dz/core';
 import { DEFAULT_ANALYSIS_CONFIG, type AnalysisConfig } from './config.js';
 import type { AnalysisTimeframe, Candle } from './candles.js';
 import { atr, averageVolume, ema, intradayVwap, macd, rsi } from './indicators.js';
+import { applyRiskFilters } from './riskFilter.js';
 
 export type MarketRegime = 'uptrend' | 'downtrend' | 'sideways' | 'breakout_expansion' | 'compression';
 export type SetupType =
@@ -181,12 +182,6 @@ export function analyzeSignal(input: AnalysisInput): AnalysisSignal {
   const biasBear = latestEntry.close < emaTrendValue;
 
   const regime = classifyRegime(latestEntry.close, emaFastValue, emaSlowValue, vwap, atrPct, volumeRatio, recentHigh, recentLow);
-  const rejectReasons: string[] = [];
-  if (spreadPct > config.thresholds.maxSpreadPct) rejectReasons.push(`spread ${spreadPct.toFixed(3)}% > ${config.thresholds.maxSpreadPct}%`);
-  if (atrPct < config.thresholds.minAtrPct) rejectReasons.push(`atr ${atrPct.toFixed(3)}% < ${config.thresholds.minAtrPct}%`);
-  if (volumeRatio < config.thresholds.minVolumeRatio) rejectReasons.push(`volume ratio ${volumeRatio.toFixed(2)} < ${config.thresholds.minVolumeRatio}`);
-  if (input.cooldownActive) rejectReasons.push('cooldown active');
-  if (input.killSwitchActive) rejectReasons.push('kill switch active');
 
   const candidates = [];
 
@@ -262,14 +257,14 @@ export function analyzeSignal(input: AnalysisInput): AnalysisSignal {
   }
 
   const best = candidates.sort((a, b) => b.score - a.score)[0] ?? null;
-  const rejected = rejectReasons.length > 0 || !best || best.score < config.thresholds.minScore || (regime === 'sideways' && best.direction === 'long' && best.score < config.thresholds.strongBuyScoreInSideways);
-  if (best && regime === 'sideways' && best.direction === 'long' && best.score < config.thresholds.strongBuyScoreInSideways) {
-    rejectReasons.push(`sideways regime requires score >= ${config.thresholds.strongBuyScoreInSideways}`);
-  }
-  if (best && best.score < config.thresholds.minScore) {
-    rejectReasons.push(`score ${best.score} < ${config.thresholds.minScore}`);
-  }
-  if (!best) rejectReasons.push('no valid setup');
+  const riskFilter = applyRiskFilters({
+    regime,
+    candidate: best ? { direction: best.direction, setupType: best.setupType, score: best.score } : null,
+    indicators: { atrPct, volumeRatio, spreadPct },
+    cooldownActive: input.cooldownActive,
+    killSwitchActive: input.killSwitchActive,
+    config,
+  });
 
   return {
     symbol: input.symbol,
@@ -300,8 +295,8 @@ export function analyzeSignal(input: AnalysisInput): AnalysisSignal {
       spreadPct,
     },
     reasons: best?.reasons ?? [],
-    rejectReasons,
-    rejected,
+    rejectReasons: riskFilter.rejectReasons,
+    rejected: riskFilter.rejected,
     confidence: Math.max(0, Math.min(1, (best?.score ?? 0) / 100)),
   };
 }
