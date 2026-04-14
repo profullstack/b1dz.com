@@ -383,6 +383,47 @@ function analysisStateFor(exchange: string, pair: string): AnalysisPairState {
   return state;
 }
 
+interface PersistedAnalysisState {
+  exchange: string;
+  pair: string;
+  entryCandles: Candle[];
+  confirmCandles: Candle[];
+  biasCandles: Candle[];
+  lastAnalysis: AnalysisSignal | null;
+}
+
+function serializeAnalysisStates(): PersistedAnalysisState[] {
+  return [...analysisStates.entries()].map(([key, state]) => {
+    const [exchange, pair] = key.split(':');
+    return {
+      exchange,
+      pair,
+      entryCandles: state.entryCandles.slice(-ANALYSIS_ENTRY_LIMIT),
+      confirmCandles: state.confirmCandles.slice(-ANALYSIS_CONFIRM_LIMIT),
+      biasCandles: state.biasCandles.slice(-ANALYSIS_BIAS_LIMIT),
+      lastAnalysis: state.lastAnalysis,
+    };
+  });
+}
+
+function restoreAnalysisStates(saved: unknown): void {
+  analysisStates.clear();
+  if (!Array.isArray(saved)) return;
+  for (const item of saved as PersistedAnalysisState[]) {
+    if (!item || typeof item.exchange !== 'string' || typeof item.pair !== 'string') continue;
+    analysisStates.set(`${item.exchange}:${item.pair}`, {
+      entryCandles: Array.isArray(item.entryCandles) ? item.entryCandles : [],
+      confirmCandles: Array.isArray(item.confirmCandles) ? item.confirmCandles : [],
+      biasCandles: Array.isArray(item.biasCandles) ? item.biasCandles : [],
+      pendingSnapshots: [],
+      bootstrapPromise: null,
+      bootstrapped: true,
+      lastAnalysis: item.lastAnalysis ?? null,
+      lastLogAt: 0,
+    });
+  }
+}
+
 async function bootstrapAnalysisState(exchange: string, pair: string, state: AnalysisPairState): Promise<void> {
   const entryTf = DEFAULT_ANALYSIS_CONFIG.timeframes.entry;
   const confirmTf = DEFAULT_ANALYSIS_CONFIG.timeframes.confirm;
@@ -463,6 +504,45 @@ function analysisToTradeSignal(analysis: AnalysisSignal | null): Signal | null {
     return { side: 'buy', strength: analysis.score / 100, reason };
   }
   return { side: 'sell', strength: analysis.score / 100, reason };
+}
+
+export function __resetTradeStateForTests(): void {
+  openPositions.clear();
+  pendingLiquidations.clear();
+  lastExitAt.clear();
+  closedTrades.splice(0, closedTrades.length);
+  histories.clear();
+  analysisStates.clear();
+  restoredTradeState = false;
+  dailyPnl = 0;
+  dailyPnlDate = new Date().toDateString();
+  dailyEquityBaselineUsd = 0;
+}
+
+export function __seedAnalysisStateForTests(exchange: string, pair: string, state: Omit<PersistedAnalysisState, 'exchange' | 'pair'>): void {
+  analysisStates.set(`${exchange}:${pair}`, {
+    entryCandles: state.entryCandles,
+    confirmCandles: state.confirmCandles,
+    biasCandles: state.biasCandles,
+    pendingSnapshots: [],
+    bootstrapPromise: null,
+    bootstrapped: true,
+    lastAnalysis: state.lastAnalysis,
+    lastLogAt: 0,
+  });
+}
+
+export function __getAnalysisStateForTests(exchange: string, pair: string): PersistedAnalysisState | null {
+  const state = analysisStates.get(`${exchange}:${pair}`);
+  if (!state) return null;
+  return {
+    exchange,
+    pair,
+    entryCandles: state.entryCandles,
+    confirmCandles: state.confirmCandles,
+    biasCandles: state.biasCandles,
+    lastAnalysis: state.lastAnalysis,
+  };
 }
 
 function clearTrackedPosition(posKey: string, exchange: string) {
@@ -882,7 +962,7 @@ async function hydrateFromExchange() {
   }
 }
 
-function restorePersistedTradeState(state: Record<string, unknown> | undefined) {
+export function restorePersistedTradeState(state: Record<string, unknown> | undefined) {
   if (restoredTradeState) return;
   restoredTradeState = true;
   const tradeState = (state?.tradeState as Record<string, unknown> | undefined) ?? {};
@@ -920,6 +1000,7 @@ function restorePersistedTradeState(state: Record<string, unknown> | undefined) 
   }
   const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
   closedTrades.splice(0, closedTrades.length, ...savedClosedTrades);
+  restoreAnalysisStates(tradeState.analysisStates);
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   dailyPnl = closedTrades
@@ -936,6 +1017,7 @@ export function serializeTradeState(): Record<string, unknown> {
     dailyPnlDate,
     dailyEquityBaselineUsd,
     closedTrades,
+    analysisStates: serializeAnalysisStates(),
   };
 }
 
