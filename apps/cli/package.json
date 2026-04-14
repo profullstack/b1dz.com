@@ -24,6 +24,7 @@
     "@b1dz/venue-types": "workspace:*",
     "@b1dz/adapters-evm": "workspace:*",
     "@b1dz/adapters-solana": "workspace:*",
+    "@b1dz/adapters-cex": "workspace:*",
     "@supabase/supabase-js": "latest",
     "chalk": "latest",
     "cli-table3": "latest",

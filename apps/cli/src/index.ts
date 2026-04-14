@@ -115,13 +115,14 @@ Cross-exchange arb audit:
     --position 100                         position size for $ estimates
 
 Multi-venue quote observer (v2 DEX engine):
-  b1dz observe                             fetch DEX quotes from enabled adapters
+  b1dz observe                             fetch quotes from enabled adapters
     --pair ETH-USDC                        canonical pair
     --side buy|sell                        buy = spend quote to get base
     --amount 100                           amount in input asset
-    --chain base|avalanche|solana|...      target chain
+    --chain cex|base|solana|all|...        target (cex=all 4 CEXs, all=everything)
     --slippage 50                          max slippage in bps (default 50)
-  Current adapters: 0x (EVM), jupiter (Solana) — more coming per PRD v2.
+  Adapters: kraken, coinbase, binance-us, gemini, 0x, 1inch, jupiter
+  Env: ZEROX_API_KEY, ONEINCH_API_KEY (free at portal.1inch.dev / 0x.org)
 
 Sources:
   b1dz <source> run        start headless

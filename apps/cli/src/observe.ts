@@ -15,8 +15,9 @@
  *   b1dz observe --pair SOL-USDC --amount 100 --side buy --chain solana
  *   b1dz observe --pair USDC-ETH --amount 0.01 --side sell --chain base
  */
-import { ZeroExAdapter, type EvmChain, isEvmChain } from '@b1dz/adapters-evm';
+import { ZeroExAdapter, OneInchAdapter, type EvmChain, isEvmChain } from '@b1dz/adapters-evm';
 import { JupiterAdapter } from '@b1dz/adapters-solana';
+import { defaultCexAdapters } from '@b1dz/adapters-cex';
 import type { NormalizedQuote, QuoteRequest, VenueAdapter } from '@b1dz/venue-types';
 
 interface ObserveArgs {
@@ -53,10 +54,31 @@ function parseArgs(argv: string[]): ObserveArgs {
 }
 
 function buildAdaptersFor(chain: string): VenueAdapter[] {
-  if (isEvmChain(chain)) {
+  if (chain === 'cex') {
+    return defaultCexAdapters();
+  }
+  if (chain === 'all') {
+    // Compare every venue in parallel — CEXs + EVM aggregators (Base is the
+    // default evm chain here since it's cheap and MVP-scoped) + Jupiter.
+    const zerox = new ZeroExAdapter({ chain: 'base', apiKey: process.env.ZEROX_API_KEY });
+    const oneinch = process.env.ONEINCH_API_KEY
+      ? new OneInchAdapter({ chain: 'base', apiKey: process.env.ONEINCH_API_KEY })
+      : null;
     return [
+      ...defaultCexAdapters(),
+      zerox,
+      ...(oneinch ? [oneinch] : []),
+      new JupiterAdapter(),
+    ];
+  }
+  if (isEvmChain(chain)) {
+    const adapters: VenueAdapter[] = [
       new ZeroExAdapter({ chain: chain as EvmChain, apiKey: process.env.ZEROX_API_KEY }),
     ];
+    if (process.env.ONEINCH_API_KEY) {
+      adapters.push(new OneInchAdapter({ chain: chain as EvmChain, apiKey: process.env.ONEINCH_API_KEY }));
+    }
+    return adapters;
   }
   if (chain === 'solana') {
     return [new JupiterAdapter()];
@@ -87,15 +109,19 @@ export async function runObserveCli(argv: string[]): Promise<void> {
     return;
   }
 
-  const req: QuoteRequest = {
-    pair: args.pair,
-    side: args.side,
-    amountIn: args.amount,
-    chain: args.chain,
-    maxSlippageBps: args.slippageBps,
-  };
+  // When chain='all' or 'cex' we don't want to force a chain match — each
+  // adapter should answer for its own venue. Only scope the request to a
+  // specific chain when the user asked for one directly.
+  const scopedChain = args.chain === 'all' || args.chain === 'cex' ? undefined : args.chain;
 
   const results = await Promise.all(adapters.map(async (a) => {
+    const req: QuoteRequest = {
+      pair: args.pair,
+      side: args.side,
+      amountIn: args.amount,
+      ...(scopedChain !== undefined ? { chain: scopedChain } : {}),
+      maxSlippageBps: args.slippageBps,
+    };
     try {
       const q = await a.quote(req);
       return { adapter: a, quote: q, error: null as string | null };
