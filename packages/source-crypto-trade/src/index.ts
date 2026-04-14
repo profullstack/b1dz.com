@@ -1624,5 +1624,6 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 }
 
 export const cryptoTradeSource: Source<TradeItem> = makeCryptoTradeSource();
-export { runBacktest } from './analysis/backtest.js';
-export { computeBacktestMetrics } from './analysis/analytics.js';
+export { runBacktest, type BacktestResult, type BacktestAssumptions } from './analysis/backtest.js';
+export { computeBacktestMetrics, type BacktestMetrics, type BacktestTrade } from './analysis/analytics.js';
+export { fetchHistoricalCandles, type Candle, type AnalysisTimeframe } from './analysis/candles.js';

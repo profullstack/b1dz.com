@@ -93,6 +93,14 @@ Dashboard:
   b1dz tui                 live crypto dashboard (production API)
   b1dz tui --dev           live crypto dashboard (local API)
 
+Backtest:
+  b1dz backtest <tf>                       run backtest on default pairs
+    --pair BTC-USD,ETH-USD                 comma-separated pairs
+    --exchange kraken|binance-us|coinbase  data source (default kraken)
+    --limit 500                            max candles to fetch (50-1000)
+    --equity 100                           starting equity in USD
+  timeframes: 1m, 5m, 15m, 1h, 4h, 1d, 1w
+
 Sources:
   b1dz <source> run        start headless
   Available sources: crypto-arb, crypto-trade, all
@@ -146,6 +154,18 @@ if (source === 'signup') { await signup(); process.exit(0); }
 if (source === 'login') { await login(); process.exit(0); }
 if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
+
+// Backtest hits public exchange APIs — no auth required
+if (source === 'backtest') {
+  const { runBacktestCli } = await import('./backtest.js');
+  try {
+    await runBacktestCli(process.argv.slice(3));
+    process.exit(0);
+  } catch (e) {
+    console.error(`backtest failed: ${(e as Error).message}`);
+    process.exit(1);
+  }
+}
 
 // Everything else requires a signed-in user
 requireAuth();
