@@ -11,6 +11,8 @@ import { createHash, createHmac } from 'node:crypto';
 
 const BASE = 'https://api.kraken.com';
 const ASSET_PAIR_CACHE_TTL_MS = 5 * 60_000;
+const KRAKEN_LOCKOUT_BASE_MS = 15 * 60_000;
+const KRAKEN_LOCKOUT_MAX_MS = 60 * 60_000;
 
 /** Hard ceiling — refuse any order where cost > $100. */
 export const MAX_POSITION_USD = 100;
@@ -20,6 +22,8 @@ export const KRAKEN_TAKER_FEE = 0.0026;
 let assetPairsFetchedAt = 0;
 let tradablePairs = new Set<string>();
 let assetPairMeta = new Map<string, { altname?: string; status?: string; ordermin?: string }>();
+let privateBlockedUntil = 0;
+let privateLockoutBackoffMs = KRAKEN_LOCKOUT_BASE_MS;
 
 // Monotonic nonce: microsecond timestamp, guaranteed to increase even
 // when multiple requests fire in the same millisecond.
@@ -58,6 +62,11 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 
 async function krakenPrivate<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   return withLock(async () => {
+    if (Date.now() < privateBlockedUntil) {
+      const remainingSec = Math.ceil((privateBlockedUntil - Date.now()) / 1000);
+      throw new Error(`Kraken ${path}: EGeneral:Temporary lockout (${remainingSec}s remaining)`);
+    }
+
     const { key, secret } = getKeys();
     const nonce = nextNonce();
     params.nonce = nonce;
@@ -77,7 +86,15 @@ async function krakenPrivate<T>(path: string, params: Record<string, string> = {
 
     if (!res.ok) throw new Error(`Kraken ${path}: ${res.status} ${res.statusText}`);
     const data = (await res.json()) as { error: string[]; result: T };
-    if (data.error?.length) throw new Error(`Kraken ${path}: ${data.error.join(', ')}`);
+    if (data.error?.length) {
+      if (data.error.some((msg) => msg.includes('Temporary lockout'))) {
+        privateBlockedUntil = Date.now() + privateLockoutBackoffMs;
+        privateLockoutBackoffMs = Math.min(privateLockoutBackoffMs * 2, KRAKEN_LOCKOUT_MAX_MS);
+      }
+      throw new Error(`Kraken ${path}: ${data.error.join(', ')}`);
+    }
+    privateBlockedUntil = 0;
+    privateLockoutBackoffMs = KRAKEN_LOCKOUT_BASE_MS;
     return data.result;
   });
 }
