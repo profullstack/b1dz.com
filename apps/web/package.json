@@ -8,6 +8,7 @@
     "build": "next build --webpack",
     "start": "next start -p ${PORT:-3000}",
     "lint": "next lint",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -28,6 +29,7 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "tailwindcss": "latest",
-    "typescript": "latest"
+    "typescript": "latest",
+    "vitest": "latest"
   }
 }
