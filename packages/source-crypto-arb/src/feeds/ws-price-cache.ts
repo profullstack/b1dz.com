@@ -20,6 +20,7 @@ interface CacheEntry extends MarketSnapshot {
 
 const cache = new Map<string, CacheEntry>(); // key: "exchange:pair"
 const subscribedPairs = new Set<string>();
+const subscriptionRefs = new Map<string, number>();
 let initialized = false;
 const krakenSubscribedSymbols = new Set<string>();
 const coinbaseSubscribedPairs = new Set<string>();
@@ -75,6 +76,12 @@ function setPrice(exchange: string, pair: string, bid: number, ask: number, bidS
   });
 }
 
+function prunePairCache(pair: string) {
+  for (const exchange of ['kraken', 'coinbase', 'binance-us']) {
+    cache.delete(cacheKey(exchange, pair));
+  }
+}
+
 // ─── Kraken WebSocket ──────────────────────────────────────────
 
 let krakenWs: WebSocket | null = null;
@@ -90,6 +97,21 @@ function subscribeKrakenPairs(ws: WebSocket, pairs: string[]) {
     params: {
       channel: 'ticker',
       symbol: nextSymbols,
+    },
+  }));
+}
+
+function unsubscribeKrakenPairs(ws: WebSocket, pairs: string[]) {
+  const symbols = pairs.map((p) => websocketSymbol('kraken', p));
+  const activeSymbols = symbols.filter((symbol) => krakenSubscribedSymbols.has(symbol));
+  if (activeSymbols.length === 0) return;
+  for (const symbol of activeSymbols) krakenSubscribedSymbols.delete(symbol);
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    method: 'unsubscribe',
+    params: {
+      channel: 'ticker',
+      symbol: activeSymbols,
     },
   }));
 }
@@ -162,6 +184,23 @@ function subscribeCoinbasePairs(ws: WebSocket, pairs: string[]) {
   ws.send(JSON.stringify({
     type: 'subscribe',
     product_ids: nextPairs,
+    channel: 'heartbeats',
+  }));
+}
+
+function unsubscribeCoinbasePairs(ws: WebSocket, pairs: string[]) {
+  const activePairs = pairs.filter((pair) => coinbaseSubscribedPairs.has(pair));
+  if (activePairs.length === 0) return;
+  for (const pair of activePairs) coinbaseSubscribedPairs.delete(pair);
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    type: 'unsubscribe',
+    product_ids: activePairs,
+    channel: 'ticker',
+  }));
+  ws.send(JSON.stringify({
+    type: 'unsubscribe',
+    product_ids: activePairs,
     channel: 'heartbeats',
   }));
 }
@@ -239,6 +278,20 @@ function subscribeBinancePairs(ws: WebSocket, pairs: string[]) {
   }));
 }
 
+function unsubscribeBinancePairs(ws: WebSocket, pairs: string[]) {
+  const activeSymbols = pairs
+    .map((p) => `${normalizePair(p, 'binance-us').toLowerCase()}@bookTicker`)
+    .filter((symbol) => binanceSubscribedSymbols.has(symbol));
+  if (activeSymbols.length === 0) return;
+  for (const symbol of activeSymbols) binanceSubscribedSymbols.delete(symbol);
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    method: 'UNSUBSCRIBE',
+    params: activeSymbols,
+    id: binanceRequestId++,
+  }));
+}
+
 function connectBinance(pairs: string[]) {
   if (binanceWs) return;
   const url = 'wss://stream.binance.us:9443/ws';
@@ -297,10 +350,45 @@ function connectBinance(pairs: string[]) {
  * Safe to call multiple times — new pairs are added, existing ones kept.
  */
 export function subscribe(pairs: string[]) {
-  const newPairs = pairs.filter((p) => !subscribedPairs.has(p));
-  if (newPairs.length === 0 && initialized) return;
+  retain(pairs);
+}
 
-  for (const p of newPairs) subscribedPairs.add(p);
+function applyRetainCounts(pairs: string[]): string[] {
+  const newPairs: string[] = [];
+  for (const pair of pairs) {
+    const nextRefCount = (subscriptionRefs.get(pair) ?? 0) + 1;
+    subscriptionRefs.set(pair, nextRefCount);
+    if (nextRefCount === 1) {
+      subscribedPairs.add(pair);
+      newPairs.push(pair);
+    }
+  }
+  return newPairs;
+}
+
+function applyReleaseCounts(pairs: string[]): string[] {
+  const releasedPairs: string[] = [];
+  for (const pair of pairs) {
+    const current = subscriptionRefs.get(pair) ?? 0;
+    if (current <= 1) {
+      subscriptionRefs.delete(pair);
+      if (subscribedPairs.delete(pair)) {
+        releasedPairs.push(pair);
+      }
+    } else {
+      subscriptionRefs.set(pair, current - 1);
+    }
+  }
+  return releasedPairs;
+}
+
+export function retain(pairs: string[]): () => void {
+  const newPairs = applyRetainCounts(pairs);
+
+  if (newPairs.length === 0 && initialized) {
+    return () => release(pairs);
+  }
+
   const allPairs = [...subscribedPairs];
   if (!initialized) {
     wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase + binance.us`);
@@ -308,7 +396,7 @@ export function subscribe(pairs: string[]) {
     connectCoinbase(allPairs);
     connectBinance(allPairs);
     initialized = true;
-    return;
+    return () => release(pairs);
   }
 
   if (newPairs.length > 0) {
@@ -321,6 +409,45 @@ export function subscribe(pairs: string[]) {
   if (binanceWs?.readyState === WebSocket.OPEN) subscribeBinancePairs(binanceWs, newPairs);
   else connectBinance(allPairs);
   initialized = true;
+  return () => release(pairs);
+}
+
+export function release(pairs: string[]) {
+  const releasedPairs = applyReleaseCounts(pairs);
+  if (releasedPairs.length === 0) return;
+
+  for (const pair of releasedPairs) prunePairCache(pair);
+  if (krakenWs) unsubscribeKrakenPairs(krakenWs, releasedPairs);
+  if (coinbaseWs) unsubscribeCoinbasePairs(coinbaseWs, releasedPairs);
+  if (binanceWs) unsubscribeBinancePairs(binanceWs, releasedPairs);
+}
+
+export function __resetWsCacheForTests() {
+  cache.clear();
+  subscribedPairs.clear();
+  subscriptionRefs.clear();
+  krakenSubscribedSymbols.clear();
+  coinbaseSubscribedPairs.clear();
+  binanceSubscribedSymbols.clear();
+  initialized = false;
+}
+
+export function __getWsCacheStateForTests() {
+  return {
+    cacheSize: cache.size,
+    subscribedPairs: [...subscribedPairs].sort(),
+    subscriptionRefs: [...subscriptionRefs.entries()].sort(([a], [b]) => a.localeCompare(b)),
+  };
+}
+
+export function __retainWsPairsForTests(pairs: string[]) {
+  return applyRetainCounts(pairs);
+}
+
+export function __releaseWsPairsForTests(pairs: string[]) {
+  const released = applyReleaseCounts(pairs);
+  for (const pair of released) prunePairCache(pair);
+  return released;
 }
 
 /** Get all cached snapshots for a pair across all exchanges. */

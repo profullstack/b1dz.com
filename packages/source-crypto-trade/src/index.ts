@@ -506,6 +506,34 @@ function analysisToTradeSignal(analysis: AnalysisSignal | null): Signal | null {
   return { side: 'sell', strength: analysis.score / 100, reason };
 }
 
+function pairFromCompositeKey(key: string): string {
+  return key.split(':').slice(1).join(':');
+}
+
+function pruneInactivePairState(activePairs: string[]): void {
+  const keepPairs = new Set(activePairs);
+  for (const pos of openPositions.values()) keepPairs.add(pos.pair);
+  for (const liquidation of pendingLiquidations.values()) keepPairs.add(liquidation.pair);
+
+  for (const key of histories.keys()) {
+    if (!keepPairs.has(pairFromCompositeKey(key))) histories.delete(key);
+  }
+
+  for (const key of analysisStates.keys()) {
+    if (!keepPairs.has(pairFromCompositeKey(key))) analysisStates.delete(key);
+  }
+
+  for (const key of minExecutableUsdByMarket.keys()) {
+    if (!keepPairs.has(pairFromCompositeKey(key))) minExecutableUsdByMarket.delete(key);
+  }
+
+  for (const [pair, exitedAt] of lastExitAt.entries()) {
+    if (!keepPairs.has(pair) && Date.now() - exitedAt > COOLDOWN_MS) {
+      lastExitAt.delete(pair);
+    }
+  }
+}
+
 export function __resetTradeStateForTests(): void {
   openPositions.clear();
   pendingLiquidations.clear();
@@ -543,6 +571,10 @@ export function __getAnalysisStateForTests(exchange: string, pair: string): Pers
     biasCandles: state.biasCandles,
     lastAnalysis: state.lastAnalysis,
   };
+}
+
+export function __pruneInactivePairStateForTests(activePairs: string[]): void {
+  pruneInactivePairState(activePairs);
 }
 
 function clearTrackedPosition(posKey: string, exchange: string) {
@@ -1171,6 +1203,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
       const PAIRS = await getActivePairs();
       lastEligiblePairs = [...PAIRS];
+      pruneInactivePairState(PAIRS);
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
       for (const { feed, exchange } of TRADE_FEEDS) {

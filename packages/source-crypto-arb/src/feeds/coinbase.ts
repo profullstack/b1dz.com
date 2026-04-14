@@ -62,18 +62,34 @@ interface CoinbaseBestBidAsk {
 let cbBatchCache = new Map<string, CoinbasePricebook>();
 let cbBatchTs = 0;
 const CB_BATCH_TTL = 1500;
-let cbPairsToFetch = new Set<string>();
+const CB_PAIR_TTL = 10 * 60_000;
+let cbPairsToFetch = new Map<string, number>();
+
+function pruneCoinbasePairs(now = Date.now()) {
+  for (const [pair, seenAt] of cbPairsToFetch.entries()) {
+    if (now - seenAt > CB_PAIR_TTL) cbPairsToFetch.delete(pair);
+  }
+}
 
 /** Register a pair so the next batch fetch includes it. */
 export function registerCoinbasePair(pair: string) {
-  cbPairsToFetch.add(pair);
+  cbPairsToFetch.set(pair, Date.now());
+  pruneCoinbasePairs();
 }
 
 async function ensureCoinbaseBatch(): Promise<Map<string, CoinbasePricebook>> {
   if (Date.now() - cbBatchTs < CB_BATCH_TTL && cbBatchCache.size > 0) return cbBatchCache;
-  if (cbPairsToFetch.size === 0) cbPairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);
+  pruneCoinbasePairs();
+  if (cbPairsToFetch.size === 0) {
+    const now = Date.now();
+    cbPairsToFetch = new Map([
+      ['BTC-USD', now],
+      ['ETH-USD', now],
+      ['SOL-USD', now],
+    ]);
+  }
   try {
-    const ids = [...cbPairsToFetch].join(',');
+    const ids = [...cbPairsToFetch.keys()].join(',');
     const data = await coinbaseFetch<CoinbaseBestBidAsk>(
       `/api/v3/brokerage/best_bid_ask?product_ids=${ids}`,
     );

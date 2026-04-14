@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { subscribeWs, getWsSnapshot, normalizePair } from '@b1dz/source-crypto-arb';
+import { retainWsSubscription, getWsSnapshot, normalizePair } from '@b1dz/source-crypto-arb';
 import { aggregateBars, TIMEFRAME_TO_MS } from './timeframeAggregator.js';
 
 const COINBASE_GRANULARITY = {
@@ -130,7 +130,7 @@ export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 1
 }
 
 export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000 }) {
-  subscribeWs([pair]);
+  const release = retainWsSubscription([pair]);
   let stopped = false;
   let lastSeen = 0;
   let lastPublishedTs = 0;
@@ -191,5 +191,6 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
   return () => {
     stopped = true;
     clearInterval(timer);
+    release();
   };
 }

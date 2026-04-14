@@ -95,26 +95,27 @@ export function RealtimeOHLCChartContainer({
     setCurrentPriceDirection('flat');
     setLastUpdateTime(null);
 
+    let disposed = false;
     let stopLiveFeed = () => {};
 
     (async () => {
       const historical = await fetchHistoricalBars({ pair, exchange, timeframe: activeTimeframe, limit: bootstrapBars });
-      if (runRef.current !== runId) return;
+      if (disposed || runRef.current !== runId) return;
       storeRef.current.replace(historical, activeTimeframe);
       setBars(storeRef.current.getBars());
       if (historical.length === 0) {
         setStatus('error');
       }
 
-      stopLiveFeed = createLiveFeed({
+      const nextStopLiveFeed = createLiveFeed({
         pair,
         exchange,
         onStatus(nextStatus) {
-          if (runRef.current !== runId) return;
+          if (disposed || runRef.current !== runId) return;
           setStatus((prev) => (nextStatus === 'live' && prev === 'error' ? 'live' : nextStatus));
         },
         onTick(tick) {
-          if (runRef.current !== runId) return;
+          if (disposed || runRef.current !== runId) return;
           const changed = storeRef.current.applyTick(tick);
           if (!changed) return;
           setBars(storeRef.current.getBars());
@@ -133,12 +134,18 @@ export function RealtimeOHLCChartContainer({
           setLastUpdateTime(tick.time);
         },
       });
+      if (disposed || runRef.current !== runId) {
+        nextStopLiveFeed();
+        return;
+      }
+      stopLiveFeed = nextStopLiveFeed;
     })().catch(() => {
-      if (runRef.current !== runId) return;
+      if (disposed || runRef.current !== runId) return;
       setStatus('error');
     });
 
     return () => {
+      disposed = true;
       stopLiveFeed();
     };
   }, [pair, exchange, activeTimeframe, bootstrapBars]);

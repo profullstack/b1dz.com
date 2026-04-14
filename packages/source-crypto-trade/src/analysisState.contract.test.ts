@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   __getAnalysisStateForTests,
+  __pruneInactivePairStateForTests,
   __resetTradeStateForTests,
   __seedAnalysisStateForTests,
   restorePersistedTradeState,
@@ -74,5 +75,25 @@ describe('analysis state persistence contract', () => {
       score: 84,
       direction: 'long',
     });
+  });
+
+  it('prunes inactive analysis state for pairs that are no longer eligible', () => {
+    __seedAnalysisStateForTests('kraken', 'BTC-USD', {
+      entryCandles: [{ time: 1, open: 100, high: 101, low: 99, close: 100, volume: 1 }],
+      confirmCandles: [],
+      biasCandles: [],
+      lastAnalysis: null,
+    });
+    __seedAnalysisStateForTests('coinbase', 'ETH-USD', {
+      entryCandles: [{ time: 1, open: 200, high: 201, low: 199, close: 200, volume: 1 }],
+      confirmCandles: [],
+      biasCandles: [],
+      lastAnalysis: null,
+    });
+
+    __pruneInactivePairStateForTests(['BTC-USD']);
+
+    expect(__getAnalysisStateForTests('kraken', 'BTC-USD')).not.toBeNull();
+    expect(__getAnalysisStateForTests('coinbase', 'ETH-USD')).toBeNull();
   });
 });
