@@ -109,7 +109,7 @@ export function renderChart({
         if (grid[row]?.[x] === ' ') grid[row][x] = colorize(glyphs.volume, color);
       }
     }
-    const label = `Vol ${formatCompactNumber(maxVolume)} (USD: $${formatCompactNumber(maxVolumeUsd)})`;
+    const label = `Vol ${formatCompactNumber(maxVolume)} ($${formatCompactNumber(maxVolumeUsd)})`;
     const labelRow = Math.max(0, plotRows - volumeOverlayRows);
     for (let i = 0; i < label.length; i += 1) {
       if (grid[labelRow]?.[plotWidth + i] != null) grid[labelRow][plotWidth + i] = colorize(label[i], 'cyan');
