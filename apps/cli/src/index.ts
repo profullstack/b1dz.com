@@ -99,6 +99,11 @@ Backtest:
     --exchange kraken|binance-us|coinbase  data source (default kraken)
     --limit 500                            max candles per pair (50-1000)
     --equity 100                           starting equity per pair (USD)
+    --fee 0.0026                           taker fee rate (default 0.003)
+                                           Kraken=0.0026, Binance.US=0.001,
+                                           Coinbase=0.006
+    --slippage 0.05                        per-side slippage %
+    --spread 0.05                          assumed spread %
   timeframes: 1m, 5m, 15m, 1h, 4h, 1d, 1w
   Active pairs are discovered the same way the live daemon picks them.
 

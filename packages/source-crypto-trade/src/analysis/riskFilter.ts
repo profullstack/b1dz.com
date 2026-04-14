@@ -5,6 +5,8 @@ export interface RiskFilterIndicators {
   atrPct: number;
   volumeRatio: number;
   spreadPct: number;
+  /** Projected target distance as % of entry price (ATR% × target ATR multiple) */
+  targetPct?: number;
 }
 
 export interface ScoredCandidate {
@@ -53,6 +55,17 @@ export function applyRiskFilters(input: RiskFilterInput): RiskFilterResult {
   }
   if (regime === 'sideways' && candidate.direction === 'long' && candidate.score < config.thresholds.strongBuyScoreInSideways) {
     rejectReasons.push(`sideways regime requires score >= ${config.thresholds.strongBuyScoreInSideways}`);
+  }
+
+  // Fee-clearance guard: require target distance to clear round-trip fees by a
+  // configured margin. Without this, a 0.3% ATR × 2.5 target = 0.75% target,
+  // which on a 0.6% taker fee (1.2% round-trip) is negative EV on every fill.
+  if (typeof indicators.targetPct === 'number') {
+    const roundTripFeePct = 2 * config.risk.assumedFeeRate * 100;
+    const minTargetPct = roundTripFeePct * config.thresholds.minTargetPctOverFees;
+    if (indicators.targetPct < minTargetPct) {
+      rejectReasons.push(`target ${indicators.targetPct.toFixed(3)}% < ${minTargetPct.toFixed(3)}% (${config.thresholds.minTargetPctOverFees}× round-trip fee)`);
+    }
   }
 
   return {

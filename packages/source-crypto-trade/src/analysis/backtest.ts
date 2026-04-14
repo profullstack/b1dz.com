@@ -39,7 +39,10 @@ interface OpenBacktestPosition {
 
 const DEFAULT_ASSUMPTIONS: BacktestAssumptions = {
   startingEquityUsd: 100,
-  feeRate: 0.006,
+  // Realistic blended taker fee: Kraken 0.26%, Binance.US 0.10%, Coinbase 0.60%.
+  // 0.3% is a weighted estimate assuming most volume on Kraken/Binance.US.
+  // Override with --fee 0.006 to model worst-case Coinbase-only costs.
+  feeRate: 0.003,
   slippagePct: 0.05,
   spreadPct: 0.05,
   latencyBars: 0,

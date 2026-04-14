@@ -16,17 +16,19 @@ export const DEFAULT_ANALYSIS_CONFIG = {
     volumeLookback: 20,
   },
   thresholds: {
-    minScore: 65,
+    minScore: 75,
     highConfidenceScore: 80,
     strongBuyScoreInSideways: 85,
     maxSpreadPct: 0.15,
     minVolumeRatio: 1.1,
     minAtrPct: 0.2,
+    minTargetPctOverFees: 1.5,
   },
   risk: {
     defaultAtrStopMultiple: 1.5,
     defaultAtrTargetMultiple: 2.5,
     cooldownBarsAfterLoss: 3,
+    assumedFeeRate: 0.003,
   },
 } as const;
 

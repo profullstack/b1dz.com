@@ -257,10 +257,13 @@ export function analyzeSignal(input: AnalysisInput): AnalysisSignal {
   }
 
   const best = candidates.sort((a, b) => b.score - a.score)[0] ?? null;
+  const targetPct = best?.takeProfit
+    ? Math.abs(best.takeProfit - latestEntry.close) / latestEntry.close * 100
+    : undefined;
   const riskFilter = applyRiskFilters({
     regime,
     candidate: best ? { direction: best.direction, setupType: best.setupType, score: best.score } : null,
-    indicators: { atrPct, volumeRatio, spreadPct },
+    indicators: { atrPct, volumeRatio, spreadPct, targetPct },
     cooldownActive: input.cooldownActive,
     killSwitchActive: input.killSwitchActive,
     config,

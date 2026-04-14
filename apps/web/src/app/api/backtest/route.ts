@@ -35,6 +35,9 @@ interface BacktestRequest {
   exchange?: string;
   limit?: number;
   equity?: number;
+  feeRate?: number;
+  slippagePct?: number;
+  spreadPct?: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -52,6 +55,9 @@ export async function POST(req: NextRequest) {
   }
   const limit = Math.max(50, Math.min(1000, Number(body.limit ?? 500)));
   const equity = Math.max(1, Number(body.equity ?? 100));
+  const feeRate = Number.isFinite(Number(body.feeRate)) ? Math.max(0, Math.min(0.05, Number(body.feeRate))) : undefined;
+  const slippagePct = Number.isFinite(Number(body.slippagePct)) ? Math.max(0, Math.min(5, Number(body.slippagePct))) : undefined;
+  const spreadPct = Number.isFinite(Number(body.spreadPct)) ? Math.max(0, Math.min(5, Number(body.spreadPct))) : undefined;
 
   const pairs = Array.isArray(body.pairs) && body.pairs.length > 0
     ? body.pairs.map(String).filter(Boolean)
@@ -79,11 +85,15 @@ export async function POST(req: NextRequest) {
         skipped++;
         continue;
       }
+      const assumptions: Record<string, number> = { startingEquityUsd: equity };
+      if (feeRate !== undefined) assumptions.feeRate = feeRate;
+      if (slippagePct !== undefined) assumptions.slippagePct = slippagePct;
+      if (spreadPct !== undefined) assumptions.spreadPct = spreadPct;
       const result = runBacktest({
         symbol: pair,
         exchange,
         candles,
-        assumptions: { startingEquityUsd: equity },
+        assumptions,
       });
       perPair.push({ pair, candles: candles.length, result, error: null });
       aggregateTrades.push(...result.trades);

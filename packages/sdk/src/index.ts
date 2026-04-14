@@ -26,6 +26,10 @@ export interface BacktestRunOptions {
   exchange?: 'kraken' | 'binance-us' | 'coinbase';
   limit?: number;
   equity?: number;
+  /** Taker fee as decimal, e.g. 0.0026 for 0.26% Kraken. Default 0.003 blended. */
+  feeRate?: number;
+  slippagePct?: number;
+  spreadPct?: number;
 }
 
 export interface BacktestAggregateBucket { trades: number; netPnl: number; wins: number; losses: number; }

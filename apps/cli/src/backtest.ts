@@ -13,6 +13,9 @@ function parseArgs(argv: string[]): {
   exchange: Exchange;
   limit: number;
   equity: number;
+  feeRate: number | undefined;
+  slippagePct: number | undefined;
+  spreadPct: number | undefined;
 } {
   const positional: string[] = [];
   const flags: Record<string, string> = {};
@@ -46,7 +49,15 @@ function parseArgs(argv: string[]): {
   }
   const limit = Math.max(50, Math.min(1000, Number.parseInt(flags.limit ?? '500', 10)));
   const equity = Math.max(1, Number.parseFloat(flags.equity ?? '100'));
-  return { timeframe, pairs, exchange, limit, equity };
+  const parseOptionalNumber = (key: string): number | undefined => {
+    if (!(key in flags)) return undefined;
+    const n = Number.parseFloat(flags[key]);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const feeRate = parseOptionalNumber('fee');
+  const slippagePct = parseOptionalNumber('slippage');
+  const spreadPct = parseOptionalNumber('spread');
+  return { timeframe, pairs, exchange, limit, equity, feeRate, slippagePct, spreadPct };
 }
 
 function fmtPct(value: number): string {
@@ -96,13 +107,17 @@ function buildClient(): B1dzClient {
 }
 
 export async function runBacktestCli(argv: string[]): Promise<void> {
-  const { timeframe, pairs, exchange, limit, equity } = parseArgs(argv);
+  const { timeframe, pairs, exchange, limit, equity, feeRate, slippagePct, spreadPct } = parseArgs(argv);
   const client = buildClient();
 
   const opts: BacktestRunOptions = { timeframe, exchange, limit, equity };
   if (pairs) opts.pairs = pairs;
+  if (feeRate !== undefined) opts.feeRate = feeRate;
+  if (slippagePct !== undefined) opts.slippagePct = slippagePct;
+  if (spreadPct !== undefined) opts.spreadPct = spreadPct;
 
-  console.log(`b1dz backtest → api  tf=${timeframe}  exchange=${exchange}  pairs=${pairs ? pairs.length : 'active'}  limit=${limit}  equity=$${equity}`);
+  const feeLabel = feeRate !== undefined ? `${(feeRate * 100).toFixed(3)}%` : '0.300% (default)';
+  console.log(`b1dz backtest → api  tf=${timeframe}  exchange=${exchange}  pairs=${pairs ? pairs.length : 'active'}  limit=${limit}  equity=$${equity}  fee=${feeLabel}`);
   process.stdout.write('  running on server...');
 
   const start = Date.now();
