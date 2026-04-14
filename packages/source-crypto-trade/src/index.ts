@@ -88,8 +88,8 @@ const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%
 /** Cooldown after closing a position before opening another. */
 const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes (was 10)
 
-/** Max daily loss before halting trades. */
-const DAILY_LOSS_LIMIT_USD = 5;
+/** Max daily loss before halting trades. Disabled during active development/testing. */
+const DAILY_LOSS_LIMIT_USD = Number.POSITIVE_INFINITY;
 const WARMUP_TICKS = 20;
 
 // ─── State ─────────────────────────────────────────────────────
