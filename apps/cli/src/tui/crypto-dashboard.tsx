@@ -711,7 +711,9 @@ function DashboardInner() {
   const primaryChartWidthPct = 39;
   const secondaryChartWidthPct = 39;
   const chartControlsWidthPct = 22;
-  const chartRenderWidth = Math.max(34, Math.floor((process.stdout.columns ?? 120) * 0.33));
+  const screenCols = process.stdout.columns ?? 120;
+  const primaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (primaryChartWidthPct / 100)) - 3);
+  const secondaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (secondaryChartWidthPct / 100)) - 3);
   const footerTop = 2 + posH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
@@ -786,7 +788,7 @@ function DashboardInner() {
         top={chartTop}
         left={0}
         height={chartH}
-        width={chartRenderWidth}
+        width={primaryChartRenderWidth}
         boxWidth={`${primaryChartWidthPct}%`}
         label={` Chart A  ${activeChartPair} @ ${chartExchange}  TF:${chartTimeframe} `}
         pair={activeChartPair}
@@ -799,7 +801,7 @@ function DashboardInner() {
         top={chartTop}
         left={`${primaryChartWidthPct}%` as any}
         height={chartH}
-        width={chartRenderWidth}
+        width={secondaryChartRenderWidth}
         boxWidth={`${secondaryChartWidthPct}%`}
         label={` Chart B  ${secondaryChartPair} @ ${secondaryChartExchange}  TF:${chartTimeframe} `}
         pair={secondaryChartPair}

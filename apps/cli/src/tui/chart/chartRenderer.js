@@ -69,7 +69,7 @@ export function renderChart({
   ascii = false,
 }) {
   const headerWidth = Math.max(20, width);
-  const rightLabelWidth = 12;
+  const rightLabelWidth = 20;
   const plotWidth = Math.max(12, headerWidth - rightLabelWidth - 1);
   const barStride = 3;
   const glyphs = ascii ? ASCII_GLYPHS : UNICODE_GLYPHS;
