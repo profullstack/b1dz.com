@@ -174,6 +174,24 @@ describe('POST /api/backtest', () => {
     expect(fetchHistoricalCandlesMock).toHaveBeenCalledWith('kraken', 'BTC-USD', '5m', 50);
   });
 
+  it('runs all three exchanges when exchange="all"', async () => {
+    fetchHistoricalCandlesMock.mockResolvedValue(makeCandles(200));
+    runBacktestMock.mockReturnValue({ trades: [{ netPnl: 1, grossPnl: 2, fees: 1 }], metrics: stubMetrics() });
+    const { POST } = await importRoute();
+    const res = await POST(makeReq({ timeframe: '5m', exchange: 'all', pairs: ['BTC-USD'] }) as any);
+    expect(res.status).toBe(200);
+    expect(fetchHistoricalCandlesMock).toHaveBeenCalledTimes(3);
+    const exchangesCalled = fetchHistoricalCandlesMock.mock.calls.map((c) => c[0]);
+    expect(new Set(exchangesCalled)).toEqual(new Set(['kraken', 'binance-us', 'coinbase']));
+    const body = await res.json();
+    expect(body.exchangesRan).toEqual(['kraken', 'binance-us', 'coinbase']);
+    expect(body.perExchange).toHaveProperty('kraken');
+    expect(body.perExchange).toHaveProperty('binance-us');
+    expect(body.perExchange).toHaveProperty('coinbase');
+    expect(body.pairs).toHaveLength(3); // 1 pair × 3 exchanges
+    expect(body.summary.pairsRequested).toBe(3); // 1 × 3
+  });
+
   it('never imports or invokes the trade-execution path', async () => {
     fetchHistoricalCandlesMock.mockResolvedValue(makeCandles(200));
     runBacktestMock.mockReturnValue({ trades: [{ netPnl: 1 }], metrics: stubMetrics() });

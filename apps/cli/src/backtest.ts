@@ -2,7 +2,7 @@ import { B1dzClient, type BacktestRunOptions, type BacktestRunResponse } from '@
 import { loadCredentials } from './auth.js';
 
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
-const EXCHANGES = ['kraken', 'binance-us', 'coinbase'] as const;
+const EXCHANGES = ['kraken', 'binance-us', 'coinbase', 'all'] as const;
 
 type Timeframe = typeof TIMEFRAMES[number];
 type Exchange = typeof EXCHANGES[number];
@@ -82,9 +82,10 @@ function formatBucketTable(title: string, buckets: Record<string, { trades: numb
   return lines.join('\n');
 }
 
-function printPairSummary(label: string, pair: BacktestRunResponse['pairs'][number]): void {
+function printPairSummary(pair: BacktestRunResponse['pairs'][number]): void {
+  const label = `${pair.exchange ?? '?'}:${pair.pair}`;
   if (!pair.result) {
-    console.log(`  ${label.padEnd(22)} ${pair.error ?? 'no result'}`);
+    console.log(`  ${label.padEnd(30)} ${pair.error ?? 'no result'}`);
     return;
   }
   const m = pair.result.metrics;
@@ -92,7 +93,7 @@ function printPairSummary(label: string, pair: BacktestRunResponse['pairs'][numb
   const trades = String(pair.result.trades.length).padStart(3);
   const ret = fmtPct(m.totalReturn).padStart(8);
   const win = `${m.winRate.toFixed(0).padStart(3)}%`;
-  console.log(`  ${label.padEnd(22)} trades=${trades}  ret=${ret}  win=${win}  pf=${pf.padStart(5)}  DD=${m.maxDrawdown.toFixed(1).padStart(4)}%`);
+  console.log(`  ${label.padEnd(30)} trades=${trades}  ret=${ret}  win=${win}  pf=${pf.padStart(5)}  DD=${m.maxDrawdown.toFixed(1).padStart(4)}%`);
 }
 
 function buildClient(): B1dzClient {
@@ -131,7 +132,15 @@ export async function runBacktestCli(argv: string[]): Promise<void> {
   console.log(` done in ${((Date.now() - start) / 1000).toFixed(1)}s (server ${response.summary.durationMs}ms)\n`);
 
   for (const pair of response.pairs) {
-    printPairSummary(`${response.exchange}:${pair.pair}`, pair);
+    printPairSummary(pair);
+  }
+
+  if (response.perExchange && Object.keys(response.perExchange).length > 1) {
+    console.log('\n── per exchange ──');
+    const exchanges = Object.entries(response.perExchange).sort((a, b) => b[1].netPnl - a[1].netPnl);
+    for (const [ex, stats] of exchanges) {
+      console.log(`  ${ex.padEnd(12)} trades=${String(stats.trades).padStart(4)}  net=${fmtUsd(stats.netPnl)}  gross=${fmtUsd(stats.grossPnl)}  fees=${fmtUsd(-stats.fees)}  pairs=${stats.succeeded}/${stats.succeeded + stats.skipped + stats.failed}`);
+    }
   }
 
   const m = response.aggregate.metrics;

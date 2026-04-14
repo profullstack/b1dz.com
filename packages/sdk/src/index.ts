@@ -23,7 +23,7 @@ export interface DealDashCreds { phpsessid: string; rememberme: string; savedAt?
 export interface BacktestRunOptions {
   timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
   pairs?: string[];
-  exchange?: 'kraken' | 'binance-us' | 'coinbase';
+  exchange?: 'kraken' | 'binance-us' | 'coinbase' | 'all';
   limit?: number;
   equity?: number;
   /** Taker fee as decimal, e.g. 0.0026 for 0.26% Kraken. Default 0.003 blended. */
@@ -35,6 +35,7 @@ export interface BacktestRunOptions {
 export interface BacktestAggregateBucket { trades: number; netPnl: number; wins: number; losses: number; }
 export interface BacktestPairResult {
   pair: string;
+  exchange?: string;
   candles: number;
   result: {
     trades: unknown[];
@@ -56,9 +57,21 @@ export interface BacktestPairResult {
   error: string | null;
 }
 
+export interface BacktestPerExchangeSummary {
+  trades: number;
+  netPnl: number;
+  grossPnl: number;
+  fees: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+}
+
 export interface BacktestRunResponse {
   timeframe: string;
   exchange: string;
+  exchangesRan?: string[];
+  perExchange?: Record<string, BacktestPerExchangeSummary>;
   limit: number;
   equity: number;
   pairs: BacktestPairResult[];

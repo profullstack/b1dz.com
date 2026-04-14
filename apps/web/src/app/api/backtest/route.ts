@@ -25,7 +25,8 @@ import { getActivePairs } from '@b1dz/source-crypto-arb';
 import { authenticate, unauthorized } from '@/lib/api-auth';
 
 const TIMEFRAMES: readonly AnalysisTimeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'];
-const EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase']);
+const EXCHANGE_LIST = ['kraken', 'binance-us', 'coinbase'] as const;
+const EXCHANGES = new Set<string>(EXCHANGE_LIST);
 
 export const maxDuration = 300;
 
@@ -49,9 +50,14 @@ export async function POST(req: NextRequest) {
   if (!TIMEFRAMES.includes(timeframe)) {
     return Response.json({ error: `invalid timeframe "${timeframe}"`, validTimeframes: TIMEFRAMES }, { status: 400 });
   }
-  const exchange = (body.exchange ?? 'kraken').toLowerCase();
-  if (!EXCHANGES.has(exchange)) {
-    return Response.json({ error: `invalid exchange "${exchange}"`, validExchanges: [...EXCHANGES] }, { status: 400 });
+  const rawExchange = (body.exchange ?? 'kraken').toLowerCase();
+  const exchangesToRun: string[] = rawExchange === 'all'
+    ? [...EXCHANGE_LIST]
+    : [rawExchange];
+  for (const ex of exchangesToRun) {
+    if (!EXCHANGES.has(ex)) {
+      return Response.json({ error: `invalid exchange "${ex}"`, validExchanges: ['all', ...EXCHANGE_LIST] }, { status: 400 });
+    }
   }
   const limit = Math.max(50, Math.min(1000, Number(body.limit ?? 500)));
   const equity = Math.max(1, Number(body.equity ?? 100));
@@ -68,40 +74,51 @@ export async function POST(req: NextRequest) {
   }
 
   const startedAt = Date.now();
-  console.log(`[api/backtest] user=${auth.userId.slice(0, 8)} tf=${timeframe} exchange=${exchange} pairs=${pairs.length} limit=${limit}`);
+  console.log(`[api/backtest] user=${auth.userId.slice(0, 8)} tf=${timeframe} exchange=${exchangesToRun.join(',')} pairs=${pairs.length} limit=${limit}`);
 
-  const perPair: Array<{ pair: string; candles: number; result: BacktestResult | null; error: string | null }> = [];
+  const perPair: Array<{ pair: string; exchange: string; candles: number; result: BacktestResult | null; error: string | null }> = [];
   const aggregateTrades: BacktestTrade[] = [];
+  const perExchange: Record<string, { trades: number; netPnl: number; grossPnl: number; fees: number; succeeded: number; skipped: number; failed: number }> = {};
   let succeeded = 0;
   let skipped = 0;
   let failed = 0;
   let totalCandles = 0;
 
-  for (const pair of pairs) {
-    try {
-      const candles = await fetchHistoricalCandles(exchange, pair, timeframe, limit);
-      if (candles.length < 50) {
-        perPair.push({ pair, candles: candles.length, result: null, error: 'insufficient candles' });
-        skipped++;
-        continue;
+  for (const ex of exchangesToRun) {
+    perExchange[ex] = { trades: 0, netPnl: 0, grossPnl: 0, fees: 0, succeeded: 0, skipped: 0, failed: 0 };
+    for (const pair of pairs) {
+      try {
+        const candles = await fetchHistoricalCandles(ex, pair, timeframe, limit);
+        if (candles.length < 50) {
+          perPair.push({ pair, exchange: ex, candles: candles.length, result: null, error: 'insufficient candles' });
+          skipped++;
+          perExchange[ex].skipped++;
+          continue;
+        }
+        const assumptions: Record<string, number> = { startingEquityUsd: equity };
+        if (feeRate !== undefined) assumptions.feeRate = feeRate;
+        if (slippagePct !== undefined) assumptions.slippagePct = slippagePct;
+        if (spreadPct !== undefined) assumptions.spreadPct = spreadPct;
+        const result = runBacktest({
+          symbol: pair,
+          exchange: ex,
+          candles,
+          assumptions,
+        });
+        perPair.push({ pair, exchange: ex, candles: candles.length, result, error: null });
+        aggregateTrades.push(...result.trades);
+        totalCandles += candles.length;
+        succeeded++;
+        perExchange[ex].succeeded++;
+        perExchange[ex].trades += result.trades.length;
+        perExchange[ex].netPnl += result.trades.reduce((sum, t) => sum + t.netPnl, 0);
+        perExchange[ex].grossPnl += result.trades.reduce((sum, t) => sum + t.grossPnl, 0);
+        perExchange[ex].fees += result.trades.reduce((sum, t) => sum + t.fees, 0);
+      } catch (e) {
+        perPair.push({ pair, exchange: ex, candles: 0, result: null, error: (e as Error).message.slice(0, 160) });
+        failed++;
+        perExchange[ex].failed++;
       }
-      const assumptions: Record<string, number> = { startingEquityUsd: equity };
-      if (feeRate !== undefined) assumptions.feeRate = feeRate;
-      if (slippagePct !== undefined) assumptions.slippagePct = slippagePct;
-      if (spreadPct !== undefined) assumptions.spreadPct = spreadPct;
-      const result = runBacktest({
-        symbol: pair,
-        exchange,
-        candles,
-        assumptions,
-      });
-      perPair.push({ pair, candles: candles.length, result, error: null });
-      aggregateTrades.push(...result.trades);
-      totalCandles += candles.length;
-      succeeded++;
-    } catch (e) {
-      perPair.push({ pair, candles: 0, result: null, error: (e as Error).message.slice(0, 160) });
-      failed++;
     }
   }
 
@@ -117,10 +134,12 @@ export async function POST(req: NextRequest) {
 
   return Response.json({
     timeframe,
-    exchange,
+    exchange: rawExchange,
+    exchangesRan: exchangesToRun,
     limit,
     equity,
     pairs: perPair,
+    perExchange,
     aggregate: {
       trades: aggregateTrades.length,
       candles: totalCandles,
@@ -134,6 +153,6 @@ export async function POST(req: NextRequest) {
       winningPairs: perPair.filter((p) => p.result && p.result.metrics.totalReturn > 0).length,
       losingPairs: perPair.filter((p) => p.result && p.result.metrics.totalReturn < 0).length,
     },
-    summary: { succeeded, skipped, failed, pairsRequested: pairs.length, durationMs },
+    summary: { succeeded, skipped, failed, pairsRequested: pairs.length * exchangesToRun.length, durationMs },
   });
 }

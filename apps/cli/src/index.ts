@@ -96,7 +96,7 @@ Dashboard:
 Backtest:
   b1dz backtest <tf>                       backtest on all active pairs
     --pair BTC-USD,ETH-USD                 override: specific pairs only
-    --exchange kraken|binance-us|coinbase  data source (default kraken)
+    --exchange kraken|binance-us|coinbase|all  data source (default kraken)
     --limit 500                            max candles per pair (50-1000)
     --equity 100                           starting equity per pair (USD)
     --fee 0.0026                           taker fee rate (default 0.003)
