@@ -20,6 +20,44 @@ v6 adds two major addendums on top of the original PRD:
 
 ---
 
+## Next session pickup
+
+State as of last session close:
+- Repo: `profullstack/b1dz.com` on `master`, all work pushed.
+- Tests: 476 passing across 21 files, 0 failures.
+- `docs/LAUNCH-RUNBOOK.md` is the canonical deploy checklist.
+
+**Ready to run, no code needed:**
+- `b1dz v2-daemon --mode=observe` — full pipeline, no wallet risk.
+- `b1dz v2-daemon --mode=paper` — simulated fills, same risk gates.
+
+**To enable live trading — pick ONE to start:**
+1. Write a concrete `Executor` for a specific venue/pair. Simplest:
+   Uniswap V3 on Base with `$5` cap. The runbook has a ~30-line
+   wiring example.
+2. Write the Solana Executor wrapper (all the modules ship in
+   `@b1dz/adapters-solana` — just need the thin class that conforms
+   to `Executor` from `@b1dz/trade-daemon`).
+3. Write the Gemini CEX Executor (quotes work; trading via REST is
+   not yet wrapped as an `Executor`).
+
+**Recommended order when resuming:**
+1. Fire `b1dz v2-daemon --mode=observe` against prod for 24h.
+2. Review what opportunities actually show up, pick the venue/pair
+   with the most realistic edge, and write that Executor first.
+3. Paper for 48h.
+4. Live on Base with $5 cap per the runbook smoke-test sequence.
+
+**Outstanding polish before meaningful capital:**
+- Auto-trip circuit on gas spikes (`isGasSpike()` hook already exists
+  — just needs a ~5-line caller in the daemon tick loop).
+- Daemon auto-calls inventory `markPending` after broadcast and
+  `settle` after receipt (currently the Executor must call these).
+- Pump.fun live rule engine (PRD §17) — biggest remaining chunk, not
+  blocking anything else.
+
+---
+
 ## Phase 1 — Normalized Quote Infrastructure (PRD §29 Phase 1)
 
 ### Shared types + interfaces (PRD §13, §14)
