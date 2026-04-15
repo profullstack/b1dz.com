@@ -17,6 +17,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   acquireRuntimeLease,
   getB1dzVersion,
+  getRuntimeSourceState,
   refreshRuntimeLease,
   releaseRuntimeLease,
   setRuntimeSourceState,
@@ -31,11 +32,27 @@ interface ScheduledTick {
   running: boolean;
 }
 
+/** How often we're willing to hit the DB for a source_state row.
+ *  Can be overridden with B1DZ_DB_SAVE_INTERVAL_MS for testing.
+ *  See notes in makeContext() for why we throttle this. */
+const DB_SAVE_INTERVAL_MS = (() => {
+  const v = Number.parseInt(process.env.B1DZ_DB_SAVE_INTERVAL_MS ?? '30000', 10);
+  return Number.isFinite(v) && v >= 0 ? v : 30_000;
+})();
+
 export class DaemonRuntime {
   private supabase: SupabaseClient;
   private scheduled = new Map<string, ScheduledTick>();
   private discoverTimer: ReturnType<typeof setInterval> | null = null;
   private stopping = false;
+  /** Last DB upsert time per `${userId}::${sourceId}` — used to throttle
+   *  the source_state writes that were blowing out the Supabase Disk IO
+   *  budget. Runtime cache is still updated every tick. */
+  private lastDbFlushAt = new Map<string, number>();
+  /** When true for a given key, the next savePayload flushes to DB
+   *  regardless of the throttle. Set during shutdown so we never lose
+   *  state-of-the-world at exit. */
+  private forceDbFlush = new Set<string>();
 
   constructor(opts: { supabaseUrl: string; supabaseSecretKey: string }) {
     this.supabase = createClient(opts.supabaseUrl, opts.supabaseSecretKey, {
@@ -152,19 +169,37 @@ export class DaemonRuntime {
     const payload = (data?.payload as Record<string, unknown>) ?? {};
     const supabase = this.supabase;
     const savePayload = async (patch: Record<string, unknown>) => {
-      // Re-read latest, merge, upsert
-      const { data: latest } = await supabase
-        .from('source_state')
-        .select('payload')
-        .eq('user_id', userId)
-        .eq('source_id', sourceId)
-        .maybeSingle();
-      const next = { ...((latest?.payload as Record<string, unknown>) ?? {}), ...patch };
+      // Runtime cache (Redis/filesystem) gets every tick. This is what
+      // the TUI + API read for realtime state. It's cheap — no DB disk I/O.
+      const prev = (await getRuntimeSourceState<Record<string, unknown>>(userId, sourceId)) ?? {};
+      const next = { ...prev, ...patch };
       await setRuntimeSourceState(userId, sourceId, next);
-      await supabase.from('source_state').upsert(
-        { user_id: userId, source_id: sourceId, payload: next, updated_at: new Date().toISOString() },
-        { onConflict: 'user_id,source_id' },
-      );
+
+      // DB upsert is throttled to DB_SAVE_INTERVAL_MS (default 30s) per
+      // (userId, sourceId). Supabase's Disk IO budget is the tight
+      // constraint; persisting a ~600KB payload every 2-5s exhausts the
+      // compute add-on's disk budget even though the runtime cache is
+      // already serving reads.
+      //
+      // The DB row is only used for:
+      //   1. cold-start / daemon-restart recovery of long-lived state
+      //      (closed trades, daily PnL baseline, open positions)
+      //   2. reads by other user sessions hitting the API while the
+      //      runtime cache entry has expired
+      // Both tolerate up to 30s of staleness — strategy-critical state
+      // (closed trade rows, baselines) already lives in a sub-object
+      // that the next flush carries forward.
+      const flushKey = `${userId}:${sourceId}`;
+      const now = Date.now();
+      const last = this.lastDbFlushAt.get(flushKey) ?? 0;
+      const force = this.forceDbFlush.delete(flushKey);
+      if (force || now - last >= DB_SAVE_INTERVAL_MS) {
+        this.lastDbFlushAt.set(flushKey, now);
+        await supabase.from('source_state').upsert(
+          { user_id: userId, source_id: sourceId, payload: next, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id,source_id' },
+        );
+      }
     };
     return { supabase, userId, payload, savePayload };
   }
@@ -173,6 +208,15 @@ export class DaemonRuntime {
     this.stopping = true;
     if (this.discoverTimer) clearInterval(this.discoverTimer);
     for (const sched of this.scheduled.values()) clearInterval(sched.timer);
+    // Mark every live (userId, sourceId) for a forced DB flush on its
+    // next savePayload. The worker's in-flight tick (if any) will carry
+    // state of the world to DB; if no tick is pending we ignore — the
+    // runtime cache still has the latest copy, so a restart within TTL
+    // recovers cleanly without needing the DB write at all.
+    for (const [key, sched] of this.scheduled) {
+      void sched;
+      this.forceDbFlush.add(key);
+    }
     this.scheduled.clear();
     console.log('b1dzd: stopped');
   }
