@@ -5,6 +5,7 @@ import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
 import { setWsLogger } from '@b1dz/source-crypto-arb';
+import { fetchNews, openUrl, formatNewsTs, type NewsItem } from './news-feed.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
@@ -267,9 +268,12 @@ function DashboardInner() {
   const [tickCount, setTickCount] = useState(0);
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [logTab, setLogTab] = useState<'activity' | 'logs'>('activity');
+  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news'>('activity');
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [newsPage, setNewsPage] = useState(0);
+  const [newsError, setNewsError] = useState<string | null>(null);
   const [chartPair, setChartPair] = useState<string | null>(null);
   const [chartPairB, setChartPairB] = useState<string | null>(null);
   const [chartExchangeA, setChartExchangeA] = useState<string | null>(null);
@@ -352,13 +356,11 @@ function DashboardInner() {
         return next;
       });
     };
-    const tabHandler = (tab: 'activity' | 'logs') => setLogTab(tab);
+    const tabHandler = (tab: 'activity' | 'logs' | 'news') => setLogTab(tab);
     const pageHandler = (delta: number) => {
-      if (logTab === 'activity') {
-        setActivityPage((prev) => Math.max(0, prev + delta));
-      } else {
-        setRawPage((prev) => Math.max(0, prev + delta));
-      }
+      if (logTab === 'activity') setActivityPage((prev) => Math.max(0, prev + delta));
+      else if (logTab === 'logs') setRawPage((prev) => Math.max(0, prev + delta));
+      else setNewsPage((prev) => Math.max(0, prev + delta));
     };
     const timeframeHandler = (next: ChartTimeframe) => {
       selectChartTimeframe(next);
@@ -529,6 +531,27 @@ function DashboardInner() {
     init();
     const timer = setInterval(poll, 3000);
     return () => { active = false; clearInterval(timer); };
+  }, []);
+
+  // Poll brisk.news every 15s
+  useEffect(() => {
+    let active = true;
+    const ctl = new AbortController();
+    const load = async () => {
+      try {
+        const items = await fetchNews(ctl.signal);
+        if (!active) return;
+        setNews(items);
+        setNewsError(null);
+      } catch (e) {
+        if (!active) return;
+        const msg = (e as Error).message;
+        if (msg && msg !== 'The operation was aborted.') setNewsError(msg);
+      }
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => { active = false; ctl.abort(); clearInterval(timer); };
   }, []);
 
   // ── Render data ──
@@ -965,10 +988,33 @@ function DashboardInner() {
 
   const pagedActivity = paginateNewestFirst(activityLines, activityPage);
   const pagedRaw = paginateNewestFirst(rawLogLines, rawPage);
-  const footerLines = logTab === 'activity' ? pagedActivity.pageLines : pagedRaw.pageLines;
-  const footerPage = logTab === 'activity' ? pagedActivity.page : pagedRaw.page;
-  const footerPages = logTab === 'activity' ? pagedActivity.totalPages : pagedRaw.totalPages;
-  const footerLabel = `${logTab === 'activity' ? 'Activity' : 'Logs'}  page ${footerPage + 1}/${footerPages}  ([ ] or PgUp/PgDn, C-b/C-f)`;
+
+  const newsTotalPages = Math.max(1, Math.ceil(news.length / footerPageSize));
+  const newsSafePage = Math.min(newsPage, newsTotalPages - 1);
+  const newsStart = newsSafePage * footerPageSize;
+  const pagedNews = news.slice(newsStart, newsStart + footerPageSize);
+
+  let footerLines: string[];
+  let footerPage: number;
+  let footerPages: number;
+  let footerTabLabel: string;
+  if (logTab === 'activity') {
+    footerLines = pagedActivity.pageLines;
+    footerPage = pagedActivity.page;
+    footerPages = pagedActivity.totalPages;
+    footerTabLabel = 'Activity';
+  } else if (logTab === 'logs') {
+    footerLines = pagedRaw.pageLines;
+    footerPage = pagedRaw.page;
+    footerPages = pagedRaw.totalPages;
+    footerTabLabel = 'Logs';
+  } else {
+    footerLines = [];
+    footerPage = newsSafePage;
+    footerPages = newsTotalPages;
+    footerTabLabel = 'News';
+  }
+  const footerLabel = `${footerTabLabel}  page ${footerPage + 1}/${footerPages}  ([ ] or PgUp/PgDn, C-b/C-f)`;
 
   return (
     <>
@@ -999,6 +1045,17 @@ function DashboardInner() {
         tags={true}
         style={{ bg: logTab === 'logs' ? 'cyan' : 'black', fg: logTab === 'logs' ? 'black' : 'white' }}
         content=" Logs " />
+      <box
+        top={1}
+        left={23}
+        width={8}
+        height={1}
+        mouse={true}
+        clickable={true}
+        onClick={() => setLogTab('news')}
+        tags={true}
+        style={{ bg: logTab === 'news' ? 'magenta' : 'black', fg: logTab === 'news' ? 'black' : 'white' }}
+        content=" News " />
 
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
@@ -1233,8 +1290,27 @@ function DashboardInner() {
       <box label={` ${footerLabel} `} top={footerTop} left={0} width="100%"
         height={footerH}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
-        style={{ border: { fg: 'gray' }, bg: 'black', fg: 'white' }}
-        content={footerLines.join('\n') || (logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...')} />
+        style={{ border: { fg: logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
+        content={logTab === 'news'
+          ? (news.length === 0
+              ? (newsError ? ` {red-fg}news error: ${newsError.slice(0, 80)}{/red-fg}` : ' Loading crypto news...')
+              : '')
+          : (footerLines.join('\n') || (logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
+      {logTab === 'news' && pagedNews.map((item, index) => (
+        <box
+          key={`news-row-${newsSafePage}-${index}-${item.uuid}`}
+          top={footerTop + 1 + index}
+          left={1}
+          width={'100%-3' as any}
+          height={1}
+          mouse={true}
+          clickable={true}
+          tags={true}
+          onClick={() => openUrl(item.url)}
+          style={{ bg: 'black', fg: 'white', hover: { bg: 'blue' } }}
+          content={` {white-fg}${formatNewsTs(item.publishedAt)}{/}  {cyan-fg}${(item.source || '').slice(0, 14).padEnd(14)}{/}  ${item.title}`}
+        />
+      ))}
     </>
   );
 }

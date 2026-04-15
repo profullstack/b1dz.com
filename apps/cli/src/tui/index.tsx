@@ -36,6 +36,10 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'logs');
   });
 
+  screen.key(['n'], () => {
+    tuiEvents.emit('set-log-tab', 'news');
+  });
+
   screen.key(['1'], () => tuiEvents.emit('set-chart-timeframe', '1m'));
   screen.key(['2'], () => tuiEvents.emit('set-chart-timeframe', '5m'));
   screen.key(['3'], () => tuiEvents.emit('set-chart-timeframe', '15m'));
