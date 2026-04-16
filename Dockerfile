@@ -34,6 +34,19 @@ COPY packages/storage-b1dz-api/package.json packages/storage-b1dz-api/
 COPY packages/source-dealdash/package.json packages/source-dealdash/
 COPY packages/source-crypto-arb/package.json packages/source-crypto-arb/
 COPY packages/source-crypto-trade/package.json packages/source-crypto-trade/
+COPY packages/venue-types/package.json packages/venue-types/
+COPY packages/profitability/package.json packages/profitability/
+COPY packages/event-channel/package.json packages/event-channel/
+COPY packages/observe-engine/package.json packages/observe-engine/
+COPY packages/trade-daemon/package.json packages/trade-daemon/
+COPY packages/adapters-cex/package.json packages/adapters-cex/
+COPY packages/adapters-evm/package.json packages/adapters-evm/
+COPY packages/adapters-solana/package.json packages/adapters-solana/
+COPY packages/wallet-service/package.json packages/wallet-service/
+COPY packages/wallet-provider/package.json packages/wallet-provider/
+COPY packages/wallet-direct/package.json packages/wallet-direct/
+COPY packages/wallet-coinpay/package.json packages/wallet-coinpay/
+COPY packages/inventory/package.json packages/inventory/
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # ---- build ----

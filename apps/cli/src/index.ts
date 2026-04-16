@@ -83,6 +83,16 @@ function makeRuntime() {
 function help() {
   console.log(`b1dz — multi-source profit monitor
 
+At a glance:
+  Dashboard:          b1dz tui
+  Backtesting:        b1dz backtest <tf>
+  Spread/edge audit:  b1dz audit-arb
+  Live quotes (v2):   b1dz observe        (CEX + DEX multi-venue)
+  Decision loop:      b1dz v2-daemon      (observer + paper/live)
+  Discovery:          b1dz pumpfun discover
+  Headless sources:   b1dz crypto-arb run | crypto-trade run | all
+  Alert stream:       b1dz alerts
+
 Auth:
   b1dz signup           create an account (email + password)
   b1dz login            sign in to an existing account

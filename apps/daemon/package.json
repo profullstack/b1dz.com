@@ -15,10 +15,17 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@b1dz/adapters-cex": "workspace:*",
+    "@b1dz/adapters-evm": "workspace:*",
+    "@b1dz/adapters-solana": "workspace:*",
     "@b1dz/core": "workspace:*",
-    "@b1dz/storage-supabase": "workspace:*",
+    "@b1dz/event-channel": "workspace:*",
+    "@b1dz/observe-engine": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
+    "@b1dz/storage-supabase": "workspace:*",
+    "@b1dz/trade-daemon": "workspace:*",
+    "@b1dz/venue-types": "workspace:*",
     "@supabase/supabase-js": "latest",
     "tsx": "latest"
   },

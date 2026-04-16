@@ -123,9 +123,24 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@b1dz/adapters-cex':
+        specifier: workspace:*
+        version: link:../../packages/adapters-cex
+      '@b1dz/adapters-evm':
+        specifier: workspace:*
+        version: link:../../packages/adapters-evm
+      '@b1dz/adapters-solana':
+        specifier: workspace:*
+        version: link:../../packages/adapters-solana
       '@b1dz/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@b1dz/event-channel':
+        specifier: workspace:*
+        version: link:../../packages/event-channel
+      '@b1dz/observe-engine':
+        specifier: workspace:*
+        version: link:../../packages/observe-engine
       '@b1dz/source-crypto-arb':
         specifier: workspace:*
         version: link:../../packages/source-crypto-arb
@@ -135,6 +150,12 @@ importers:
       '@b1dz/storage-supabase':
         specifier: workspace:*
         version: link:../../packages/storage-supabase
+      '@b1dz/trade-daemon':
+        specifier: workspace:*
+        version: link:../../packages/trade-daemon
+      '@b1dz/venue-types':
+        specifier: workspace:*
+        version: link:../../packages/venue-types
       '@supabase/supabase-js':
         specifier: latest
         version: 2.103.0
