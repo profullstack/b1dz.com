@@ -1021,7 +1021,13 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
   }
   const savedClosedTrades = Array.isArray(tradeState.closedTrades) ? tradeState.closedTrades as ClosedTrade[] : [];
   closedTrades.splice(0, closedTrades.length, ...savedClosedTrades);
-  restoreAnalysisStates(tradeState.analysisStates);
+  // Backwards compat: legacy payloads stored analysis candles inline. New
+  // payloads omit them (loaded separately via `getAnalysisCache`), so only
+  // restore when the legacy field is actually present — otherwise we'd wipe
+  // state that the daemon worker already hydrated from the analysis cache.
+  if (Array.isArray(tradeState.analysisStates)) {
+    restoreAnalysisStates(tradeState.analysisStates);
+  }
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   dailyPnl = closedTrades
@@ -1029,7 +1035,15 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
     .reduce((sum, trade) => sum + trade.netPnl, 0);
 }
 
-/** Serialize positions/cooldowns/dailyPnl for persistence. */
+/**
+ * Serialize the lightweight tick-frequency trade state for source_state.payload.
+ *
+ * NOTE: This excludes `analysisStates` (candle history + indicators) because
+ * that payload is multi-MB per tick — writing it every 5s blew out Redis I/O
+ * and V8 allocation churn. Analysis state is persisted separately via
+ * `serializeAnalysisCache()` / `restoreAnalysisCache()` on a minutes-cadence
+ * Redis write. See `getAnalysisCache` / `setAnalysisCache` in @b1dz/core.
+ */
 export function serializeTradeState(): Record<string, unknown> {
   return {
     positions: [...openPositions.values()],
@@ -1038,8 +1052,19 @@ export function serializeTradeState(): Record<string, unknown> {
     dailyPnlDate,
     dailyEquityBaselineUsd,
     closedTrades,
-    analysisStates: serializeAnalysisStates(),
   };
+}
+
+/** Serialize just the analysis-cache slice (candle history + last analysis).
+ *  Write this to the dedicated Redis analysis cache, not per-tick payload. */
+export function serializeAnalysisCache(): PersistedAnalysisState[] {
+  return serializeAnalysisStates();
+}
+
+/** Restore analysis state from a previously-stored analysis cache. Safe to
+ *  call with `null`/invalid inputs — it just becomes a no-op. */
+export function restoreAnalysisCache(saved: unknown): void {
+  restoreAnalysisStates(saved);
 }
 
 function resetDailyStateIfNeeded() {

@@ -4,7 +4,9 @@ import {
   __pruneInactivePairStateForTests,
   __resetTradeStateForTests,
   __seedAnalysisStateForTests,
+  restoreAnalysisCache,
   restorePersistedTradeState,
+  serializeAnalysisCache,
   serializeTradeState,
 } from './index.js';
 
@@ -61,8 +63,10 @@ describe('analysis state persistence contract', () => {
     });
 
     const serialized = serializeTradeState();
+    const analysisCache = serializeAnalysisCache();
     __resetTradeStateForTests();
     restorePersistedTradeState({ tradeState: serialized });
+    restoreAnalysisCache(analysisCache);
 
     const restored = __getAnalysisStateForTests('kraken', 'BTC-USD');
     expect(restored).not.toBeNull();

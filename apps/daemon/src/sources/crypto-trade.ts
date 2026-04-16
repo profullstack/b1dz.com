@@ -1,8 +1,23 @@
 import type { SourceWorker, UserContext } from '../types.js';
-import { cryptoTradeSource, getTradeStatus, serializeTradeState, setTradingOverride } from '@b1dz/source-crypto-trade';
-import { AlertBus, getB1dzVersion } from '@b1dz/core';
+import {
+  cryptoTradeSource,
+  getTradeStatus,
+  restoreAnalysisCache,
+  serializeAnalysisCache,
+  serializeTradeState,
+  setTradingOverride,
+} from '@b1dz/source-crypto-trade';
+import { AlertBus, getAnalysisCache, getB1dzVersion, setAnalysisCache } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
+
+// Analysis-cache persistence. Candle history + indicators are multi-MB;
+// writing them into source_state.payload every 5s was blowing up Redis
+// I/O and V8 churn. We now keep them in a dedicated Redis key, loaded
+// once per worker process on first tick, then re-flushed every minute.
+const ANALYSIS_CACHE_FLUSH_MS = 60_000;
+const analysisCacheLoadedFor = new Set<string>();
+let lastAnalysisCacheFlushAt = 0;
 
 export const cryptoTradeWorker: SourceWorker = {
   id: 'crypto-trade',
@@ -45,6 +60,20 @@ export const cryptoTradeWorker: SourceWorker = {
     };
 
     try {
+      // Bootstrap analysis state from the dedicated cache on first tick for
+      // this user. Must happen BEFORE poll() so the source's own restore
+      // path doesn't start from an empty map. Idempotent per (userId,
+      // processLifetime).
+      if (!analysisCacheLoadedFor.has(ctx.userId)) {
+        analysisCacheLoadedFor.add(ctx.userId);
+        try {
+          const cached = await getAnalysisCache(ctx.userId, 'crypto-trade');
+          if (cached) restoreAnalysisCache(cached);
+        } catch (e) {
+          logRaw(`[trade] analysis cache load failed: ${(e as Error).message}`, 'crypto-trade');
+        }
+      }
+
       const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
       const override = uiSettings?.tradingEnabled;
       setTradingOverride(override === true || override === false ? override : null);
@@ -86,6 +115,18 @@ export const cryptoTradeWorker: SourceWorker = {
           version: getB1dzVersion(),
         },
       });
+
+      // Flush analysis cache on a slow cadence — the whole point of the
+      // split is to NOT do this every tick.
+      const now = Date.now();
+      if (now - lastAnalysisCacheFlushAt >= ANALYSIS_CACHE_FLUSH_MS) {
+        lastAnalysisCacheFlushAt = now;
+        try {
+          await setAnalysisCache(ctx.userId, 'crypto-trade', serializeAnalysisCache());
+        } catch (e) {
+          logRaw(`[trade] analysis cache flush failed: ${(e as Error).message}`, 'crypto-trade');
+        }
+      }
     } finally {
       console.log = origLog;
       console.error = origErr;

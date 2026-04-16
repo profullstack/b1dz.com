@@ -6,7 +6,9 @@ import { createClient } from 'redis';
 const DEFAULT_RUNTIME_CACHE_DIR = process.env.B1DZ_RUNTIME_CACHE_DIR || '/tmp/b1dz-runtime-cache';
 const REDIS_URL = process.env.REDIS_URL?.trim() || '';
 const REDIS_PREFIX = process.env.B1DZ_RUNTIME_CACHE_PREFIX || 'b1dz:runtime-cache';
+const ANALYSIS_CACHE_PREFIX = process.env.B1DZ_ANALYSIS_CACHE_PREFIX || 'b1dz:analysis-cache';
 const SOURCE_STATE_TTL_MS = 2 * 60_000;
+const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60_000;
 const LIVE_SOURCE_STATE_FIELDS = new Set([
   'activityLog',
   'binanceBalance',
@@ -46,6 +48,10 @@ function enc(value: string): string {
 
 function sourceStateRedisKey(userId: string, sourceId: string): string {
   return `${REDIS_PREFIX}:source-state:${enc(userId)}:${enc(sourceId)}`;
+}
+
+function analysisCacheRedisKey(userId: string, sourceId: string): string {
+  return `${ANALYSIS_CACHE_PREFIX}:${enc(userId)}:${enc(sourceId)}`;
 }
 
 function runtimeLeaseRedisKey(scope: string, userId: string, sourceId: string): string {
@@ -129,6 +135,39 @@ export async function setRuntimeSourceState<T>(userId: string, sourceId: string,
     } catch {}
   }
   await writeEnvelope(sourceStatePath(userId, sourceId), value, ttlMs);
+}
+
+/**
+ * Long-lived analysis cache — separate from source_state because the
+ * candle history + indicator state is fat (multi-MB) and should NOT be
+ * round-tripped every tick. Written on a slow cadence (minutes) and
+ * read once on daemon boot to bootstrap without re-fetching history.
+ *
+ * Redis-only: if no Redis is configured the daemon just re-bootstraps
+ * from the exchanges, which is the pre-cache behavior.
+ */
+export async function getAnalysisCache<T>(userId: string, sourceId: string): Promise<T | null> {
+  const redis = await getRedisClient();
+  if (!redis) return null;
+  try {
+    const raw = await redis.get(analysisCacheRedisKey(userId, sourceId));
+    return raw ? JSON.parse(raw) as T : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setAnalysisCache<T>(
+  userId: string,
+  sourceId: string,
+  value: T,
+  ttlMs: number = ANALYSIS_CACHE_TTL_MS,
+): Promise<void> {
+  const redis = await getRedisClient();
+  if (!redis) return;
+  try {
+    await redis.set(analysisCacheRedisKey(userId, sourceId), JSON.stringify(value), { PX: ttlMs });
+  } catch {}
 }
 
 export async function deleteRuntimeSourceState(userId: string, sourceId: string) {
