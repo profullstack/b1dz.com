@@ -4,6 +4,9 @@ dist
 .turbo
 .env
 .env.local
+.env.bak*
+.env.*.bak
+.env.backup*
 data/*.json
 *.log
 .DS_Store
