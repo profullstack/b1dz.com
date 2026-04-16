@@ -38,6 +38,7 @@ import {
 } from '@b1dz/trade-daemon';
 import type { VenueAdapter, Opportunity } from '@b1dz/venue-types';
 import { getActivePairs } from '@b1dz/source-crypto-arb';
+import { maybeBuildUniswapV3BaseExecutor } from '../executors/factory.js';
 
 interface DecisionLogEntry {
   queueId: string;
@@ -158,6 +159,17 @@ export async function initV2Pipeline(): Promise<PipelineState> {
     const minNetBps = floatEnv('V2_MIN_NET_BPS', DEFAULT_RISK_LIMITS.minNetBps);
     const maxTradeUsd = floatEnv('V2_MAX_TRADE_USD', 5);
     const mode = resolveMode();
+
+    // Build any env-armed executors before TradeDaemon is constructed —
+    // TradeDaemon captures its executor list at construction time, so
+    // later `registerExecutor()` calls are ignored.
+    const armedExecutor = await maybeBuildUniswapV3BaseExecutor().catch((e: unknown) => {
+      console.error(`[v2] executor init failed: ${(e as Error).message}`);
+      return null;
+    });
+    if (armedExecutor && !executors.includes(armedExecutor)) {
+      executors.push(armedExecutor);
+    }
 
     const adapters = buildAdapters();
     const discovered = await getActivePairs().catch((e: unknown) => {

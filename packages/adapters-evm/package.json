@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@b1dz/venue-types": "workspace:*",
-    "viem": "latest"
+    "viem": "^2.48.0"
   },
   "devDependencies": {
     "@types/node": "latest",

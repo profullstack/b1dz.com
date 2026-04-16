@@ -59,3 +59,19 @@ export {
   type TerminalTxStatus,
   type TrackReceiptArgs,
 } from './receipts.js';
+export {
+  SWAP_ROUTER_02_ABI,
+  UNISWAP_V3_SWAP_GAS_LIMIT,
+  encodeExactInputSingle,
+  minOutFromSlippage,
+  type ExactInputSingleArgs,
+  type ExactInputSingleCall,
+} from './uniswap-router.js';
+
+// Re-export the thin slice of viem the daemon's executor factory needs.
+// Consumers should import these from `@b1dz/adapters-evm` rather than
+// adding a direct viem dependency, so the workspace stays on a single
+// resolved viem version (mixed versions produce nonsensical TS errors
+// about Chain/Client incompatibility).
+export { createPublicClient, http, type Address, type Hex, type PublicClient } from 'viem';
+export { base, mainnet, arbitrum, optimism, polygon, avalanche } from 'viem/chains';

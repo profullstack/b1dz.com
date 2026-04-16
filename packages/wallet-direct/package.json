@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@b1dz/wallet-provider": "workspace:*",
-    "viem": "latest"
+    "viem": "^2.48.0"
   },
   "devDependencies": {
     "@types/node": "latest",
