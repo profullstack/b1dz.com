@@ -4,6 +4,8 @@ export interface NewsItem {
   uuid: string;
   title: string;
   url: string;
+  /** Brisk-hosted short URL; fallback to the source URL if the API omits it. */
+  shortUrl: string;
   source: string;
   publishedAt: string;
 }
@@ -13,6 +15,7 @@ interface BriskResponse {
     uuid?: string;
     title?: string;
     url?: string;
+    shortUrl?: string;
     source?: string;
     publishedAt?: string;
   }[];
@@ -44,17 +47,10 @@ export async function fetchNews(signal?: AbortSignal): Promise<NewsItem[]> {
       uuid: a.uuid ?? a.url!,
       title: decodeHtmlEntities(a.title!).replace(/\s+/g, ' ').trim(),
       url: a.url!,
+      shortUrl: a.shortUrl ?? a.url!,
       source: a.source ?? '',
       publishedAt: a.publishedAt ?? '',
     }));
-}
-
-/** Build a short brisk.news search URL that finds the given article on
- *  brisk's own site instead of linking to the (often very long) source
- *  URL. Users can click the brisk link to land inside brisk's reader. */
-export function briskShortUrl(title: string): string {
-  const query = title.split(/\s+/).filter(Boolean).slice(0, 5).join(' ');
-  return `https://brisk.news/?q=${encodeURIComponent(query)}`;
 }
 
 export function openUrl(url: string): void {
