@@ -48,7 +48,7 @@ import {
 } from '@b1dz/trade-daemon';
 import type { VenueAdapter, Opportunity } from '@b1dz/venue-types';
 import { getActivePairs } from '@b1dz/source-crypto-arb';
-import { maybeBuildUniswapV3BaseExecutor } from '../executors/factory.js';
+import { maybeBuildUniswapV3BaseExecutor, maybeBuildCexCexExecutor } from '../executors/factory.js';
 
 interface DecisionLogEntry {
   queueId: string;
@@ -183,6 +183,10 @@ export async function initV2Pipeline(): Promise<PipelineState> {
     });
     if (armedExecutor && !executors.includes(armedExecutor)) {
       executors.push(armedExecutor);
+    }
+    const cexCexExecutor = maybeBuildCexCexExecutor();
+    if (cexCexExecutor && !executors.includes(cexCexExecutor)) {
+      executors.push(cexCexExecutor);
     }
 
     const adapters = buildAdapters();

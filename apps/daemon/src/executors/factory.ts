@@ -26,6 +26,7 @@ import {
 import { WalletService } from '@b1dz/wallet-service';
 import { DirectEvmWalletProvider } from '@b1dz/wallet-direct';
 import { UniswapV3BaseExecutor } from './uniswap-v3-base.js';
+import { CexCexExecutor } from './cex-cex.js';
 
 function floatEnv(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -83,4 +84,23 @@ export async function maybeBuildUniswapV3BaseExecutor(): Promise<Executor | null
     walletAddress: address as `0x${string}`,
     maxTradeUsd,
   });
+}
+
+/**
+ * CEX↔CEX executor — always buildable (no wallet / RPC deps). Still
+ * gated on ARB_MODE=live + ARB_EXECUTOR_CEX_CEX=true so the operator has
+ * to explicitly opt in.
+ */
+export function maybeBuildCexCexExecutor(): Executor | null {
+  const enabled = process.env.ARB_EXECUTOR_CEX_CEX ?? process.env.V2_EXECUTOR_CEX_CEX;
+  if (enabled !== 'true') return null;
+  const mode = (process.env.ARB_MODE ?? process.env.V2_MODE ?? '').toLowerCase();
+  if (mode !== 'live') {
+    console.warn('[arb] ARB_EXECUTOR_CEX_CEX=true but ARB_MODE!=live — skipping');
+    return null;
+  }
+  const maxTradeUsd = floatEnv('ARB_MAX_TRADE_USD', floatEnv('V2_MAX_TRADE_USD', 5));
+  const slippageBps = floatEnv('ARB_CEX_CEX_SLIPPAGE_BPS', 200);
+  console.log(`[arb] CexCexExecutor armed  maxTradeUsd=$${maxTradeUsd}  slippageBps=${slippageBps}`);
+  return new CexCexExecutor({ maxTradeUsd, slippageBps });
 }
