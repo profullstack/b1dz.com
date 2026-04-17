@@ -17,6 +17,10 @@ import {
   placeBinanceOrder,
   placeCoinbaseOrder,
   placeGeminiOrder,
+  getBalance as getKrakenBalance,
+  getBinanceBalance,
+  getCoinbaseBalance,
+  getGeminiBalance,
   normalizePair,
 } from '@b1dz/source-crypto-arb';
 
@@ -32,6 +36,44 @@ export interface CexCexExecutorArgs {
 
 function abort(reason: string): ExecutorOutcome {
   return { status: 'aborted', resolvedReason: reason, executorRan: false };
+}
+
+/** Checks whether the venue has at least `minUsd` in spendable USD + USDC.
+ *  Returns null on pass, a human-readable message on fail. Failures are
+ *  reported with executorRan=false so the circuit breaker doesn't trip. */
+async function checkQuoteBalance(venue: string, minUsd: number): Promise<string | null> {
+  try {
+    if (venue === 'kraken') {
+      const bal = await getKrakenBalance();
+      const usd = parseFloat(bal.ZUSD ?? bal.USD ?? '0');
+      const usdc = parseFloat(bal.USDC ?? '0');
+      if (usd + usdc >= minUsd) return null;
+      return `kraken spendable $${(usd + usdc).toFixed(2)} < $${minUsd.toFixed(2)}`;
+    }
+    if (venue === 'coinbase') {
+      const bal = await getCoinbaseBalance();
+      const usd = parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0');
+      if (usd >= minUsd) return null;
+      return `coinbase spendable $${usd.toFixed(2)} < $${minUsd.toFixed(2)}`;
+    }
+    if (venue === 'binance-us') {
+      const bal = await getBinanceBalance();
+      const usd = parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0');
+      if (usd >= minUsd) return null;
+      return `binance-us spendable $${usd.toFixed(2)} < $${minUsd.toFixed(2)}`;
+    }
+    if (venue === 'gemini') {
+      const bal = await getGeminiBalance();
+      const usd = parseFloat(bal.USD ?? '0') + parseFloat(bal.USDC ?? '0');
+      if (usd >= minUsd) return null;
+      return `gemini spendable $${usd.toFixed(2)} < $${minUsd.toFixed(2)}`;
+    }
+    return `unknown venue ${venue}`;
+  } catch (e) {
+    // Balance fetch itself failed (auth, IP filter, etc.) — treat as
+    // unexecutable but NOT as a circuit failure, since the opp never ran.
+    return `${venue} balance fetch failed: ${(e as Error).message.slice(0, 80)}`;
+  }
 }
 
 export class CexCexExecutor implements Executor {
@@ -79,6 +121,15 @@ export class CexCexExecutor implements Executor {
     const slipDown = 1 - this.slippageBps / 10_000;
     const buyLimit = buyPrice * slipUp;
     const sellLimit = sellPrice * slipDown;
+
+    // Inventory pre-check. Failures return aborted with executorRan=false
+    // so the circuit breaker only trips on actual execution attempts, not
+    // on "we don't have funds" / "auth is broken" routing errors.
+    const buyShortfall = await checkQuoteBalance(opp.buyVenue, sizeUsd * slipUp);
+    if (buyShortfall) {
+      this.log(`[cex-cex] SKIP ${opp.buyVenue}→${opp.sellVenue}: ${buyShortfall}`);
+      return abort(buyShortfall);
+    }
 
     this.log(`[cex-cex] ${opp.buyVenue}→${opp.sellVenue} ${pair} size=$${sizeUsd.toFixed(2)} qty=${quantity.toFixed(8)} buy@$${buyLimit.toFixed(2)} sell@$${sellLimit.toFixed(2)}`);
 
