@@ -61,6 +61,9 @@ import {
   hardStopPctFromEnv,
 } from './trade-config.js';
 import { decideExit } from './exit-decision.js';
+
+export { dcaConfigFromEnv, perExchangeAllocationPct, DCA_DEFAULTS, type DcaConfig } from './dca-config.js';
+export { decideDcaBuys, type DcaBuy, type DcaPlannerInput } from './dca-planner.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
 import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
 import {
