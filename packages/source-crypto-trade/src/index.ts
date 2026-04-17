@@ -50,6 +50,7 @@ import {
   COOLDOWN_MS,
   trailingStopPriceFor,
   trailPctFromEnv,
+  buySlippageBpsFromEnv,
   dailyLossLimitPctFromEnv,
 } from './trade-config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
@@ -1678,33 +1679,68 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         );
       }
 
-      console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
+      // Walk up to BUY_SLIPPAGE_BPS above the observed ask and submit as
+      // IOC so the order either fills immediately up to our price ceiling
+      // or cancels. Prevents the stuck-dust pattern where a GTC limit at
+      // the exact ask only sweeps the top-of-book layer on thin markets
+      // (e.g. RAVE-USD) and leaves the rest as an open order that locks
+      // our quote balance indefinitely.
+      const slippageBps = buySlippageBpsFromEnv();
+      const aggressivePrice = price * (1 + slippageBps / 10_000);
+      const volumeAtAggressive = spendBudget / aggressivePrice;
+
+      console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volumeAtAggressive.toFixed(8)} @ $${aggressivePrice.toFixed(6)} (ask=$${price.toFixed(6)} +${slippageBps}bps IOC)`);
       try {
         let txInfo = '';
         if (exchange === 'kraken') {
           const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
-          const result = await placeKrakenOrder({ pair: krakenPair, type: 'buy', ordertype: 'limit', volume: volume.toFixed(8), price: price.toFixed(2) });
+          const result = await placeKrakenOrder({
+            pair: krakenPair,
+            type: 'buy',
+            ordertype: 'limit',
+            volume: volumeAtAggressive.toFixed(8),
+            price: aggressivePrice.toFixed(2),
+            timeinforce: 'IOC',
+          });
           txInfo = `${result.descr.order} txid=${result.txid}`;
         } else if (exchange === 'coinbase') {
-          const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volume.toFixed(8), limitPrice: String(price) });
+          const result = await placeCoinbaseOrder({
+            productId: pair,
+            side: 'BUY',
+            size: volumeAtAggressive.toFixed(8),
+            limitPrice: String(aggressivePrice),
+            ioc: true,
+          });
           txInfo = `orderId=${result.order_id}`;
         } else if (exchange === 'binance-us') {
           const symbol = pair.replace('-', '');
-          const result = await placeBinanceOrder({ symbol, side: 'BUY', type: 'LIMIT', quantity: volume.toFixed(8), price: price.toFixed(2) });
+          const result = await placeBinanceOrder({
+            symbol,
+            side: 'BUY',
+            type: 'LIMIT',
+            quantity: volumeAtAggressive.toFixed(8),
+            price: aggressivePrice.toFixed(2),
+            timeInForce: 'IOC',
+          });
           txInfo = `orderId=${result.orderId}`;
         }
+        // Track the submitted volume as an upper bound. IOC may have
+        // partial-filled, in which case actualBaseBalanceFor(exchange,
+        // pair) returns the real balance at exit time and the exit path
+        // uses `Math.min(pos.volume, availableBase)` to sell only what
+        // we actually hold.
         const posKey = `${exchange}:${pair}`;
         openPositions.set(posKey, {
           pair,
           exchange,
-          entryPrice: price,
-          volume,
+          entryPrice: aggressivePrice,
+          volume: volumeAtAggressive,
           entryTime: Date.now(),
-          highWaterMark: price,
+          highWaterMark: aggressivePrice,
           strategyId: meta.strategy ?? 'composite',
         });
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
-        return { ok: true, message: `bought ${volume.toFixed(8)} on ${exchange} @ ${price.toFixed(2)}` };
+        return { ok: true, message: `bought up to ${volumeAtAggressive.toFixed(8)} on ${exchange} @ ≤$${aggressivePrice.toFixed(6)}` };
       } catch (e) {
         const msg = (e as Error).message;
         if (exchange === 'kraken' && msg.includes('Insufficient funds')) {

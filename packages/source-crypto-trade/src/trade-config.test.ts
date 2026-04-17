@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   trailingStopPriceFor,
+  buySlippageBpsFromEnv,
+  trailPctFromEnv,
+  BUY_SLIPPAGE_BPS,
   INITIAL_STOP_PCT,
   LOCK_STOP_PCT,
   LOCK_TRIGGER_PCT,
@@ -77,5 +80,49 @@ describe('trailingStopPriceFor', () => {
     const above = trailingStopPriceFor(ENTRY, ENTRY * 1.015);
     expect(above).toBeGreaterThan(ENTRY * (1 + LOCK_STOP_PCT));
     expect(above).toBeCloseTo(ENTRY * 1.015 * (1 - TRAIL_PCT), 6);
+  });
+});
+
+describe('buySlippageBpsFromEnv', () => {
+  it('defaults to BUY_SLIPPAGE_BPS (50) when env is unset', () => {
+    delete process.env.BUY_SLIPPAGE_BPS;
+    expect(buySlippageBpsFromEnv()).toBe(BUY_SLIPPAGE_BPS);
+  });
+
+  it('reads a numeric override from env', () => {
+    process.env.BUY_SLIPPAGE_BPS = '25';
+    expect(buySlippageBpsFromEnv()).toBe(25);
+    delete process.env.BUY_SLIPPAGE_BPS;
+  });
+
+  it('allows zero (tight: limit at exact ask)', () => {
+    process.env.BUY_SLIPPAGE_BPS = '0';
+    expect(buySlippageBpsFromEnv()).toBe(0);
+    delete process.env.BUY_SLIPPAGE_BPS;
+  });
+
+  it('ignores negative values and falls back to default', () => {
+    process.env.BUY_SLIPPAGE_BPS = '-10';
+    expect(buySlippageBpsFromEnv()).toBe(BUY_SLIPPAGE_BPS);
+    delete process.env.BUY_SLIPPAGE_BPS;
+  });
+
+  it('ignores non-numeric values and falls back to default', () => {
+    process.env.BUY_SLIPPAGE_BPS = 'wat';
+    expect(buySlippageBpsFromEnv()).toBe(BUY_SLIPPAGE_BPS);
+    delete process.env.BUY_SLIPPAGE_BPS;
+  });
+});
+
+describe('trailPctFromEnv', () => {
+  it('defaults to TRAIL_PCT when env is unset', () => {
+    delete process.env.TRAIL_PCT;
+    expect(trailPctFromEnv()).toBe(TRAIL_PCT);
+  });
+
+  it('reads numeric override', () => {
+    process.env.TRAIL_PCT = '0.02';
+    expect(trailPctFromEnv()).toBe(0.02);
+    delete process.env.TRAIL_PCT;
   });
 });

@@ -231,6 +231,9 @@ export interface OrderOpts {
   side: 'BUY' | 'SELL';
   size: string;          // base currency quantity
   limitPrice?: string;   // required for limit orders
+  /** Submit as immediate-or-cancel instead of GTC. Prevents partial-fill
+   *  leftovers from sitting as open orders on thin books. */
+  ioc?: boolean;
 }
 
 function decimalPlaces(value: string): number {
@@ -306,7 +309,9 @@ export async function placeOrder(opts: OrderOpts): Promise<OrderResponse> {
   const clientOrderId = `b1dz-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
   const orderConfig = normalized.limitPrice
-    ? { limit_limit_gtc: { base_size: normalized.size, limit_price: normalized.limitPrice } }
+    ? (normalized.ioc
+        ? { limit_limit_ioc: { base_size: normalized.size, limit_price: normalized.limitPrice } }
+        : { limit_limit_gtc: { base_size: normalized.size, limit_price: normalized.limitPrice } })
     : { market_market_ioc: { base_size: normalized.size } };
 
   const body = {

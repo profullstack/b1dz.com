@@ -36,6 +36,21 @@ export function trailPctFromEnv(): number {
   return Number.isFinite(v) && v > 0 ? v : TRAIL_PCT;
 }
 
+/** Aggressive buy slippage buffer — submit limit BUY orders at
+ *  `ask × (1 + BUY_SLIPPAGE_BPS/10000)` with IOC (immediate or cancel).
+ *
+ *  Fixes the partial-fill trap: a GTC limit at the exact ask only sweeps
+ *  the top book layer on thin markets (e.g. RAVE-USD on Coinbase) and
+ *  leaves the remainder as an open order that locks USD. With IOC +
+ *  slippage ceiling, the order walks up to N bps of depth, fills what's
+ *  available, and cancels the rest — no orphan open orders. */
+export const BUY_SLIPPAGE_BPS = 50; // 0.5%
+
+export function buySlippageBpsFromEnv(): number {
+  const v = Number.parseFloat(process.env.BUY_SLIPPAGE_BPS ?? String(BUY_SLIPPAGE_BPS));
+  return Number.isFinite(v) && v >= 0 ? v : BUY_SLIPPAGE_BPS;
+}
+
 /** Close at market if position is flat within ±TIME_EXIT_FLAT_PCT after TIME_EXIT_MS. */
 export const TIME_EXIT_MS = 15 * 60 * 1000; // 15 min
 export const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%
