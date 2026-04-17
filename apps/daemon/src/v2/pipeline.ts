@@ -195,7 +195,16 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       return [] as string[];
     });
     const fallback = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
-    const pairList = (discovered.length > 0 ? discovered : fallback).slice(0, maxPairs);
+
+    // DEX-native pairs that the CEX-centric discovery won't surface.
+    // Injected ahead of CEX pairs so they survive the maxPairs slice and
+    // actually reach the DEX adapters. Override via ARB_DEX_PAIRS env
+    // (comma-separated, canonical "BASE-QUOTE" format).
+    const dexPairsRaw = process.env.ARB_DEX_PAIRS ?? 'WETH-USDC,cbBTC-USDC,WIF-USDC,BONK-USDC,JUP-USDC';
+    const dexPairs = dexPairsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+
+    const combined = [...new Set([...dexPairs, ...(discovered.length > 0 ? discovered : fallback)])];
+    const pairList = combined.slice(0, maxPairs);
     const pairs: ObservePair[] = pairList.map((pair) => ({
       pair,
       sizeUsd,
