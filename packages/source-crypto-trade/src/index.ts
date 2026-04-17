@@ -1662,6 +1662,22 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return { ok: false, message: `skip buy ${exchange}:${pair} — would be unsellable (${unsellableReason})` };
       }
 
+      // Verbose sizing trace — lets ops audit why a given buy came out
+      // at its actual size (availableQuote vs MAX_POSITION_USD cap vs
+      // fee cushion). Suppress with `TRADE_VERBOSE_SIZING=false`.
+      if (process.env.TRADE_VERBOSE_SIZING !== 'false') {
+        const cap = MAX_POSITION_USD;
+        const cushion = Math.max(0.9, 1 - feeRate - 0.02);
+        const notionalPostFee = postFeeVolume * price;
+        console.log(
+          `[trade] SIZE ${exchange}:${pair} availableQuote=$${availableQuote.toFixed(2)} ` +
+          `cap=$${cap} cushion=${cushion.toFixed(3)} ` +
+          `spendBudget=$${spendBudget.toFixed(2)} ` +
+          `price=$${price.toFixed(6)} volume=${volume.toFixed(8)} ` +
+          `postFeeNotional=$${notionalPostFee.toFixed(2)}`,
+        );
+      }
+
       console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {
         let txInfo = '';
@@ -1716,3 +1732,8 @@ export {
 } from './analysis/backtest.js';
 export { computeBacktestMetrics, type BacktestMetrics, type BacktestTrade } from './analysis/analytics.js';
 export { fetchHistoricalCandles, type Candle, type AnalysisTimeframe } from './analysis/candles.js';
+export {
+  sellVolumeWithCushion,
+  sellabilityBlocker,
+  type VenueSellLimits,
+} from './sellability.js';
