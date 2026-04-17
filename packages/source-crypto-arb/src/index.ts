@@ -15,6 +15,8 @@ import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } fro
 import { GeminiFeed, KrakenFeed, BinanceUsFeed, CoinbaseFeed } from './feeds/index.js';
 export {
   GeminiFeed,
+  JupiterFeed,
+  UniswapBaseFeed,
   KrakenFeed,
   BinanceUsFeed,
   CoinbaseFeed,

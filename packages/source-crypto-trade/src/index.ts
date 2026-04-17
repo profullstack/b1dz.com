@@ -15,7 +15,7 @@
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import {
-  KrakenFeed, CoinbaseFeed, BinanceUsFeed, GeminiFeed,
+  KrakenFeed, CoinbaseFeed, BinanceUsFeed, GeminiFeed, JupiterFeed, UniswapBaseFeed,
   placeOrder as placeKrakenOrder,
   placeCoinbaseOrder,
   placeBinanceOrder,
@@ -154,11 +154,15 @@ const krakenFeed: PriceFeed = new KrakenFeed();
 const coinbaseFeed: PriceFeed = new CoinbaseFeed();
 const binanceFeed: PriceFeed = new BinanceUsFeed();
 const geminiFeed: PriceFeed = new GeminiFeed();
+const jupiterFeed: PriceFeed = new JupiterFeed();
+const uniswapBaseFeed: PriceFeed = new UniswapBaseFeed();
 const TRADE_FEEDS: { feed: PriceFeed; exchange: string }[] = [
   { feed: krakenFeed, exchange: 'kraken' },
   { feed: coinbaseFeed, exchange: 'coinbase' },
   { feed: binanceFeed, exchange: 'binance-us' },
   { feed: geminiFeed, exchange: 'gemini' },
+  { feed: jupiterFeed, exchange: 'jupiter' },
+  { feed: uniswapBaseFeed, exchange: 'uniswap-v3' },
 ];
 const histories = new Map<string, MarketSnapshot[]>();
 interface AnalysisPairState {
