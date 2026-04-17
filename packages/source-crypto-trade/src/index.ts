@@ -35,6 +35,7 @@ import {
   getKrakenPairMinVolume,
   MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
   getActivePairs,
+  getPerExchangeVolumes,
 } from '@b1dz/source-crypto-arb';
 import type { Candle } from './analysis/candles.js';
 import {
@@ -100,6 +101,33 @@ interface TradeItem {
 
 const DAILY_LOSS_LIMIT_PCT = dailyLossLimitPctFromEnv();
 const WARMUP_TICKS = 20;
+/** Per-exchange 24h USD volume floor. A pair can be tradable globally (admitted
+ *  by getActivePairs) yet thin on one specific venue — entering there means
+ *  buy-and-sell on a 10k-volume book, which just pays slippage both ways.
+ *  Matches the audit-arb tool's MIN_EACH_EXCHANGE_VOL_USD. */
+const MIN_PER_EXCHANGE_VOL_USD = 100_000;
+let cachedPerExchangeVolumes: Awaited<ReturnType<typeof getPerExchangeVolumes>> | null = null;
+let lastPerExchangeVolumeFetch = 0;
+const PER_EXCHANGE_VOL_TTL_MS = 5 * 60_000;
+
+async function refreshPerExchangeVolumesIfStale(): Promise<void> {
+  if (cachedPerExchangeVolumes && Date.now() - lastPerExchangeVolumeFetch < PER_EXCHANGE_VOL_TTL_MS) return;
+  try {
+    cachedPerExchangeVolumes = await getPerExchangeVolumes();
+    lastPerExchangeVolumeFetch = Date.now();
+  } catch (e) {
+    console.log(`[trade] per-exchange volumes fetch failed: ${(e as Error).message}`);
+  }
+}
+
+function isVenueThin(exchange: string, pair: string): boolean {
+  if (!cachedPerExchangeVolumes) return false; // no data yet — don't over-block
+  const map = (cachedPerExchangeVolumes as Record<string, Map<string, number>>)[exchange];
+  const vol = map?.get(pair);
+  // Missing pair on that exchange → treat as thin (we shouldn't trade it there).
+  if (vol == null) return true;
+  return vol < MIN_PER_EXCHANGE_VOL_USD;
+}
 
 // ─── State ─────────────────────────────────────────────────────
 
@@ -1308,10 +1336,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const PAIRS = await getActivePairs();
       lastEligiblePairs = [...PAIRS];
       pruneInactivePairState(PAIRS);
+      await refreshPerExchangeVolumesIfStale();
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
       for (const { feed, exchange } of TRADE_FEEDS) {
         for (const pair of PAIRS) {
+          const posKeyForVenueCheck = `${exchange}:${pair}`;
+          const hasOpenPosition = openPositions.has(posKeyForVenueCheck);
+          // Skip thin venues for new entries, but keep polling if we're already in.
+          // We need the price feed to manage an existing position's exit.
+          if (!hasOpenPosition && isVenueThin(exchange, pair)) continue;
           const snap = await feed.snapshot(pair);
           if (!snap) continue;
           if (!isFinite(snap.bid) || !isFinite(snap.ask) || snap.bid <= 0 || snap.ask <= 0) continue;
