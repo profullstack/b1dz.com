@@ -45,13 +45,11 @@ import {
 import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
 import {
   TAKE_PROFIT_PCT,
-  INITIAL_STOP_PCT,
-  BREAKEVEN_TRIGGER_PCT,
-  LOCK_TRIGGER_PCT,
-  LOCK_STOP_PCT,
   TIME_EXIT_MS,
   TIME_EXIT_FLAT_PCT,
   COOLDOWN_MS,
+  trailingStopPriceFor,
+  trailPctFromEnv,
   dailyLossLimitPctFromEnv,
 } from './trade-config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
@@ -1264,20 +1262,13 @@ export function getTradeStatus(): TradeStatus {
   };
 }
 
-/** Compute the current trailing stop price for a position. */
+/** Compute the current trailing stop price for a position. Delegates to
+ *  `trailingStopPriceFor` in trade-config.ts so the live daemon and the
+ *  backtest simulator compute identical stops. TRAIL_PCT is resolved
+ *  from env on each call so operators can widen/tighten the trail
+ *  without redeploying. */
 function trailingStopPrice(pos: Position): number {
-  const pnlPct = (pos.highWaterMark - pos.entryPrice) / pos.entryPrice;
-
-  if (pnlPct >= LOCK_TRIGGER_PCT) {
-    // Lock in profit: stop at entry + LOCK_STOP_PCT
-    return pos.entryPrice * (1 + LOCK_STOP_PCT);
-  }
-  if (pnlPct >= BREAKEVEN_TRIGGER_PCT) {
-    // Breakeven stop
-    return pos.entryPrice;
-  }
-  // Initial stop
-  return pos.entryPrice * (1 - INITIAL_STOP_PCT);
+  return trailingStopPriceFor(pos.entryPrice, pos.highWaterMark, trailPctFromEnv());
 }
 
 // ─── Source ────────────────────────────────────────────────────
