@@ -125,3 +125,51 @@ export function PumpFunLogo() {
     </Tile>
   );
 }
+
+export function UniswapV4Logo() {
+  return (
+    <Tile bg="#FF007A" title="Uniswap V4">
+      <Letter text="V4" size={20} />
+    </Tile>
+  );
+}
+
+export function PancakeSwapLogo() {
+  return (
+    <Tile bg="#1FC7D4" title="PancakeSwap">
+      {/* Stack of pancakes */}
+      <g fill="#fff" stroke="#0a1931" strokeWidth="1.5">
+        <ellipse cx="24" cy="18" rx="11" ry="3" />
+        <ellipse cx="24" cy="24" rx="12" ry="3.2" />
+        <ellipse cx="24" cy="30" rx="11" ry="3" />
+      </g>
+    </Tile>
+  );
+}
+
+export function RaydiumLogo() {
+  return (
+    <Tile bg="#3A1B68" title="Raydium">
+      <Letter text="R" fill="#C4F454" />
+    </Tile>
+  );
+}
+
+export function OrcaLogo() {
+  return (
+    <Tile bg="#FFD15C" title="Orca">
+      {/* Whale fluke silhouette */}
+      <path d="M10 30 Q18 20 24 22 Q30 20 38 30 Q32 26 24 28 Q16 26 10 30 Z" fill="#0a1931" />
+      <circle cx="20" cy="24" r="1.5" fill="#fff" />
+    </Tile>
+  );
+}
+
+export function AerodromeLogo() {
+  return (
+    <Tile bg="#0433FF" title="Aerodrome">
+      {/* Stylized runway / paper plane */}
+      <path d="M10 30 L38 14 L32 22 L18 22 L14 30 Z" fill="#fff" />
+    </Tile>
+  );
+}

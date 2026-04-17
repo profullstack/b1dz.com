@@ -3,6 +3,7 @@ import Image from 'next/image';
 import {
   KrakenLogo, CoinbaseLogo, BinanceLogo, GeminiLogo,
   UniswapLogo, ZeroExLogo, OneInchLogo, JupiterLogo, PumpFunLogo,
+  UniswapV4Logo, PancakeSwapLogo, RaydiumLogo, OrcaLogo, AerodromeLogo,
 } from './_components/brand-logos';
 
 const platformMentions = [
@@ -282,6 +283,31 @@ export default function LandingPage() {
             <div className="mb-3"><PumpFunLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Pump.fun</div>
             <div className="text-sm">Solana launchpad</div>
+          </div>
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><UniswapV4Logo /></div>
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Uniswap V4</div>
+            <div className="text-sm">Coming soon</div>
+          </div>
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><PancakeSwapLogo /></div>
+            <div className="text-2xl font-bold text-zinc-200 mb-1">PancakeSwap</div>
+            <div className="text-sm">Coming soon</div>
+          </div>
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><RaydiumLogo /></div>
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Raydium</div>
+            <div className="text-sm">Coming soon</div>
+          </div>
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><OrcaLogo /></div>
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Orca</div>
+            <div className="text-sm">Coming soon</div>
+          </div>
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><AerodromeLogo /></div>
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Aerodrome</div>
+            <div className="text-sm">Coming soon</div>
           </div>
         </div>
       </section>
