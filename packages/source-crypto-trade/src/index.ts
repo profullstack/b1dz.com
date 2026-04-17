@@ -1287,9 +1287,20 @@ export function getTradeStatus(): TradeStatus {
     .reduce((sum, trade) => sum + trade.netPnl, 0);
   const positions = [...openPositions.values()]
     .map((pos) => {
-      const currentPrice = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1)?.bid ?? pos.entryPrice;
+      const lastSnap = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1);
+      const currentPrice = lastSnap?.bid ?? pos.entryPrice;
+      const quoteAgeMs = lastSnap?.ts ? Date.now() - lastSnap.ts : 0;
       const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
       const pnlUsd = (currentPrice - pos.entryPrice) * pos.volume;
+      const ageMs = Date.now() - pos.entryTime;
+      const ageSec = Math.floor(ageMs / 1000);
+      const elapsed = ageSec < 3600
+        ? `${Math.floor(ageSec / 60)}:${String(ageSec % 60).padStart(2, '0')}`
+        : `${Math.floor(ageSec / 3600)}h${Math.floor((ageSec % 3600) / 60)}m`;
+      // If quote hasn't advanced in >15s, flag it with a `~` suffix so the
+      // operator can see "Last" is cached, not live. Real movement would
+      // refresh the snap.ts every tick (5s cadence).
+      const stale = quoteAgeMs > 15_000 ? ` ~${Math.floor(quoteAgeMs / 1000)}s` : '';
       return {
         exchange: pos.exchange,
         pair: pos.pair,
@@ -1299,7 +1310,7 @@ export function getTradeStatus(): TradeStatus {
         pnlPct,
         pnlUsd,
         stopPrice: trailingStopPrice(pos),
-        elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+        elapsed: elapsed + stale,
       };
     })
     .filter((pos) => (pos.currentPrice * pos.volume) >= DUST_USD_THRESHOLD);
