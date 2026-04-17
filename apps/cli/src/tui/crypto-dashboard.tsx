@@ -315,7 +315,10 @@ function DashboardInner() {
   const [chartTarget, setChartTarget] = useState<'A' | 'B'>('A');
   const [chartPauseUntilA, setChartPauseUntilA] = useState(0);
   const [chartPauseUntilB, setChartPauseUntilB] = useState(0);
-  const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(null);
+  // Default to ENABLED (override=true) so the daemon trades on first
+  // boot without requiring the operator to toggle. Persisted UI state
+  // (if any) replaces this default during hydration below.
+  const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(true);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [apiClient, setApiClient] = useState<B1dzClient | null>(null);
 
