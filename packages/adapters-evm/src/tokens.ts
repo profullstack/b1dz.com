@@ -45,6 +45,11 @@ export const TOKENS: Record<EvmChain, Record<string, TokenInfo>> = {
     USDbC: { symbol: 'USDbC', address: '0xd9AAEc86B65D86f6A7B5B1b0c42FFA531710b6CA', decimals: 6 },
     DAI:   { symbol: 'DAI',   address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', decimals: 18 },
     cbBTC: { symbol: 'cbBTC', address: '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf', decimals: 8 },
+    WBTC:  { symbol: 'WBTC',  address: '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf', decimals: 8 }, // cbBTC alias
+    AERO:  { symbol: 'AERO',  address: '0x940181a94A35A4569E4529A3CDfB74e38FD98631', decimals: 18 },
+    DEGEN: { symbol: 'DEGEN', address: '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed', decimals: 18 },
+    BRETT: { symbol: 'BRETT', address: '0x532f27101965dd16442E59d40670FaF5eBB142E4', decimals: 18 },
+    TOSHI: { symbol: 'TOSHI', address: '0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4', decimals: 18 },
   },
   avalanche: {
     AVAX:  { symbol: 'AVAX',  address: NATIVE_ASSET_SENTINEL, decimals: 18 },
@@ -75,7 +80,7 @@ export const TOKENS: Record<EvmChain, Record<string, TokenInfo>> = {
 
 const SYMBOL_ALIASES: Record<string, string> = {
   USD: 'USDC',
-  BTC: 'WBTC',
+  BTC: 'cbBTC',
 };
 
 export function tokenFor(chain: EvmChain, symbol: string): TokenInfo | null {
