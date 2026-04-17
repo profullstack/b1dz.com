@@ -902,12 +902,25 @@ function DashboardInner() {
     | { kind: 'cancel-binance-order'; symbol: string; orderId: number };
   interface HoldingRow { text: string; action?: HoldingAction }
   const holdingRows: HoldingRow[] = [];
-  holdingRows.push({ text: '{bold} Exchange   Asset   Free                Locked             Price        USD Value{/bold}' });
 
   function fmtAmount(n: number): string {
     if (n === 0) return '0';
     if (Math.abs(n) >= 1) return n.toFixed(4);
     return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  // A row earns its line only if it has a non-trivial value OR it locks funds
+  // OR it's an open order. Dust gets silently filtered so the box stays small.
+  const DUST = 0.10;
+
+  // Column widths — visible cell widths. ANSI/blessed tags wrap the padded
+  // text so the tag itself doesn't throw alignment off.
+  const EXCH_W = 9;   // 'binance ', 'kraken  ', 'coinbase'
+  const ASSET_W = 6;  // asset ticker
+  const FREE_W = 26;
+  const LOCKED_W = 22;
+  function exchCell(name: string, color: string): string {
+    return `{${color}-fg}${padRight(name, EXCH_W)}{/}`;
   }
 
   // Binance: detailed rows with locked column and [close] on non-stable free balances.
@@ -918,53 +931,45 @@ function DashboardInner() {
     const unit = isStable ? 1 : (priceOf[b.asset] ?? 0);
     const usdValue = free * unit;
     const lockedUsd = locked * unit;
-    if (free + locked < 1e-8) continue;
-    const freeCell = padLeft(fmtAmount(free), 18);
-    const lockedCell = padLeft(lockedUsd > 0 ? `${fmtAmount(locked)} ($${lockedUsd.toFixed(2)})` : fmtAmount(locked), 22);
-    const priceCell = padLeft(unit > 0 ? `$${formatUsdPrice(unit)}` : '-', 11);
-    const valueCell = padLeft(`$${usdValue.toFixed(2)}`, 11);
-    const text = ` {yellow-fg}binance{/}    ${padRight(b.asset, 6)}  ${freeCell}  ${lockedCell}  ${priceCell}  ${valueCell}`;
-    const canClose = !isStable && free > 0 && unit > 0;
+    if (usdValue < DUST && lockedUsd < DUST) continue;
+    const freeStr = `${fmtAmount(free)}${isStable ? '' : ` ($${usdValue.toFixed(2)})`}`;
+    const lockedStr = locked > 0 ? `${fmtAmount(locked)}${isStable ? '' : ` ($${lockedUsd.toFixed(2)})`}` : '-';
+    const text = ` ${exchCell('binance', 'yellow')} ${padRight(b.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight(lockedStr, LOCKED_W)}`;
+    const canClose = !isStable && free > 0 && unit > 0 && usdValue >= DUST;
     holdingRows.push({
       text,
       action: canClose ? { kind: 'close-binance', asset: b.asset } : undefined,
     });
   }
 
-  // Kraken totals (no free/locked split available).
   for (const h of krakenHoldings) {
-    const freeCell = padLeft(fmtAmount(h.amount), 18);
-    const priceCell = padLeft(h.unitPrice > 0 ? `$${formatUsdPrice(h.unitPrice)}` : '-', 11);
-    const valueCell = padLeft(`$${h.usdValue.toFixed(2)}`, 11);
+    if (h.usdValue < DUST) continue;
+    const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     holdingRows.push({
-      text: ` {cyan-fg}kraken{/}     ${padRight(h.asset, 6)}  ${freeCell}  ${padLeft('-', 22)}  ${priceCell}  ${valueCell}`,
+      text: ` ${exchCell('kraken', 'cyan')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
     });
   }
 
-  // Coinbase totals.
   for (const h of coinbaseHoldings) {
-    const freeCell = padLeft(fmtAmount(h.amount), 18);
-    const priceCell = padLeft(h.unitPrice > 0 ? `$${formatUsdPrice(h.unitPrice)}` : '-', 11);
-    const valueCell = padLeft(`$${h.usdValue.toFixed(2)}`, 11);
+    if (h.usdValue < DUST) continue;
+    const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     holdingRows.push({
-      text: ` {magenta-fg}coinbase{/}   ${padRight(h.asset, 6)}  ${freeCell}  ${padLeft('-', 22)}  ${priceCell}  ${valueCell}`,
+      text: ` ${exchCell('coinbase', 'magenta')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
     });
   }
 
-  // Binance open orders that are locking funds — each cancellable.
   if (binanceOpenOrdersRich.length > 0) {
-    holdingRows.push({ text: ' {white-fg}─── Binance Open Orders (locking funds) ───{/}' });
     for (const o of binanceOpenOrdersRich) {
       const remaining = parseFloat(o.origQty) - parseFloat(o.executedQty);
       const price = parseFloat(o.price);
       const notional = remaining * price;
-      const text = ` {yellow-fg}binance{/}    ${padRight(o.symbol, 10)}  ${o.side.padEnd(4)} ${o.type.padEnd(6)}  qty=${o.origQty}  @$${o.price}  locks=$${notional.toFixed(2)}  ${o.status}`;
+      const text = ` ${exchCell('binance', 'yellow')} ${padRight(o.symbol, ASSET_W)} ${o.side} ${o.type} qty=${o.origQty} @$${o.price} locks=$${notional.toFixed(2)}`;
       holdingRows.push({ text, action: { kind: 'cancel-binance-order', symbol: o.symbol, orderId: o.orderId } });
     }
   }
 
-  if (holdingRows.length === 1) {
-    holdingRows.push({ text: ' {white-fg}No holdings yet (waiting for daemon private-API fetch — 60s cadence){/white-fg}' });
+  if (holdingRows.length === 0) {
+    holdingRows.push({ text: ' {white-fg}No holdings (or waiting for daemon — 60s cadence){/}' });
   }
 
   const holdingsLines = holdingRows.map((r) => r.text);
@@ -1150,7 +1155,7 @@ function DashboardInner() {
   ];
 
   const posH = Math.min(posLines.length + 2, 7);
-  const holdingsH = Math.min(holdingsLines.length + 2, 14);
+  const holdingsH = Math.min(holdingsLines.length + 2, 9);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
@@ -1341,6 +1346,9 @@ function DashboardInner() {
         content={holdingsLines.join('\n')} />
       {holdingRows.map((row, index) => {
         if (!row.action) return null;
+        // Only render a button if its row is visible inside the box.
+        // Box content area = holdingsH - 2 (borders top + bottom).
+        if (index >= holdingsH - 2) return null;
         const rowTop = holdingsTop + 1 + index;
         if (row.action.kind === 'close-binance') {
           const asset = row.action.asset;
@@ -1349,7 +1357,7 @@ function DashboardInner() {
             <ActionButton
               key={`holding-action-${id}`}
               top={rowTop}
-              left={'100%-12' as any}
+              left={'100%-10' as any}
               label="close"
               color="red"
               pending={pendingActions.has(id)}
@@ -1363,7 +1371,7 @@ function DashboardInner() {
           <ActionButton
             key={`holding-action-${id}`}
             top={rowTop}
-            left={'100%-12' as any}
+            left={'100%-11' as any}
             label="cancel"
             color="yellow"
             pending={pendingActions.has(id)}
