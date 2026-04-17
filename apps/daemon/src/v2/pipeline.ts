@@ -19,7 +19,7 @@
  */
 
 import { defaultCexAdapters } from '@b1dz/adapters-cex';
-import { ZeroExAdapter, OneInchAdapter } from '@b1dz/adapters-evm';
+import { ZeroExAdapter, OneInchAdapter, UniswapV3Adapter } from '@b1dz/adapters-evm';
 import { JupiterAdapter } from '@b1dz/adapters-solana';
 import {
   InMemoryEventChannel,
@@ -121,6 +121,9 @@ export function registerExecutor(executor: Executor): void {
 function buildAdapters(): VenueAdapter[] {
   const list: VenueAdapter[] = [...defaultCexAdapters()];
   list.push(new JupiterAdapter());
+  if (process.env.BASE_RPC_URL) {
+    list.push(new UniswapV3Adapter({ chain: 'base' }));
+  }
   if (process.env.ZEROX_API_KEY) {
     list.push(new ZeroExAdapter({ chain: 'base', apiKey: process.env.ZEROX_API_KEY }));
   }
