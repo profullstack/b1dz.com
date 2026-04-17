@@ -5,7 +5,7 @@ import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
 import { setWsLogger, cancelBinanceOrder, closeBinanceHolding, closeGeminiHolding } from '@b1dz/source-crypto-arb';
-import { fetchNews, openUrl, formatNewsTs, type NewsItem } from './news-feed.js';
+import { fetchNews, openUrl, formatNewsTs, briskShortUrl, type NewsItem } from './news-feed.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
@@ -1247,10 +1247,13 @@ function DashboardInner() {
   const pagedActivity = paginateNewestFirst(activityLines, activityPage);
   const pagedRaw = paginateNewestFirst(rawLogLines, rawPage);
 
-  const newsTotalPages = Math.max(1, Math.ceil(news.length / footerPageSize));
+  // News rows are 2 lines each (title + URL on its own line below), so
+  // the page fits half as many items as the 1-line log tabs.
+  const newsPageSize = Math.max(1, Math.floor(footerPageSize / 2));
+  const newsTotalPages = Math.max(1, Math.ceil(news.length / newsPageSize));
   const newsSafePage = Math.min(newsPage, newsTotalPages - 1);
-  const newsStart = newsSafePage * footerPageSize;
-  const pagedNews = news.slice(newsStart, newsStart + footerPageSize);
+  const newsStart = newsSafePage * newsPageSize;
+  const pagedNews = news.slice(newsStart, newsStart + newsPageSize);
 
   let footerLines: string[];
   let footerPage: number;
@@ -1710,21 +1713,27 @@ function DashboardInner() {
               ? (newsError ? ` {red-fg}news error: ${newsError.slice(0, 80)}{/red-fg}` : ' Loading crypto news...')
               : '')
           : (footerLines.join('\n') || (logTab === 'arb' ? ' Waiting for arb pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
-      {logTab === 'news' && pagedNews.map((item, index) => (
-        <box
-          key={`news-row-${newsSafePage}-${index}-${item.uuid}`}
-          top={footerTop + 1 + index}
-          left={1}
-          width={'100%-3' as any}
-          height={1}
-          mouse={true}
-          clickable={true}
-          tags={true}
-          onClick={() => openUrl(item.url)}
-          style={{ bg: 'black', fg: 'white', hover: { bg: 'blue' } }}
-          content={` {white-fg}${formatNewsTs(item.publishedAt)}{/}  {cyan-fg}${(item.source || '').slice(0, 14).padEnd(14)}{/}  ${item.title}`}
-        />
-      ))}
+      {logTab === 'news' && pagedNews.map((item, index) => {
+        const short = briskShortUrl(item.title);
+        return (
+          <box
+            key={`news-row-${newsSafePage}-${index}-${item.uuid}`}
+            top={footerTop + 1 + (index * 2)}
+            left={1}
+            width={'100%-3' as any}
+            height={2}
+            mouse={true}
+            clickable={true}
+            tags={true}
+            onClick={() => openUrl(short)}
+            style={{ bg: 'black', fg: 'white', hover: { bg: 'blue' } }}
+            content={
+              ` {white-fg}${formatNewsTs(item.publishedAt)}{/}  {cyan-fg}${(item.source || '').slice(0, 14).padEnd(14)}{/}  ${item.title}\n`
+              + `                                {white-fg}${short}{/}`
+            }
+          />
+        );
+      })}
     </>
   );
 }
