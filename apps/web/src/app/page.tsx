@@ -287,27 +287,27 @@ export default function LandingPage() {
           <div className="text-center flex flex-col items-center">
             <div className="mb-3"><UniswapV4Logo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Uniswap V4</div>
-            <div className="text-sm">Coming soon</div>
+            <div className="text-sm">EVM · Coming soon</div>
           </div>
           <div className="text-center flex flex-col items-center">
             <div className="mb-3"><PancakeSwapLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">PancakeSwap</div>
-            <div className="text-sm">Coming soon</div>
+            <div className="text-sm">BNB Chain · Coming soon</div>
           </div>
           <div className="text-center flex flex-col items-center">
             <div className="mb-3"><RaydiumLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Raydium</div>
-            <div className="text-sm">Coming soon</div>
+            <div className="text-sm">Solana · Coming soon</div>
           </div>
           <div className="text-center flex flex-col items-center">
             <div className="mb-3"><OrcaLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Orca</div>
-            <div className="text-sm">Coming soon</div>
+            <div className="text-sm">Solana · Coming soon</div>
           </div>
           <div className="text-center flex flex-col items-center">
             <div className="mb-3"><AerodromeLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Aerodrome</div>
-            <div className="text-sm">Coming soon</div>
+            <div className="text-sm">Base · Coming soon</div>
           </div>
         </div>
       </section>
