@@ -72,7 +72,22 @@ interface ArbPipelineState {
     pairs: string[];
     adapters: string[];
     health: Record<string, { ok: boolean; latencyMs?: number }>;
-    recentOpportunities: { asset?: string; buyQuote?: { pair?: string }; buyVenue: string; sellVenue: string; expectedNetUsd?: number; expectedNetBps?: number; executable: boolean; observedAt?: number }[];
+    recentOpportunities: {
+      asset?: string;
+      buyQuote?: { pair?: string };
+      buyVenue: string;
+      sellVenue: string;
+      expectedNetUsd?: number;
+      expectedNetBps?: number;
+      executable: boolean;
+      observedAt?: number;
+      category?: string;
+      route?: {
+        chain?: string;
+        venue?: string;
+        hops?: { tokenIn: string; tokenOut: string; fee: number }[];
+      } | null;
+    }[];
     recentDecisions: { queueId: string; status: string; reason: string; at: number }[];
     circuit: { state: string; trip?: { reason: string; at: number } };
     startedAt: string;
@@ -1037,8 +1052,16 @@ function DashboardInner() {
       for (const o of v.recentOpportunities.slice(-15)) {
         const ts = o.observedAt ? new Date(o.observedAt).toLocaleTimeString('en-US', { hour12: false }) : '??:??:??';
         const exec = o.executable ? '{green-fg}✓{/}' : '{red-fg}✗{/}';
-        const pair = o.buyQuote?.pair ?? o.asset ?? '?';
-        lines.push(`{white-fg}${ts}{/} ${exec} ${pair} {yellow-fg}${o.buyVenue ?? '?'}→${o.sellVenue ?? '?'}{/} net={bold}$${(o.expectedNetUsd ?? 0).toFixed(2)}{/bold} ${(o.expectedNetBps ?? 0).toFixed(0)}bps`);
+        const netStr = `net={bold}$${(o.expectedNetUsd ?? 0).toFixed(2)}{/bold} ${(o.expectedNetBps ?? 0).toFixed(0)}bps`;
+        if (o.category === 'dex_triangular' && o.route?.hops?.length) {
+          const path = o.route.hops.map((h) => h.tokenOut).join('→');
+          const anchor = o.route.hops[0]?.tokenIn ?? '?';
+          const chain = o.route.chain ?? '?';
+          lines.push(`{white-fg}${ts}{/} ${exec} {magenta-fg}TRI{/} ${anchor}→${path} {yellow-fg}${o.route.venue}@${chain}{/} ${netStr}`);
+        } else {
+          const pair = o.buyQuote?.pair ?? o.asset ?? '?';
+          lines.push(`{white-fg}${ts}{/} ${exec} ${pair} {yellow-fg}${o.buyVenue ?? '?'}→${o.sellVenue ?? '?'}{/} ${netStr}`);
+        }
       }
     }
     if (v.recentDecisions.length > 0) {

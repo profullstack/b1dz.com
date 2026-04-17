@@ -27,9 +27,37 @@ export type OpportunityCategory =
   | 'cex_cex'
   | 'cex_dex'
   | 'dex_dex'
+  | 'dex_triangular'
   | 'pumpfun_scalp'
   | 'pumpfun_migration'
   | 'pumpfun_post_migration';
+
+/** Describes a triangular (single-venue, multi-hop cyclic) arbitrage
+ *  route. Present on Opportunity iff `category === 'dex_triangular'`.
+ *
+ *  The route always starts and ends in the same anchor token (MVP: USDC)
+ *  and passes through two intermediate assets via the named DEX venue.
+ *  Execution is atomic — one tx, revert-protects with `amountOutMinimum`
+ *  computed from the quoted `amountOut` and `slippageBps`. */
+export interface TriangularRoute {
+  /** Chain slug, e.g. "base". */
+  chain: string;
+  /** DEX venue, e.g. "uniswap-v3". */
+  venue: string;
+  /** Ordered hops — length 3 for a triangle. */
+  hops: Array<{
+    tokenIn: string;   // symbol
+    tokenOut: string;  // symbol
+    /** Fee tier in hundredths of a bp (Uniswap-V3 convention: 500 = 0.05%). */
+    fee: number;
+  }>;
+  /** Decimal amount of the anchor token spent. */
+  amountIn: string;
+  /** Decimal amount of the anchor token received after all hops. */
+  amountOut: string;
+  /** 0x-prefixed hex — the encoded path bytes for SwapRouter02 `exactInput`. */
+  path: string;
+}
 
 /** PRD Addendum A: execution mode the operator / infra can support.
  *  An opportunity whose recommendedExecutionMode exceeds the available
@@ -115,6 +143,8 @@ export interface Opportunity {
    *  for legacy callers; observer should always populate it via
    *  scoreExecutionMeta() before publishing to the channel. */
   execution?: OpportunityExecutionMeta | null;
+  /** Multi-hop cyclic route. Present iff `category === 'dex_triangular'`. */
+  route?: TriangularRoute | null;
 }
 
 // ─── Adapter interface ────────────────────────────────────────────
@@ -190,7 +220,17 @@ export function scoreExecutionMeta(
   const buyHighMev = buy.chain ? HIGH_MEV_CHAINS.has(buy.chain) : false;
   const sellHighMev = sell.chain ? HIGH_MEV_CHAINS.has(sell.chain) : false;
 
-  if (bothDex && (buyHighMev || sellHighMev)) {
+  if (category === 'dex_triangular') {
+    // Atomic single-tx cyclic swap: all hops succeed or the tx reverts,
+    // so backrun/sandwich windows between legs don't exist. MEV risk is
+    // just whether someone sees the pending tx and front-runs one hop —
+    // on Base that's low. Realizability is bounded by `amountOutMinimum`
+    // slippage; if it's set sensibly, quoted edge translates directly.
+    mev = buyHighMev ? 0.35 : 0.15;
+    latency = 0.1;
+    realizability = buyHighMev ? 0.55 : 0.8;
+    notes.push('dex triangular (atomic) — single-tx cyclic swap');
+  } else if (bothDex && (buyHighMev || sellHighMev)) {
     // PRD §A9: don't try to win public-mempool races against pro MEV.
     mev = 0.85;
     realizability = 0.35;
@@ -300,5 +340,124 @@ export function buildOpportunity(
     sellQuote: sell,
     observedAt: Date.now(),
     execution: scoreExecutionMeta(buy, sell, category),
+  };
+}
+
+// ─── Triangular opportunity helper ────────────────────────────────
+
+export interface BuildTriangularArgs {
+  id: string;
+  /** Decimal USD size of the anchor input. */
+  sizeUsd: string;
+  /** Fully priced route — `amountOut` already reflects all pool fees. */
+  route: TriangularRoute;
+  /** USD value of `route.amountIn` and `route.amountOut` in the anchor
+   *  asset. For a stablecoin anchor these are just the decimal amounts. */
+  amountInUsd: number;
+  amountOutUsd: number;
+  /** Total gas cost of the single atomic tx in USD. */
+  gasUsd: number;
+  /** Additional slippage buffer in bps applied across all hops. Default 150
+   *  (≈ 50 bps × 3 hops). */
+  slippageBps?: number;
+  /** Optional additional riskBuffer USD on top of gas + slippage. */
+  riskBufferUsd?: number;
+}
+
+/** Build an Opportunity for a triangular (single-venue cyclic) route.
+ *
+ *  Unlike `buildOpportunity()`, there is no pairwise buy/sell venue split;
+ *  the whole cycle runs on one venue. To keep the wire shape uniform for
+ *  the channel, TUI, and daemon, we synthesize minimal buy/sell quotes
+ *  from the first and last hop — real data lives on the `route` field.
+ */
+export function buildTriangularOpportunity(args: BuildTriangularArgs): Opportunity {
+  const { id, sizeUsd, route, amountInUsd, amountOutUsd, gasUsd } = args;
+  const slippageBps = args.slippageBps ?? 150;
+  const riskBufferUsd = args.riskBufferUsd ?? 0;
+
+  const grossEdgeUsd = amountOutUsd - amountInUsd;
+  const totalSlippageUsd = (slippageBps / 10_000) * Number.parseFloat(sizeUsd);
+  const expectedNetUsd = grossEdgeUsd - gasUsd - totalSlippageUsd - riskBufferUsd;
+  const sizeNum = Number.parseFloat(sizeUsd);
+  const expectedNetBps = sizeNum > 0 ? (expectedNetUsd / sizeNum) * 10_000 : 0;
+
+  const blockers: string[] = [];
+  if (grossEdgeUsd <= 0) blockers.push('negative gross edge');
+  if (expectedNetUsd <= 0) blockers.push('negative net after costs');
+
+  const now = Date.now();
+  const first = route.hops[0];
+  const last = route.hops[route.hops.length - 1];
+  const anchor = route.hops[0].tokenIn;
+
+  // Synthetic quotes — shaped like the adapter's real NormalizedQuote so
+  // downstream code (TUI, daemon metrics) doesn't need to branch. The
+  // `route` field is the canonical source of truth for the triangle.
+  const buyQuote: NormalizedQuote = {
+    venue: route.venue,
+    venueType: 'dex',
+    chain: route.chain,
+    dexProtocol: route.venue,
+    pair: `${first.tokenOut}-${first.tokenIn}`,
+    baseAsset: first.tokenOut,
+    quoteAsset: first.tokenIn,
+    amountIn: route.amountIn,
+    amountOut: route.amountIn, // placeholder — first-hop amountOut not tracked separately
+    amountInUsd,
+    amountOutUsd: amountInUsd,
+    side: 'buy',
+    estimatedUnitPrice: '0',
+    feeUsd: 0,
+    gasUsd,
+    slippageBps,
+    priceImpactBps: null,
+    routeHops: route.hops.length,
+    routeSummary: route.hops.map((h) => `${h.tokenIn}→${h.tokenOut}@${h.fee}`),
+    quoteTimestamp: now,
+    expiresAt: null,
+    latencyMs: null,
+    allowanceRequired: true,
+    approvalToken: null,
+    tokenLifecycle: null,
+    raw: { path: route.path, hops: route.hops },
+  };
+  const sellQuote: NormalizedQuote = {
+    ...buyQuote,
+    pair: `${last.tokenIn}-${last.tokenOut}`,
+    baseAsset: last.tokenIn,
+    quoteAsset: last.tokenOut,
+    amountIn: route.amountIn,
+    amountOut: route.amountOut,
+    amountInUsd,
+    amountOutUsd,
+    side: 'sell',
+    gasUsd: 0, // gas is on the single tx, not per synthetic leg
+  };
+
+  return {
+    id,
+    buyVenue: route.venue,
+    sellVenue: route.venue,
+    buyChain: route.chain,
+    sellChain: route.chain,
+    asset: anchor,
+    size: sizeUsd,
+    grossEdgeUsd,
+    totalFeesUsd: 0, // pool fees already baked into amountOut
+    totalGasUsd: gasUsd,
+    totalSlippageUsd,
+    riskBufferUsd,
+    expectedNetUsd,
+    expectedNetBps,
+    confidence: Math.min(1, Math.max(0, expectedNetBps / 100)),
+    blockers,
+    executable: blockers.length === 0,
+    category: 'dex_triangular',
+    buyQuote,
+    sellQuote,
+    observedAt: now,
+    execution: scoreExecutionMeta(buyQuote, sellQuote, 'dex_triangular'),
+    route,
   };
 }

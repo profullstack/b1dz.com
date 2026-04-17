@@ -284,6 +284,16 @@ export class UniswapV3Adapter implements VenueAdapter {
     return this.config.quoter as Hex;
   }
 
+  /** Static accessor for chains the adapter supports — lets consumers
+   *  (triangular engine, standalone quoter callers) look up the Uniswap
+   *  V3 contract addresses without instantiating an adapter. Returns null
+   *  for chains that aren't configured. */
+  static addressesFor(chain: EvmChain): { quoter: Hex; router: Hex } | null {
+    const cfg = CHAIN_CONFIG[chain];
+    if (!cfg) return null;
+    return { quoter: cfg.quoter as Hex, router: cfg.router as Hex };
+  }
+
   /** Hardcoded native-token USD fallback used only when the caller
    *  doesn't wire a `nativeUsd` resolver. Pricing service integration
    *  (CEX reference / Pyth / chainlink) belongs one layer up. */

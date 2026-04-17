@@ -19,8 +19,18 @@
  */
 
 import { defaultCexAdapters } from '@b1dz/adapters-cex';
-import { ZeroExAdapter, OneInchAdapter, UniswapV3Adapter } from '@b1dz/adapters-evm';
+import {
+  ZeroExAdapter,
+  OneInchAdapter,
+  UniswapV3Adapter,
+  ViemGasOracle,
+  createPublicClient,
+  http,
+  base as baseChain,
+  type PublicClient,
+} from '@b1dz/adapters-evm';
 import { JupiterAdapter } from '@b1dz/adapters-solana';
+import { TriangularEngine } from '@b1dz/triangular-engine';
 import {
   InMemoryEventChannel,
   type OpportunityStatus,
@@ -97,6 +107,7 @@ interface PipelineState {
   channel: ObservableChannel;
   observer: ObserveEngine;
   daemon: TradeDaemon;
+  triangular: TriangularEngine | null;
   pairs: string[];
   mode: TradeMode;
   startedAt: number;
@@ -208,11 +219,14 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       log: (m) => console.log(`[arb-trader] ${m}`),
     });
 
+    const triangular = maybeBuildTriangularEngine(channel);
+
     observer.start();
     daemon.start();
+    if (triangular) triangular.start();
     const startedAt = Date.now();
     console.log(
-      `[arb] pipeline started mode=${mode} pairs=${pairList.length} adapters=${adapters.map((a) => a.venue).join(',')} executors=${executors.length}`,
+      `[arb] pipeline started mode=${mode} pairs=${pairList.length} adapters=${adapters.map((a) => a.venue).join(',')} executors=${executors.length} triangular=${triangular ? triangular.triangleCount() : 'off'}`,
     );
 
     instance = {
@@ -220,6 +234,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       channel,
       observer,
       daemon,
+      triangular,
       pairs: pairList,
       mode,
       startedAt,
@@ -228,6 +243,68 @@ export async function initV2Pipeline(): Promise<PipelineState> {
     return instance;
   })();
   return initPromise;
+}
+
+/** Build a TriangularEngine if the env says so and Base RPC is available.
+ *
+ *  Enabling requires both:
+ *    ARB_TRIANGULAR=true       explicit opt-in
+ *    BASE_RPC_URL              RPC reachable for QuoterV2 calls
+ *
+ *  Tunables (all optional, safe defaults):
+ *    ARB_TRIANGULAR_ANCHOR     default USDC
+ *    ARB_TRIANGULAR_SIZE_USD   default 100
+ *    ARB_TRIANGULAR_FEE_TIER   default 3000 (0.3%)
+ *    ARB_TRIANGULAR_INTERVAL_MS default 10000
+ *    ARB_TRIANGULAR_MIN_NET_USD default 0.05
+ *    ARB_TRIANGULAR_MAX_PER_TICK default 40
+ *    ARB_TRIANGULAR_TOKENS     comma-separated symbol list, default
+ *                              WETH,cbBTC,AERO,DEGEN,BRETT,TOSHI,DAI
+ *    ETH_USD_HINT              numeric ETH→USD for gas math, default 2500
+ */
+function maybeBuildTriangularEngine(channel: ObservableChannel): TriangularEngine | null {
+  if ((process.env.ARB_TRIANGULAR ?? '').toLowerCase() !== 'true') return null;
+  const rpcUrl = process.env.BASE_RPC_URL;
+  if (!rpcUrl) {
+    console.warn('[arb] ARB_TRIANGULAR=true but BASE_RPC_URL missing — triangular engine disabled');
+    return null;
+  }
+
+  const addresses = UniswapV3Adapter.addressesFor('base');
+  if (!addresses) {
+    console.warn('[arb] triangular: no Uniswap V3 addresses for base — engine disabled');
+    return null;
+  }
+
+  const client = createPublicClient({ chain: baseChain, transport: http(rpcUrl) }) as PublicClient;
+  const gasOracle = new ViemGasOracle({ clients: { base: client } });
+
+  const anchor = process.env.ARB_TRIANGULAR_ANCHOR ?? 'USDC';
+  const amountInDecimal = process.env.ARB_TRIANGULAR_SIZE_USD ?? '100';
+  const feeTier = Number.parseInt(process.env.ARB_TRIANGULAR_FEE_TIER ?? '3000', 10);
+  const intervalMs = Number.parseInt(process.env.ARB_TRIANGULAR_INTERVAL_MS ?? '10000', 10);
+  const minNetUsd = Number.parseFloat(process.env.ARB_TRIANGULAR_MIN_NET_USD ?? '0.05');
+  const maxPerTick = Number.parseInt(process.env.ARB_TRIANGULAR_MAX_PER_TICK ?? '40', 10);
+  const tokensEnv = process.env.ARB_TRIANGULAR_TOKENS ?? 'WETH,cbBTC,AERO,DEGEN,BRETT,TOSHI,DAI';
+  const tokens = tokensEnv.split(',').map((s) => s.trim()).filter(Boolean);
+  const ethUsd = Number.parseFloat(process.env.ETH_USD_HINT ?? '2500');
+
+  return new TriangularEngine({
+    chain: 'base',
+    client,
+    quoter: addresses.quoter,
+    anchor,
+    tokens,
+    amountInDecimal,
+    feeTier,
+    gasOracle,
+    nativeUsd: () => ethUsd,
+    channel,
+    intervalMs,
+    minNetUsd,
+    maxPerTick,
+    log: (m) => console.log(`[arb] ${m}`),
+  });
 }
 
 export function v2Snapshot(): V2PipelineSnapshot | null {

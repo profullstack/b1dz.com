@@ -26,6 +26,7 @@
     "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/storage-supabase": "workspace:*",
     "@b1dz/trade-daemon": "workspace:*",
+    "@b1dz/triangular-engine": "workspace:*",
     "@b1dz/venue-types": "workspace:*",
     "@b1dz/wallet-direct": "workspace:*",
     "@b1dz/wallet-provider": "workspace:*",

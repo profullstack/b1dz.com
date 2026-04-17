@@ -67,6 +67,14 @@ export {
   type ExactInputSingleArgs,
   type ExactInputSingleCall,
 } from './uniswap-router.js';
+export {
+  QUOTER_V2_MULTIHOP_ABI,
+  UNISWAP_V3_MULTIHOP_GAS_LIMIT,
+  encodePath,
+  quoteExactInputMultihop,
+  type MultihopHop,
+  type MultihopQuoteResult,
+} from './uniswap-v3-multihop.js';
 
 // Re-export the thin slice of viem the daemon's executor factory needs.
 // Consumers should import these from `@b1dz/adapters-evm` rather than
