@@ -770,8 +770,18 @@ function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): 
 
   const pnlPct = (currentSnap.bid - current.entryPrice) / current.entryPrice;
   const elapsedMs = Date.now() - current.entryTime;
-  if (elapsedMs < 60_000 && pnlPct > -0.002) return null;
-  if (pnlPct >= TAKE_PROFIT_PCT * 0.75) return null;
+  // Rotation was churning positions on every stronger signal — exiting
+  // at small losses + fees, net-negative across the day. Tightened gates:
+  //   - Minimum hold time before rotating (default 10 min — was 60s)
+  //     matches MIN_HOLD_MS semantics so the scalper gets a chance to
+  //     work. Override via ROTATE_MIN_HOLD_MS env.
+  //   - Require a material adverse pnl to rotate out of a losing trade
+  //     (default -0.5% — was -0.2%). Override via ROTATE_ADVERSE_PCT.
+  //   - Never rotate away from a winner (>25% of take-profit captured).
+  const rotateMinHoldMs = Number.parseFloat(process.env.ROTATE_MIN_HOLD_MS ?? '600000');
+  const rotateAdversePct = Number.parseFloat(process.env.ROTATE_ADVERSE_PCT ?? '-0.005');
+  if (elapsedMs < rotateMinHoldMs && pnlPct > rotateAdversePct) return null;
+  if (pnlPct >= TAKE_PROFIT_PCT * 0.25) return null;
 
   const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : item.exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
   const fee = currentSnap.bid * current.volume * feeRate;

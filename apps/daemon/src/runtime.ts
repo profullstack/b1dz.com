@@ -68,9 +68,37 @@ export class DaemonRuntime {
     console.log('b1dzd: ready');
   }
 
+  /** Auto-enable crypto-dca for any user who has crypto-arb enabled.
+   *  DCA is env-controlled at runtime (DCA_ENABLED + DCA_* vars), so the
+   *  per-user row just needs { enabled: true } to schedule the worker. */
+  private async bootstrapDcaFor(userId: string): Promise<void> {
+    const { data } = await this.supabase
+      .from('source_state')
+      .select('user_id')
+      .eq('user_id', userId)
+      .eq('source_id', 'crypto-dca')
+      .maybeSingle();
+    if (data) return;
+    await this.supabase.from('source_state').upsert(
+      { user_id: userId, source_id: 'crypto-dca', payload: { enabled: true }, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,source_id' },
+    );
+    console.log(`b1dzd: auto-enabled crypto-dca for user ${userId.slice(0, 8)}…`);
+  }
+
   /** Find every (user, source) pair that has credentials and ensure a tick is scheduled. */
   async discover() {
     if (this.stopping) return;
+    // Auto-enable crypto-dca for any user who already has crypto-arb on.
+    const { data: arbUsers } = await this.supabase
+      .from('source_state')
+      .select('user_id')
+      .eq('source_id', 'crypto-arb');
+    for (const row of arbUsers ?? []) {
+      try { await this.bootstrapDcaFor(row.user_id as string); }
+      catch (e) { console.error(`b1dzd: dca bootstrap failed: ${(e as Error).message}`); }
+    }
+
     for (const source of SOURCES) {
       const { data, error } = await this.supabase
         .from('source_state')
