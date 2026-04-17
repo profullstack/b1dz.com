@@ -1037,7 +1037,7 @@ function DashboardInner() {
       for (const o of v.recentOpportunities.slice(-15)) {
         const ts = new Date(o.at).toLocaleTimeString('en-US', { hour12: false });
         const exec = o.executable ? '{green-fg}✓{/}' : '{red-fg}✗{/}';
-        lines.push(`{white-fg}${ts}{/} ${exec} ${o.pair} {yellow-fg}${o.buyVenue}→${o.sellVenue}{/} net={bold}$${o.netUsd.toFixed(2)}{/bold} ${o.netBps.toFixed(0)}bps`);
+        lines.push(`{white-fg}${ts}{/} ${exec} ${o.pair ?? '?'} {yellow-fg}${o.buyVenue ?? '?'}→${o.sellVenue ?? '?'}{/} net={bold}$${(o.netUsd ?? 0).toFixed(2)}{/bold} ${(o.netBps ?? 0).toFixed(0)}bps`);
       }
     }
     if (v.recentDecisions.length > 0) {
