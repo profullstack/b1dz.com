@@ -41,6 +41,10 @@ export interface AnalysisSignal {
     volumeRatio: number;
     spreadPct: number;
   };
+  /** 15-minute chart trend direction. Used to suppress early exits while
+   *  the higher timeframe still confirms the move — buy-and-hold rather
+   *  than round-tripping every 5m wobble. */
+  confirmTrend?: 'bull' | 'bear' | 'neutral';
   reasons: string[];
   rejectReasons: string[];
   rejected: boolean;
@@ -297,6 +301,7 @@ export function analyzeSignal(input: AnalysisInput): AnalysisSignal {
       volumeRatio,
       spreadPct,
     },
+    confirmTrend: confirmBull ? 'bull' : confirmBear ? 'bear' : 'neutral',
     reasons: best?.reasons ?? [],
     rejectReasons: riskFilter.rejectReasons,
     rejected: riskFilter.rejected,
