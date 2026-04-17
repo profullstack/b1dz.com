@@ -825,6 +825,7 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     if (msg.includes('Temporary lockout')) {
       krakenHydrationBlockedUntil = Math.max(krakenHydrationBlockedUntil, Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS);
     }
+    console.log(`[trade] kraken balance fetch failed: ${msg}`);
   }
 
   try {
@@ -835,9 +836,10 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
       USDC: parseFloat(availableBal.USDC ?? '0'),
       USDT: parseFloat(availableBal.USDT ?? '0'),
     };
-  } catch {
+  } catch (e) {
     spendableQuoteBalances.coinbase = {};
     accountBalances.coinbase = {};
+    console.log(`[trade] coinbase balance fetch failed: ${(e as Error).message}`);
   }
 
   try {
@@ -848,9 +850,10 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
       USDC: parseFloat(bal.USDC ?? '0'),
       USDT: parseFloat(bal.USDT ?? '0'),
     };
-  } catch {
+  } catch (e) {
     spendableQuoteBalances['binance-us'] = {};
     accountBalances['binance-us'] = {};
+    console.log(`[trade] binance balance fetch failed: ${(e as Error).message}`);
   }
 
   try {
