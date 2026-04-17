@@ -22,7 +22,12 @@ const {
 } = await import('@b1dz/source-crypto-arb');
 
 function envStatus(names: string[]): string {
-  return names.map((n) => `${n}=${process.env[n] ? '✓' : '✗'}`).join(' ');
+  // Each entry may be a single name or "NAME_A|NAME_B" if either satisfies.
+  return names.map((n) => {
+    const alts = n.split('|');
+    const hit = alts.find((alt) => process.env[alt]);
+    return `${hit ?? alts[0]}=${hit ? '✓' : '✗'}`;
+  }).join(' ');
 }
 
 function fmtBalance(bal: Record<string, string>): string {
@@ -43,7 +48,7 @@ async function probe(label: string, envVars: string[], fn: () => Promise<Record<
 }
 
 await probe('Kraken',     ['KRAKEN_API_KEY', 'KRAKEN_API_SECRET'], getKrakenBalance);
-await probe('Coinbase',   ['COINBASE_API_KEY_NAME', 'COINBASE_PRIVATE_KEY_PEM'], getCoinbaseBalance);
+await probe('Coinbase',   ['COINBASE_API_KEY_NAME', 'COINBASE_API_PRIVATE_KEY|COINBASE_API_PRIVATE_KEY_B64'], getCoinbaseBalance);
 await probe('Binance.US', ['BINANCE_US_API_KEY', 'BINANCE_US_API_SECRET'], getBinanceBalance);
 await probe('Gemini',     ['GEMINI_API_KEY', 'GEMINI_API_SECRET'], getGeminiBalance);
 

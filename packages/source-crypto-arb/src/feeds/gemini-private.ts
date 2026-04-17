@@ -32,13 +32,27 @@ function getKeys() {
   return { key, secret };
 }
 
-// Nonce must be strictly increasing per API key. Use ms epoch + counter so
-// back-to-back calls never collide even on machines with coarse clocks.
-let lastNonce = 0;
-function nextNonce(): number {
-  const now = Date.now();
-  lastNonce = Math.max(now, lastNonce + 1);
-  return lastNonce;
+// Nonce must be strictly increasing per API key. Gemini remembers the
+// highest nonce ever used and rejects anything smaller with InvalidNonce
+// — forever, until you regenerate the key or bump past their stored max.
+//
+// Strategy:
+//   Base = Date.now() in nanoseconds (BigInt; exceeds JS safe int)
+//   Add an optional GEMINI_NONCE_OFFSET (raw BigInt bytes, added on top)
+//     so if a previous client left a very high ns or hybrid nonce, the
+//     user can escape InvalidNonce without regenerating the key.
+//
+// Encoded as a string in the payload — Gemini accepts string nonces.
+function parseOffsetEnv(): bigint {
+  try { return BigInt(process.env.GEMINI_NONCE_OFFSET ?? '0') }
+  catch { return 0n }
+}
+const NONCE_OFFSET = parseOffsetEnv();
+let lastNonce = 0n;
+function nextNonce(): string {
+  const nowNs = BigInt(Date.now()) * 1_000_000n + NONCE_OFFSET;
+  lastNonce = nowNs > lastNonce ? nowNs : lastNonce + 1n;
+  return lastNonce.toString();
 }
 
 async function geminiPrivate<T>(
