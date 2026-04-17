@@ -171,6 +171,39 @@ export async function hasTradingProduct(productId: string): Promise<boolean> {
   return tradableProducts.has(productId);
 }
 
+export interface CoinbaseTradableLimits {
+  /** Smallest base-unit increment a sell can step by (e.g. 0.1 RAVE). */
+  baseIncrement: number;
+  /** Minimum base amount per order (e.g. 0.1 RAVE). */
+  baseMinSize: number;
+  /** Minimum quote (USD) value per order. 0 when unreported. */
+  quoteMinSize: number;
+  /** Smallest price-tick increment for limit orders. */
+  priceIncrement: number;
+}
+
+/** Return the tradable filters Coinbase enforces on the product, so
+ *  callers can pre-flight whether a proposed buy would yield a
+ *  position that's still sellable afterward.
+ *
+ *  Returns null when the product isn't in the cached metadata — caller
+ *  should treat that as "unknown limits", not "zero limits". */
+export async function getTradableLimits(productId: string): Promise<CoinbaseTradableLimits | null> {
+  await syncProducts();
+  const p = productMetaById.get(productId);
+  if (!p) return null;
+  const parsePos = (s: string | undefined): number => {
+    const n = parseFloat(s ?? '');
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  return {
+    baseIncrement: parsePos(p.base_increment),
+    baseMinSize: parsePos(p.base_min_size),
+    quoteMinSize: parsePos(p.quote_min_size),
+    priceIncrement: parsePos(p.price_increment ?? p.quote_increment),
+  };
+}
+
 export async function getBalance(): Promise<Record<string, string>> {
   const data = await coinbasePrivate<AccountsResponse>('GET', '/api/v3/brokerage/accounts?limit=50');
   const result: Record<string, string> = {};

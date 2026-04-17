@@ -28,6 +28,7 @@ import {
   getCoinbaseFills,
   getBinanceTrades,
   getBinanceTradingRules,
+  getCoinbaseTradableLimits,
   hasBinanceTradingSymbol,
   hasCoinbaseTradingProduct,
   hasKrakenTradingPair,
@@ -36,6 +37,11 @@ import {
   getActivePairs,
 } from '@b1dz/source-crypto-arb';
 import type { Candle } from './analysis/candles.js';
+import {
+  sellVolumeWithCushion,
+  sellabilityBlocker,
+  type VenueSellLimits,
+} from './sellability.js';
 import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
 import {
   TAKE_PROFIT_PCT,
@@ -591,6 +597,67 @@ async function actualBaseBalanceFor(exchange: string, pair: string): Promise<num
   return 0;
 }
 
+/** Look up the venue's sell-side limits for a pair, normalized into the
+ *  shape the pure `sellability.ts` helpers accept. Returns null when no
+ *  metadata is available — caller treats that as "unknown, defer to
+ *  exchange validation". */
+async function getVenueSellLimits(exchange: string, pair: string): Promise<VenueSellLimits | null> {
+  try {
+    if (exchange === 'coinbase') {
+      const l = await getCoinbaseTradableLimits(pair);
+      if (!l) return null;
+      return {
+        baseMinSize: l.baseMinSize > 0 ? l.baseMinSize : null,
+        quoteMinSize: l.quoteMinSize > 0 ? l.quoteMinSize : null,
+      };
+    }
+    if (exchange === 'kraken') {
+      const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      const minVol = await getKrakenPairMinVolume(krakenPair);
+      return minVol != null ? { baseMinSize: minVol } : null;
+    }
+    if (exchange === 'binance-us') {
+      const symbol = pair.replace('-', '');
+      const rules = await getBinanceTradingRules(symbol);
+      if (!rules) return null;
+      return { baseMinSize: rules.minQty, minNotional: rules.minNotional };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Compute the SELL exit volume for the given cap and live balance.
+ *
+ *  Defers the cushion-vs-min decision to the pure `sellVolumeWithCushion`
+ *  helper so the venue lookup here stays as a thin dispatcher. Without
+ *  this the 0.5% fee-skim cushion zeroes out coarse-increment tokens
+ *  like RAVE-USD on Coinbase (base_min_size 0.1 — see sellability.ts). */
+async function computeVenueSellVolume(
+  exchange: string,
+  pair: string,
+  availableBase: number,
+  cap: number,
+): Promise<number> {
+  const limits = await getVenueSellLimits(exchange, pair);
+  return sellVolumeWithCushion(availableBase, cap, limits);
+}
+
+/** Pre-flight check for BUY orders. Refuses buys that would settle
+ *  into a position too small to sell back (post-fee base < venue min,
+ *  or post-fee notional < venue quote min). Returns a reason string
+ *  to include in the SKIPPED activity log, or null to allow the buy. */
+async function checkSellableAfterBuy(
+  exchange: string,
+  pair: string,
+  baseAmount: number,
+  price: number,
+): Promise<string | null> {
+  const limits = await getVenueSellLimits(exchange, pair);
+  return sellabilityBlocker(baseAmount, price, limits);
+}
+
 async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPair: string): Promise<boolean> {
   if (hasPositionOnExchange(exchange)) return false;
 
@@ -621,7 +688,7 @@ async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPa
   if (!candidate) return false;
 
   const availableBase = await actualBaseBalanceFor(exchange, candidate.pair);
-  const sellVolume = Math.min(candidate.amount, availableBase * 0.995);
+  const sellVolume = await computeVenueSellVolume(exchange, candidate.pair, availableBase, candidate.amount);
   if (!Number.isFinite(sellVolume) || sellVolume <= 0) return false;
 
   console.log(`[trade] FREE FUNDS ${exchange}:${candidate.pair} value≈$${candidate.usdValue.toFixed(2)} to fund ${targetPair}`);
@@ -1464,7 +1531,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const liquidationKey = `${exchange}:${pair}`;
           try {
             const availableBase = await actualBaseBalanceFor(exchange, pair);
-            const sellVolume = Math.min(meta.liquidation.volume, availableBase * 0.995);
+            const sellVolume = await computeVenueSellVolume(exchange, pair, availableBase, meta.liquidation.volume);
             if (!Number.isFinite(sellVolume) || sellVolume <= 0 || sellVolume * meta.snap.bid < 0.01) {
               pendingLiquidations.delete(liquidationKey);
               return { ok: false, message: `cleared stale ${pair} liquidation on ${exchange} (no sellable balance)` };
@@ -1499,7 +1566,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         if (!pos) return { ok: false, message: 'no open position to sell' };
         try {
           const availableBase = await actualBaseBalanceFor(exchange, pair);
-          const sellVolume = Math.min(pos.volume, availableBase * 0.995);
+          const sellVolume = await computeVenueSellVolume(exchange, pair, availableBase, pos.volume);
           if (!Number.isFinite(sellVolume) || sellVolume <= 0 || sellVolume * meta.snap.bid < 0.01) {
             clearTrackedPosition(posKey, exchange);
             return { ok: false, message: `cleared stale ${pair} position on ${exchange} (no sellable balance)` };
@@ -1594,6 +1661,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
       const volume = spendBudget / price;
+
+      // Pre-flight: will this position be sellable afterward? If the
+      // post-fee base balance would sit below the venue's sell-side
+      // minimums we'd open an un-exitable dust position. Skip instead.
+      const postFeeVolume = volume * (1 - feeRate);
+      const unsellableReason = await checkSellableAfterBuy(exchange, pair, postFeeVolume, price);
+      if (unsellableReason) {
+        return { ok: false, message: `skip buy ${exchange}:${pair} — would be unsellable (${unsellableReason})` };
+      }
 
       console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
       try {
