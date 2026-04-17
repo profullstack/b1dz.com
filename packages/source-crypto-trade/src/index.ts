@@ -1190,10 +1190,26 @@ function dailyPnlPct(): number {
   return (dailyPnl / dailyEquityBaselineUsd) * 100;
 }
 
+/** Runtime-adjustable daily-loss threshold. Defaults to the env/config value
+ *  but can be raised/lowered via the TUI and persisted in crypto-ui-settings. */
+let dailyLossLimitPctRuntime = DAILY_LOSS_LIMIT_PCT;
+
+export function setDailyLossLimitPct(pct: number | null): void {
+  const next = pct == null || !Number.isFinite(pct) || pct <= 0 ? DAILY_LOSS_LIMIT_PCT : pct;
+  if (next !== dailyLossLimitPctRuntime) {
+    dailyLossLimitPctRuntime = next;
+    console.log(`[trade] daily loss limit → ${next.toFixed(1)}%`);
+  }
+}
+
+export function getDailyLossLimitPct(): number {
+  return dailyLossLimitPctRuntime;
+}
+
 function isDailyLossLimitHit(): boolean {
   refreshDailyEquityBaselineIfNeeded();
   if (!(dailyEquityBaselineUsd > 0)) return false;
-  return dailyPnlPct() <= -DAILY_LOSS_LIMIT_PCT;
+  return dailyPnlPct() <= -dailyLossLimitPctRuntime;
 }
 
 /**
@@ -1284,8 +1300,8 @@ export function getTradeStatus(): TradeStatus {
     position: pos,
     dailyPnl: trackedDailyPnl,
     dailyPnlPct: dailyEquityBaselineUsd > 0 ? (trackedDailyPnl / dailyEquityBaselineUsd) * 100 : 0,
-    dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -DAILY_LOSS_LIMIT_PCT : false,
-    dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
+    dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -dailyLossLimitPctRuntime : false,
+    dailyLossLimitPct: dailyLossLimitPctRuntime,
     cooldowns,
     eligiblePairs: lastEligiblePairs.length,
     observedPairs: new Set([...histories.keys()].map((key) => key.split(':').slice(1).join(':'))).size,

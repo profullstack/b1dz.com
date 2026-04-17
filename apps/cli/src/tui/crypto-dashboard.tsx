@@ -354,6 +354,7 @@ function DashboardInner() {
   // boot without requiring the operator to toggle. Persisted UI state
   // (if any) replaces this default during hydration below.
   const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(true);
+  const [dailyLossLimitOverridePct, setDailyLossLimitOverridePct] = useState<number | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [apiClient, setApiClient] = useState<B1dzClient | null>(null);
@@ -489,6 +490,7 @@ function DashboardInner() {
     let active = true;
     apiClient.storage.get<{
       tradingEnabled?: boolean | null;
+      dailyLossLimitPct?: number | null;
       chartPairA?: string | null;
       chartPairB?: string | null;
       chartExchangeA?: string | null;
@@ -500,6 +502,9 @@ function DashboardInner() {
       if (settings) {
         if (settings.tradingEnabled === true || settings.tradingEnabled === false) {
           setTradingEnabled(settings.tradingEnabled);
+        }
+        if (typeof settings.dailyLossLimitPct === 'number' && isFinite(settings.dailyLossLimitPct) && settings.dailyLossLimitPct > 0) {
+          setDailyLossLimitOverridePct(settings.dailyLossLimitPct);
         }
         if (settings.chartPairA) setChartPair(settings.chartPairA);
         if (settings.chartPairB) setChartPairB(settings.chartPairB);
@@ -525,6 +530,7 @@ function DashboardInner() {
     const handle = setTimeout(() => {
       apiClient.storage.put('source-state', 'crypto-ui-settings', {
         tradingEnabled,
+        dailyLossLimitPct: dailyLossLimitOverridePct,
         chartPairA: chartPair,
         chartPairB,
         chartExchangeA,
@@ -534,7 +540,7 @@ function DashboardInner() {
       }).catch((e) => addLog(`{red-fg}Persist settings failed: ${(e as Error).message?.slice(0, 60)}{/red-fg}`));
     }, 500);
     return () => clearTimeout(handle);
-  }, [apiClient, settingsHydrated, tradingEnabled, chartPair, chartPairB, chartExchangeA, chartExchangeB, chartTimeframe, chartTarget]);
+  }, [apiClient, settingsHydrated, tradingEnabled, dailyLossLimitOverridePct, chartPair, chartPairB, chartExchangeA, chartExchangeB, chartTimeframe, chartTarget]);
 
   // Poll API for daemon state
   useEffect(() => {
@@ -737,14 +743,25 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const pnlPctStr = realizedPnlPct >= 0 ? `{green-fg}(+${realizedPnlPct.toFixed(2)}%){/}` : `{red-fg}(${realizedPnlPct.toFixed(2)}%){/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
+  const currentDailyLimitPct = dailyLossLimitOverridePct ?? ts?.dailyLossLimitPct ?? 5;
   const haltStr = ts?.dailyLossLimitHit
-    ? `  {black-fg}{yellow-bg} HALTED ${ts?.dailyLossLimitPct?.toFixed(1) ?? '5.0'}% daily limit {/}`
-    : '';
+    ? `  {black-fg}{yellow-bg} HALTED ${currentDailyLimitPct.toFixed(1)}% daily limit {/}`
+    : `  {white-fg}daily-limit:${currentDailyLimitPct.toFixed(1)}%{/}`;
   const tradingStr = tradingEnabled === true
     ? `  {black-fg}{green-bg} TRADING: ENABLED (override) {/}`
     : tradingEnabled === false
       ? `  {white-fg}{red-bg} TRADING: DISABLED {/}`
       : '';
+
+  const adjustDailyLimit = (deltaPct: number) => {
+    setDailyLossLimitOverridePct((prev) => {
+      const current = prev ?? ts?.dailyLossLimitPct ?? 5;
+      const next = Math.max(1, Math.min(100, Math.round((current + deltaPct) * 10) / 10));
+      addLog(`{yellow-fg}⚙ daily loss limit → ${next.toFixed(1)}% (saves to settings){/}`);
+      return next;
+    });
+  };
+
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr} ${pnlPctStr}${haltStr}${tradingStr}  fees:$${totalFees.toFixed(2)}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
@@ -1276,6 +1293,39 @@ function DashboardInner() {
     <>
       <box top={0} left={0} width="100%" height={1} tags={true}
         style={{ bg: 'blue', fg: 'white' }} content={statusText} />
+      <box
+        top={0}
+        left={'100%-14' as any}
+        width={3}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => adjustDailyLimit(-5)}
+        style={{ bg: 'red', fg: 'white' }}
+        content=" - "
+      />
+      <box
+        top={0}
+        left={'100%-10' as any}
+        width={6}
+        height={1}
+        tags={true}
+        style={{ bg: 'blue', fg: 'white' }}
+        content={` ${currentDailyLimitPct.toFixed(1).padStart(4, ' ')}%`}
+      />
+      <box
+        top={0}
+        left={'100%-4' as any}
+        width={3}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => adjustDailyLimit(5)}
+        style={{ bg: 'green', fg: 'black' }}
+        content=" + "
+      />
 
       <box top={1} left={0} width="100%" height={1}
         style={{ bg: 'black', fg: 'white' }} />
