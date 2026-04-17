@@ -43,7 +43,7 @@ const platformMentions = [
 const supportedFeatures = [
   {
     title: 'Realtime Multi-Exchange Data',
-    desc: 'Persistent WebSocket feeds, live prices, balances, spreads, activity logs, and raw daemon status across Kraken, Coinbase, and Binance.US.',
+    desc: 'Persistent WebSocket feeds, live prices, balances, spreads, activity logs, and raw daemon status across Kraken, Coinbase, Binance.US, and Gemini.',
     icon: 'chart',
   },
   {
@@ -242,7 +242,33 @@ export default function LandingPage() {
           </div>
           <div className="text-center">
             <div className="text-2xl font-bold text-zinc-200 mb-1">Gemini</div>
-            <div className="text-sm">Coming soon</div>
+            <div className="text-sm">0.40% taker fee</div>
+          </div>
+        </div>
+
+        <h3 className="text-2xl font-bold mt-16 mb-8">
+          <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Supported DEXes</span>
+        </h3>
+        <div className="flex flex-wrap items-center justify-center gap-12 text-zinc-400">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Uniswap V3</div>
+            <div className="text-sm">ETH · Base · Arbitrum · Optimism · Polygon</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-zinc-200 mb-1">0x</div>
+            <div className="text-sm">Multi-chain aggregator</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-zinc-200 mb-1">1inch</div>
+            <div className="text-sm">Multi-chain aggregator</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Jupiter</div>
+            <div className="text-sm">Solana aggregator</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-zinc-200 mb-1">Pump.fun</div>
+            <div className="text-sm">Solana launchpad</div>
           </div>
         </div>
       </section>
