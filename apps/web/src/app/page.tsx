@@ -1,5 +1,9 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import {
+  KrakenLogo, CoinbaseLogo, BinanceLogo, GeminiLogo,
+  UniswapLogo, ZeroExLogo, OneInchLogo, JupiterLogo, PumpFunLogo,
+} from './_components/brand-logos';
 
 const platformMentions = [
   {
@@ -227,20 +231,24 @@ export default function LandingPage() {
         <h2 className="text-3xl font-bold mb-8">
           <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Supported exchanges</span>
         </h2>
-        <div className="flex items-center justify-center gap-12 text-zinc-400">
-          <div className="text-center">
+        <div className="flex flex-wrap items-center justify-center gap-12 text-zinc-400">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><KrakenLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Kraken</div>
             <div className="text-sm">0.26% taker fee</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><CoinbaseLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Coinbase</div>
             <div className="text-sm">0.60% taker fee</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><BinanceLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Binance.US</div>
             <div className="text-sm">0.10% taker fee</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><GeminiLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Gemini</div>
             <div className="text-sm">0.40% taker fee</div>
           </div>
@@ -250,23 +258,28 @@ export default function LandingPage() {
           <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Supported DEXes</span>
         </h3>
         <div className="flex flex-wrap items-center justify-center gap-12 text-zinc-400">
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><UniswapLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Uniswap V3</div>
             <div className="text-sm">ETH · Base · Arbitrum · Optimism · Polygon</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><ZeroExLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">0x</div>
             <div className="text-sm">Multi-chain aggregator</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><OneInchLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">1inch</div>
             <div className="text-sm">Coming soon</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><JupiterLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Jupiter</div>
             <div className="text-sm">Solana aggregator</div>
           </div>
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
+            <div className="mb-3"><PumpFunLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Pump.fun</div>
             <div className="text-sm">Solana launchpad</div>
           </div>
