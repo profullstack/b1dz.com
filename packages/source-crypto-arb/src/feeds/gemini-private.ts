@@ -55,6 +55,15 @@ function nextNonce(): string {
   return lastNonce.toString();
 }
 
+/** Master API keys (prefix "master-") require an `account` field on every
+ *  private request. Account-scoped keys (prefix "account-" / "primary-")
+ *  reject the field. We auto-detect from the key prefix so ops only need to
+ *  set GEMINI_ACCOUNT when running a non-"primary" named sub-account. */
+function resolveAccount(key: string): string | null {
+  if (!key.startsWith("master-")) return null;
+  return process.env.GEMINI_ACCOUNT || "primary";
+}
+
 async function geminiPrivate<T>(
   path: string,
   extraPayload: Record<string, unknown> = {},
@@ -62,12 +71,14 @@ async function geminiPrivate<T>(
 ): Promise<T> {
   const { key, secret } = getKeys();
   const url = `${BASE}${path}`;
+  const account = resolveAccount(key);
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const payload = {
         request: path,
         nonce: nextNonce(),
+        ...(account ? { account } : {}),
         ...extraPayload,
       };
       const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64');
