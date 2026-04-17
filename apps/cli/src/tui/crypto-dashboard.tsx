@@ -4,7 +4,7 @@ import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
-import { setWsLogger, cancelBinanceOrder, closeBinanceHolding } from '@b1dz/source-crypto-arb';
+import { setWsLogger, cancelBinanceOrder, closeBinanceHolding, closeGeminiHolding } from '@b1dz/source-crypto-arb';
 import { fetchNews, openUrl, formatNewsTs, type NewsItem } from './news-feed.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
@@ -937,6 +937,7 @@ function DashboardInner() {
 
   type HoldingAction =
     | { kind: 'close-binance'; asset: string }
+    | { kind: 'close-gemini'; asset: string }
     | { kind: 'cancel-binance-order'; symbol: string; orderId: number };
   interface HoldingRow { text: string; action?: HoldingAction }
   const holdingRows: HoldingRow[] = [];
@@ -999,8 +1000,10 @@ function DashboardInner() {
   for (const h of geminiHoldings) {
     if (h.usdValue < DUST) continue;
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
+    const canClose = !h.isStable && h.amount > 0 && h.unitPrice > 0 && h.usdValue >= DUST;
     holdingRows.push({
       text: ` ${exchCell('gemini', 'blue')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+      action: canClose ? { kind: 'close-gemini', asset: h.asset } : undefined,
     });
   }
 
@@ -1042,6 +1045,15 @@ function DashboardInner() {
       addLog(`{yellow-fg}⚡ closing Binance ${asset} at market...{/}`);
       const res = await closeBinanceHolding(asset);
       addLog(`{green-fg}✓ Binance ${asset} sold: orderId=${res.orderId} status=${res.status} executed=${res.executedQty}{/}`);
+    });
+  };
+
+  const onCloseGeminiHolding = (asset: string) => {
+    const id = `close-gemini:${asset}`;
+    void runAction(id, async () => {
+      addLog(`{yellow-fg}⚡ closing Gemini ${asset} at market (IOC limit −2% from bid)...{/}`);
+      const res = await closeGeminiHolding(asset);
+      addLog(`{green-fg}✓ Gemini ${asset} sold: order_id=${res.order_id} executed=${res.executed_amount}{/}`);
     });
   };
 
@@ -1442,6 +1454,21 @@ function DashboardInner() {
               color="red"
               pending={pendingActions.has(id)}
               onClick={() => onCloseBinanceHolding(asset)}
+            />
+          );
+        }
+        if (row.action.kind === 'close-gemini') {
+          const asset = row.action.asset;
+          const id = `close-gemini:${asset}`;
+          return (
+            <ActionButton
+              key={`holding-action-${id}`}
+              top={rowTop}
+              left={'100%-10' as any}
+              label="close"
+              color="red"
+              pending={pendingActions.has(id)}
+              onClick={() => onCloseGeminiHolding(asset)}
             />
           );
         }
