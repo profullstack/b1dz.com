@@ -33,6 +33,9 @@ export interface ExecutorOutcome {
   resolvedReason: string;
   /** Optional audit trail: tx hash (EVM/Solana) or order id (CEX). */
   externalId?: string;
+  /** True when an executor's execute() was actually called (vs routing
+   *  mismatch / inventory abort). Only real executions trip the circuit. */
+  executorRan?: boolean;
 }
 
 export interface Executor {
@@ -290,10 +293,15 @@ export class TradeDaemon {
           finalReason = outcome.externalId
             ? `${outcome.resolvedReason} (ref=${outcome.externalId})`
             : outcome.resolvedReason;
-          this.circuit.recordExecution({
-            filled: outcome.status === 'filled',
-            realizedPnlUsd: this.pnlFromOutcome(d.opportunity, outcome) ?? undefined,
-          });
+          // Only record to circuit when an executor actually ran.
+          // "No executor can handle" is a routing mismatch, not an
+          // execution failure — it must not trip the circuit breaker.
+          if (outcome.executorRan) {
+            this.circuit.recordExecution({
+              filled: outcome.status === 'filled',
+              realizedPnlUsd: this.pnlFromOutcome(d.opportunity, outcome) ?? undefined,
+            });
+          }
         }
       }
 
@@ -336,12 +344,13 @@ export class TradeDaemon {
       };
     }
     try {
-      return await executor.execute(opp);
+      const result = await executor.execute(opp);
+      return { ...result, executorRan: true };
     } catch (e) {
       // Executor contract says execute() must not throw — this is a
       // bug on the executor side. Catch anyway to keep the tick loop
       // alive.
-      return { status: 'aborted', resolvedReason: `executor threw: ${(e as Error).message.slice(0, 160)}` };
+      return { status: 'aborted', resolvedReason: `executor threw: ${(e as Error).message.slice(0, 160)}`, executorRan: true };
     }
   }
 
