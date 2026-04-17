@@ -5,6 +5,7 @@ import {
   KrakenFeed, BinanceUsFeed, CoinbaseFeed,
   getBalance, getBinanceBalance, getCoinbaseBalance, getCoinbaseAuthDebug,
   getBinanceDetailedBalance, getBinanceOpenOrders,
+  getGeminiBalance,
   getTradeHistory, getOpenOrders,
   getActivePairs,
   subscribeWs, wsCacheSize, setWsLogger,
@@ -22,6 +23,7 @@ const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
 let cachedKrakenBalance: Record<string, string> = {};
 let cachedBinanceBalance: Record<string, string> = {};
 let cachedCoinbaseBalance: Record<string, string> = {};
+let cachedGeminiBalance: Record<string, string> = {};
 let cachedBinanceDetailedBalance: BinanceAssetBalance[] = [];
 let cachedBinanceOpenOrders: unknown[] = [];
 let cachedRecentTrades: unknown[] = [];
@@ -120,6 +122,13 @@ export const cryptoArbWorker: SourceWorker = {
         const detail = err.cause ? ` (${err.cause.message})` : '';
         logRaw(`[coinbase] ✗ Unable to connect: ${err.message}${detail}`, 'crypto-arb');
       }
+      try {
+        cachedGeminiBalance = await getGeminiBalance();
+        logRaw(`[gemini] balance: ${Object.entries(cachedGeminiBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`, 'crypto-arb');
+      } catch (e) {
+        cachedGeminiBalance = {};
+        logRaw(`[gemini] ✗ Unable to connect: ${(e as Error).message}`, 'crypto-arb');
+      }
       }
 
       // ── Initialize WebSocket feeds on first tick ──
@@ -194,6 +203,7 @@ export const cryptoArbWorker: SourceWorker = {
         krakenBalance: cachedKrakenBalance,
         binanceBalance: cachedBinanceBalance,
         coinbaseBalance: cachedCoinbaseBalance,
+        geminiBalance: cachedGeminiBalance,
       };
 
       // ── Run arb evaluation + execution ──
@@ -227,6 +237,7 @@ export const cryptoArbWorker: SourceWorker = {
       krakenBalance: cachedKrakenBalance,
       binanceBalance: cachedBinanceBalance,
       coinbaseBalance: cachedCoinbaseBalance,
+      geminiBalance: cachedGeminiBalance,
       binanceDetailedBalance: cachedBinanceDetailedBalance,
       binanceOpenOrders: cachedBinanceOpenOrders,
       recentTrades: cachedRecentTrades,

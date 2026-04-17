@@ -59,6 +59,7 @@ interface ArbState {
   krakenBalance: Record<string, string>;
   binanceBalance: Record<string, string>;
   coinbaseBalance: Record<string, string>;
+  geminiBalance?: Record<string, string>;
   binanceDetailedBalance?: { asset: string; free: string; locked: string }[];
   binanceOpenOrders?: { symbol: string; orderId: number; side: string; type: string; price: string; origQty: string; executedQty: string; status: string }[];
   recentTrades: { pair: string; type: string; price: string; vol: string; cost: string; fee: string; time: number }[];
@@ -657,6 +658,7 @@ function DashboardInner() {
   const krakenBal = arbState?.krakenBalance ?? {};
   const binanceBal = arbState?.binanceBalance ?? {};
   const coinbaseBal = arbState?.coinbaseBalance ?? {};
+  const geminiBal = arbState?.geminiBalance ?? {};
   const openOrders = arbState?.openOrders ?? [];
   const signals = tradeState?.signals ?? [];
   const closedTrades = tradeState?.tradeState?.closedTrades ?? [];
@@ -698,6 +700,7 @@ function DashboardInner() {
   const krakenHoldings = parseBal(krakenBal, krakenNameMap);
   const binanceHoldings = parseBal(binanceBal);
   const coinbaseHoldings = parseBal(coinbaseBal);
+  const geminiHoldings = parseBal(geminiBal);
   const observedPairFallback = ts ? new Set(Object.keys(ts.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':'))).size : 0;
   const eligiblePairs = safeCount(ts?.eligiblePairs, ts?.pairsScanned, observedPairFallback);
   const observedPairs = safeCount(ts?.observedPairs, observedPairFallback, ts?.pairsScanned);
@@ -721,6 +724,7 @@ function DashboardInner() {
     ['kraken', krakenHoldings],
     ['coinbase', coinbaseHoldings],
     ['binance-us', binanceHoldings],
+    ['gemini', geminiHoldings],
   ] as const) {
     for (const holding of holdings) {
       if (holding.isStable || holding.usdValue < DUST_USD_THRESHOLD) continue;
@@ -992,6 +996,14 @@ function DashboardInner() {
     });
   }
 
+  for (const h of geminiHoldings) {
+    if (h.usdValue < DUST) continue;
+    const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
+    holdingRows.push({
+      text: ` ${exchCell('gemini', 'blue')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+    });
+  }
+
   if (binanceOpenOrdersRich.length > 0) {
     for (const o of binanceOpenOrdersRich) {
       const remaining = parseFloat(o.origQty) - parseFloat(o.executedQty);
@@ -1120,7 +1132,7 @@ function DashboardInner() {
 
   // Balances — simple per-exchange summary
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
-  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings);
+  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings) + sumValue(geminiHoldings);
 
   function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[]): string {
     if (holdings.length === 0) return '{white-fg}no data{/}';
@@ -1136,6 +1148,7 @@ function DashboardInner() {
   balLines.push(` {cyan-fg}Kraken{/}    ${fmtHoldings(krakenHoldings)}`);
   balLines.push(` {yellow-fg}Binance{/}   ${fmtHoldings(binanceHoldings)}`);
   balLines.push(` {magenta-fg}Coinbase{/}  ${fmtHoldings(coinbaseHoldings)}`);
+  balLines.push(` {blue-fg}Gemini{/}    ${fmtHoldings(geminiHoldings)}`);
   // Total
   balLines.push(' ─────────────────────────');
   balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
