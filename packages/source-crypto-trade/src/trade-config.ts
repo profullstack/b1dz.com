@@ -51,6 +51,18 @@ export function buySlippageBpsFromEnv(): number {
   return Number.isFinite(v) && v >= 0 ? v : BUY_SLIPPAGE_BPS;
 }
 
+/** Minimum signal strength (0-100) to accept a buy entry. Matches the
+ *  analysis engine's `minScore`. Lower = more aggressive (more entries,
+ *  more whipsaws); higher = pickier (fewer entries, fewer drawdowns).
+ *  Tune via ENTRY_MIN_SCORE env. Default 75. */
+export const ENTRY_MIN_SCORE_DEFAULT = 75;
+
+export function entryMinScoreFromEnv(): number {
+  const v = Number.parseFloat(process.env.ENTRY_MIN_SCORE ?? String(ENTRY_MIN_SCORE_DEFAULT));
+  if (!Number.isFinite(v)) return ENTRY_MIN_SCORE_DEFAULT;
+  return Math.max(0, Math.min(100, v));
+}
+
 /** Close at market if position is flat within ±TIME_EXIT_FLAT_PCT after TIME_EXIT_MS. */
 export const TIME_EXIT_MS = 15 * 60 * 1000; // 15 min
 export const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%

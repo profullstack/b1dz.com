@@ -51,6 +51,7 @@ import {
   trailingStopPriceFor,
   trailPctFromEnv,
   buySlippageBpsFromEnv,
+  entryMinScoreFromEnv,
   dailyLossLimitPctFromEnv,
 } from './trade-config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
@@ -185,6 +186,10 @@ let tradePollCount = 0;
 let lastEligiblePairs: string[] = [];
 let lastQuoteBalanceRefresh = 0;
 let lastDailyLossLimitLogAt = 0;
+/** Per-pair throttle for "weak buy signal" logs (one line per minute
+ *  per pair so operators can see what the strategy IS seeing without
+ *  filling the log every 5s). */
+const lastWeakSignalLogAt = new Map<string, number>();
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
@@ -1470,7 +1475,25 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // Run strategy
       const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
       if (!sig || sig.side !== 'buy') return null;
-      if (sig.strength < (DEFAULT_ANALYSIS_CONFIG.thresholds.minScore / 100)) return null;
+
+      // Entry threshold is env-tunable via ENTRY_MIN_SCORE (0-100,
+      // default 75). `sig.strength` is 0-1 so we divide. A suppressed
+      // buy signal is throttled-logged once per pair per minute so
+      // operators can see the strategy IS seeing setups (just below
+      // the threshold) rather than wondering why nothing fires.
+      const entryThreshold = entryMinScoreFromEnv() / 100;
+      if (sig.strength < entryThreshold) {
+        const throttleKey = `${item.exchange}:${item.pair}`;
+        const lastLog = lastWeakSignalLogAt.get(throttleKey) ?? 0;
+        if (Date.now() - lastLog >= 60_000) {
+          lastWeakSignalLogAt.set(throttleKey, Date.now());
+          console.log(
+            `[trade] weak buy signal ${throttleKey} str=${sig.strength.toFixed(2)} ` +
+            `< threshold=${entryThreshold.toFixed(2)} reason="${sig.reason ?? 'n/a'}"`,
+          );
+        }
+        return null;
+      }
 
       // Already have a position for this pair on this exchange
       const posKey2 = `${tradeExchange}:${item.pair}`;

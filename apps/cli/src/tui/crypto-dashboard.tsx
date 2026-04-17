@@ -1069,10 +1069,26 @@ function DashboardInner() {
     }
     if (v.recentDecisions.length > 0) {
       lines.push('', '{bold}Recent Decisions:{/bold}');
-      for (const d of v.recentDecisions.slice(-10)) {
+      // Collapse consecutive-duplicate decisions (same status + reason)
+      // into one row with a (×N) multiplier. Without this, a steady
+      // stream of "no executor can handle category=cex_cex ..." rejects
+      // fills the whole tab and drowns out actual fills.
+      type Row = { ts: string; status: string; reason: string; count: number };
+      const collapsed: Row[] = [];
+      for (const d of v.recentDecisions) {
         const ts = new Date(d.at).toLocaleTimeString('en-US', { hour12: false });
-        const color = d.status === 'filled' ? '{green-fg}' : d.status === 'rejected' ? '{red-fg}' : '{yellow-fg}';
-        lines.push(`{white-fg}${ts}{/} ${color}${d.status}{/} ${d.reason}`);
+        const last = collapsed[collapsed.length - 1];
+        if (last && last.status === d.status && last.reason === d.reason) {
+          last.count++;
+          last.ts = ts; // advance to latest timestamp in the run
+        } else {
+          collapsed.push({ ts, status: d.status, reason: d.reason, count: 1 });
+        }
+      }
+      for (const row of collapsed.slice(-10)) {
+        const color = row.status === 'filled' ? '{green-fg}' : row.status === 'rejected' ? '{red-fg}' : '{yellow-fg}';
+        const multiplier = row.count > 1 ? ` {white-fg}(×${row.count}){/}` : '';
+        lines.push(`{white-fg}${row.ts}{/} ${color}${row.status}{/} ${row.reason}${multiplier}`);
       }
     }
     return lines;
