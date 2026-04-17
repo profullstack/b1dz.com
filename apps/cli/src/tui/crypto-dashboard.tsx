@@ -4,8 +4,8 @@ import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
-import { setWsLogger, cancelBinanceOrder, closeBinanceHolding } from '@b1dz/source-crypto-arb';
-import { fetchNews, openUrl, formatNewsTs, type NewsItem } from './news-feed.js';
+import { setWsLogger, cancelBinanceOrder, closeBinanceHolding, closeGeminiHolding } from '@b1dz/source-crypto-arb';
+import { fetchNews, openUrl, formatNewsTs, briskShortUrl, type NewsItem } from './news-feed.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
 
@@ -59,6 +59,7 @@ interface ArbState {
   krakenBalance: Record<string, string>;
   binanceBalance: Record<string, string>;
   coinbaseBalance: Record<string, string>;
+  geminiBalance?: Record<string, string>;
   binanceDetailedBalance?: { asset: string; free: string; locked: string }[];
   binanceOpenOrders?: { symbol: string; orderId: number; side: string; type: string; price: string; origQty: string; executedQty: string; status: string }[];
   recentTrades: { pair: string; type: string; price: string; vol: string; cost: string; fee: string; time: number }[];
@@ -657,6 +658,7 @@ function DashboardInner() {
   const krakenBal = arbState?.krakenBalance ?? {};
   const binanceBal = arbState?.binanceBalance ?? {};
   const coinbaseBal = arbState?.coinbaseBalance ?? {};
+  const geminiBal = arbState?.geminiBalance ?? {};
   const openOrders = arbState?.openOrders ?? [];
   const signals = tradeState?.signals ?? [];
   const closedTrades = tradeState?.tradeState?.closedTrades ?? [];
@@ -698,6 +700,7 @@ function DashboardInner() {
   const krakenHoldings = parseBal(krakenBal, krakenNameMap);
   const binanceHoldings = parseBal(binanceBal);
   const coinbaseHoldings = parseBal(coinbaseBal);
+  const geminiHoldings = parseBal(geminiBal);
   const observedPairFallback = ts ? new Set(Object.keys(ts.ticksPerPair ?? {}).map((key) => key.split(':').slice(1).join(':'))).size : 0;
   const eligiblePairs = safeCount(ts?.eligiblePairs, ts?.pairsScanned, observedPairFallback);
   const observedPairs = safeCount(ts?.observedPairs, observedPairFallback, ts?.pairsScanned);
@@ -721,6 +724,7 @@ function DashboardInner() {
     ['kraken', krakenHoldings],
     ['coinbase', coinbaseHoldings],
     ['binance-us', binanceHoldings],
+    ['gemini', geminiHoldings],
   ] as const) {
     for (const holding of holdings) {
       if (holding.isStable || holding.usdValue < DUST_USD_THRESHOLD) continue;
@@ -933,6 +937,7 @@ function DashboardInner() {
 
   type HoldingAction =
     | { kind: 'close-binance'; asset: string }
+    | { kind: 'close-gemini'; asset: string }
     | { kind: 'cancel-binance-order'; symbol: string; orderId: number };
   interface HoldingRow { text: string; action?: HoldingAction }
   const holdingRows: HoldingRow[] = [];
@@ -992,6 +997,16 @@ function DashboardInner() {
     });
   }
 
+  for (const h of geminiHoldings) {
+    if (h.usdValue < DUST) continue;
+    const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
+    const canClose = !h.isStable && h.amount > 0 && h.unitPrice > 0 && h.usdValue >= DUST;
+    holdingRows.push({
+      text: ` ${exchCell('gemini', 'blue')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+      action: canClose ? { kind: 'close-gemini', asset: h.asset } : undefined,
+    });
+  }
+
   if (binanceOpenOrdersRich.length > 0) {
     for (const o of binanceOpenOrdersRich) {
       const remaining = parseFloat(o.origQty) - parseFloat(o.executedQty);
@@ -1030,6 +1045,15 @@ function DashboardInner() {
       addLog(`{yellow-fg}⚡ closing Binance ${asset} at market...{/}`);
       const res = await closeBinanceHolding(asset);
       addLog(`{green-fg}✓ Binance ${asset} sold: orderId=${res.orderId} status=${res.status} executed=${res.executedQty}{/}`);
+    });
+  };
+
+  const onCloseGeminiHolding = (asset: string) => {
+    const id = `close-gemini:${asset}`;
+    void runAction(id, async () => {
+      addLog(`{yellow-fg}⚡ closing Gemini ${asset} at market (IOC limit −2% from bid)...{/}`);
+      const res = await closeGeminiHolding(asset);
+      addLog(`{green-fg}✓ Gemini ${asset} sold: order_id=${res.order_id} executed=${res.executed_amount}{/}`);
     });
   };
 
@@ -1120,7 +1144,7 @@ function DashboardInner() {
 
   // Balances — simple per-exchange summary
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
-  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings);
+  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings) + sumValue(geminiHoldings);
 
   function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[]): string {
     if (holdings.length === 0) return '{white-fg}no data{/}';
@@ -1136,6 +1160,7 @@ function DashboardInner() {
   balLines.push(` {cyan-fg}Kraken{/}    ${fmtHoldings(krakenHoldings)}`);
   balLines.push(` {yellow-fg}Binance{/}   ${fmtHoldings(binanceHoldings)}`);
   balLines.push(` {magenta-fg}Coinbase{/}  ${fmtHoldings(coinbaseHoldings)}`);
+  balLines.push(` {blue-fg}Gemini{/}    ${fmtHoldings(geminiHoldings)}`);
   // Total
   balLines.push(' ─────────────────────────');
   balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
@@ -1222,10 +1247,13 @@ function DashboardInner() {
   const pagedActivity = paginateNewestFirst(activityLines, activityPage);
   const pagedRaw = paginateNewestFirst(rawLogLines, rawPage);
 
-  const newsTotalPages = Math.max(1, Math.ceil(news.length / footerPageSize));
+  // News rows are 2 lines each (title + URL on its own line below), so
+  // the page fits half as many items as the 1-line log tabs.
+  const newsPageSize = Math.max(1, Math.floor(footerPageSize / 2));
+  const newsTotalPages = Math.max(1, Math.ceil(news.length / newsPageSize));
   const newsSafePage = Math.min(newsPage, newsTotalPages - 1);
-  const newsStart = newsSafePage * footerPageSize;
-  const pagedNews = news.slice(newsStart, newsStart + footerPageSize);
+  const newsStart = newsSafePage * newsPageSize;
+  const pagedNews = news.slice(newsStart, newsStart + newsPageSize);
 
   let footerLines: string[];
   let footerPage: number;
@@ -1429,6 +1457,21 @@ function DashboardInner() {
               color="red"
               pending={pendingActions.has(id)}
               onClick={() => onCloseBinanceHolding(asset)}
+            />
+          );
+        }
+        if (row.action.kind === 'close-gemini') {
+          const asset = row.action.asset;
+          const id = `close-gemini:${asset}`;
+          return (
+            <ActionButton
+              key={`holding-action-${id}`}
+              top={rowTop}
+              left={'100%-10' as any}
+              label="close"
+              color="red"
+              pending={pendingActions.has(id)}
+              onClick={() => onCloseGeminiHolding(asset)}
             />
           );
         }
@@ -1670,21 +1713,27 @@ function DashboardInner() {
               ? (newsError ? ` {red-fg}news error: ${newsError.slice(0, 80)}{/red-fg}` : ' Loading crypto news...')
               : '')
           : (footerLines.join('\n') || (logTab === 'arb' ? ' Waiting for arb pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
-      {logTab === 'news' && pagedNews.map((item, index) => (
-        <box
-          key={`news-row-${newsSafePage}-${index}-${item.uuid}`}
-          top={footerTop + 1 + index}
-          left={1}
-          width={'100%-3' as any}
-          height={1}
-          mouse={true}
-          clickable={true}
-          tags={true}
-          onClick={() => openUrl(item.url)}
-          style={{ bg: 'black', fg: 'white', hover: { bg: 'blue' } }}
-          content={` {white-fg}${formatNewsTs(item.publishedAt)}{/}  {cyan-fg}${(item.source || '').slice(0, 14).padEnd(14)}{/}  ${item.title}`}
-        />
-      ))}
+      {logTab === 'news' && pagedNews.map((item, index) => {
+        const short = briskShortUrl(item.title);
+        return (
+          <box
+            key={`news-row-${newsSafePage}-${index}-${item.uuid}`}
+            top={footerTop + 1 + (index * 2)}
+            left={1}
+            width={'100%-3' as any}
+            height={2}
+            mouse={true}
+            clickable={true}
+            tags={true}
+            onClick={() => openUrl(short)}
+            style={{ bg: 'black', fg: 'white', hover: { bg: 'blue' } }}
+            content={
+              ` {white-fg}${formatNewsTs(item.publishedAt)}{/}  {cyan-fg}${(item.source || '').slice(0, 14).padEnd(14)}{/}  ${item.title}\n`
+              + `                                {white-fg}${short}{/}`
+            }
+          />
+        );
+      })}
     </>
   );
 }

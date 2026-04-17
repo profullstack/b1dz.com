@@ -49,6 +49,14 @@ export async function fetchNews(signal?: AbortSignal): Promise<NewsItem[]> {
     }));
 }
 
+/** Build a short brisk.news search URL that finds the given article on
+ *  brisk's own site instead of linking to the (often very long) source
+ *  URL. Users can click the brisk link to land inside brisk's reader. */
+export function briskShortUrl(title: string): string {
+  const query = title.split(/\s+/).filter(Boolean).slice(0, 5).join(' ');
+  return `https://brisk.news/?q=${encodeURIComponent(query)}`;
+}
+
 export function openUrl(url: string): void {
   const cmd = process.platform === 'darwin' ? 'open'
     : process.platform === 'win32' ? 'cmd'
