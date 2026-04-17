@@ -260,7 +260,7 @@ export default function LandingPage() {
           </div>
           <div className="text-center">
             <div className="text-2xl font-bold text-zinc-200 mb-1">1inch</div>
-            <div className="text-sm">Multi-chain aggregator</div>
+            <div className="text-sm">Coming soon</div>
           </div>
           <div className="text-center">
             <div className="text-2xl font-bold text-zinc-200 mb-1">Jupiter</div>
