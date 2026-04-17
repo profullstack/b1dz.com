@@ -64,6 +64,7 @@ import { decideExit } from './exit-decision.js';
 
 export { dcaConfigFromEnv, perExchangeAllocationPct, DCA_DEFAULTS, type DcaConfig } from './dca-config.js';
 export { decideDcaBuys, type DcaBuy, type DcaPlannerInput } from './dca-planner.js';
+export { runDcaBacktest, type DcaBacktestInput, type DcaBacktestResult, type DcaBacktestPosition } from './dca-backtest.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
 import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
 import {
