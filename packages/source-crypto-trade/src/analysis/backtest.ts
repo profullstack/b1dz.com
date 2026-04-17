@@ -23,6 +23,18 @@ export interface BacktestAssumptions {
   latencyBars: number;
   /** Override the live daily-loss halt. Leave undefined to use the live default. */
   dailyLossLimitPct?: number;
+  /** Post-entry window during which trailing-stop + strategy-sell exits are
+   *  suppressed (unless pnl is beneath hardStopPct). Mirrors live MIN_HOLD_MS.
+   *  Default 120_000 (2 min). Set 0 to disable. */
+  minHoldMs?: number;
+  /** Negative fraction. Stops that breach this threshold override min-hold
+   *  and 15m-uptrend guards. Default -0.02 (-2%). */
+  hardStopPct?: number;
+  /** If true, honors 15m uptrend guard: while analysis.confirmTrend is
+   *  'bull' and pnl > hardStopPct, trailing-stop exits are suppressed.
+   *  Default true (matches live). Set false for an apples-to-apples
+   *  comparison with pre-guard behavior. */
+  honorUptrendGuard?: boolean;
 }
 
 export interface BacktestInput {
@@ -64,6 +76,9 @@ const DEFAULT_ASSUMPTIONS: BacktestAssumptions = {
   slippagePct: 0.05,
   spreadPct: 0.05,
   latencyBars: 0,
+  minHoldMs: 120_000,
+  hardStopPct: -0.02,
+  honorUptrendGuard: true,
 };
 
 function classifyVolatilityBucket(atrPct: number): 'low' | 'medium' | 'high' {
@@ -111,17 +126,38 @@ function resolveLongExit(
   highWaterMark: number,
   takeProfit: number,
   entryTime: number,
+  opts?: {
+    /** 15m higher-TF trend from analysis engine at this bar. */
+    confirmTrend?: 'bull' | 'bear' | 'neutral' | null;
+    minHoldMs?: number;
+    hardStopPct?: number;
+    honorUptrendGuard?: boolean;
+  },
 ): { price: number; reason: ExitReason } | null {
   const stopPrice = trailingStopPriceFor(entryPrice, highWaterMark);
+  const minHoldMs = opts?.minHoldMs ?? 0;
+  const hardStopPct = opts?.hardStopPct ?? -Infinity;
+  const elapsedMs = candle.time - entryTime;
+  const stopPnl = (stopPrice - entryPrice) / entryPrice;
+  const inMinHold = elapsedMs < minHoldMs;
+  const holdForUptrend = opts?.honorUptrendGuard !== false
+    && opts?.confirmTrend === 'bull'
+    && stopPnl > hardStopPct;
 
   // Pessimistic ordering: assume stop triggers first when both would hit on
   // the same bar, so backtest is conservative.
-  if (candle.low <= stopPrice) return { price: stopPrice, reason: 'stop' };
+  if (candle.low <= stopPrice) {
+    // Hard-stop always exits.
+    if (stopPnl <= hardStopPct) return { price: stopPrice, reason: 'stop' };
+    // Guards suppress otherwise-normal stop hits.
+    if (!inMinHold && !holdForUptrend) return { price: stopPrice, reason: 'stop' };
+    // Guard held — fall through, check other exits.
+  }
   if (candle.high >= takeProfit) return { price: takeProfit, reason: 'target' };
 
   // Time-based flat exit: if position has been open TIME_EXIT_MS and close
   // is within ±TIME_EXIT_FLAT_PCT of entry, exit at close.
-  if (candle.time - entryTime >= TIME_EXIT_MS) {
+  if (elapsedMs >= TIME_EXIT_MS) {
     const pnlFromClose = (candle.close - entryPrice) / entryPrice;
     if (Math.abs(pnlFromClose) < TIME_EXIT_FLAT_PCT) {
       return { price: candle.close, reason: 'time_exit' };
@@ -204,7 +240,21 @@ export function runBacktest(input: BacktestInput): BacktestResult {
     //    favorable one). This is how a conservative backtest should treat
     //    intra-bar ordering since we can't see the tick sequence.
     if (position && position.direction === 'long') {
-      const exit = resolveLongExit(current, position.entryPrice, position.highWaterMark, position.takeProfit, position.entryTime);
+      // Compute confirmTrend for this bar so the exit guard has the same
+      // 15m-uptrend signal the live daemon uses.
+      const exitSignalBarIndex = index - assumptions.latencyBars;
+      let exitConfirmTrend: 'bull' | 'bear' | 'neutral' | null = null;
+      if (exitSignalBarIndex >= 0) {
+        const visible = candles.slice(0, exitSignalBarIndex + 1);
+        const exitAnalysis = engine(makeAnalysisInput(input.symbol, input.exchange, visible, config, assumptions.spreadPct));
+        exitConfirmTrend = exitAnalysis.confirmTrend ?? null;
+      }
+      const exit = resolveLongExit(current, position.entryPrice, position.highWaterMark, position.takeProfit, position.entryTime, {
+        confirmTrend: exitConfirmTrend,
+        minHoldMs: assumptions.minHoldMs,
+        hardStopPct: assumptions.hardStopPct,
+        honorUptrendGuard: assumptions.honorUptrendGuard,
+      });
       if (exit) {
         closeLongPosition(position, exit.price, current.time, exit.reason);
         position = null;
@@ -413,7 +463,20 @@ export function runMultiPairBacktest(input: BacktestMultiInput): BacktestMultiRe
     if (position) {
       const c = advancePairTo(position.symbol, ts);
       if (c) {
-        const exit = resolveLongExit(c, position.entryPrice, position.highWaterMark, position.takeProfit, position.entryTime);
+        // Compute confirmTrend for the open-position's pair so the exit
+        // guard has the same 15m-uptrend signal as live.
+        const visible = visibleFor(position.symbol, ts);
+        let exitConfirmTrend: 'bull' | 'bear' | 'neutral' | null = null;
+        if (visible.length > 0) {
+          const exitAnalysis = engine(makeAnalysisInput(position.symbol, exchange, visible, config, assumptions.spreadPct));
+          exitConfirmTrend = exitAnalysis.confirmTrend ?? null;
+        }
+        const exit = resolveLongExit(c, position.entryPrice, position.highWaterMark, position.takeProfit, position.entryTime, {
+          confirmTrend: exitConfirmTrend,
+          minHoldMs: assumptions.minHoldMs,
+          hardStopPct: assumptions.hardStopPct,
+          honorUptrendGuard: assumptions.honorUptrendGuard,
+        });
         if (exit) {
           closePosition(position, exit.price, ts);
           position = null;
