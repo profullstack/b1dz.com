@@ -948,9 +948,13 @@ function DashboardInner() {
     return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
   }
 
-  // A row earns its line only if it has a non-trivial value OR it locks funds
-  // OR it's an open order. Dust gets silently filtered so the box stays small.
-  const DUST = 0.10;
+  // Stable-asset balances (USD, USDC, USDT) are always shown — they're
+  // trading capital and you need to see $0 too. Non-stable rows are
+  // filtered at DUST so the box doesn't drown in ten-cent memecoin fragments.
+  const DUST = 1.00;
+  const shouldShowHolding = (h: { isStable: boolean; usdValue: number }): boolean =>
+    h.isStable || h.usdValue >= DUST;
+  const byUsdDesc = (a: { usdValue: number }, b: { usdValue: number }) => b.usdValue - a.usdValue;
 
   // Column widths — visible cell widths. ANSI/blessed tags wrap the padded
   // text so the tag itself doesn't throw alignment off.
@@ -963,42 +967,44 @@ function DashboardInner() {
   }
 
   // Binance: detailed rows with locked column and [close] on non-stable free balances.
-  for (const b of binanceDetailed) {
-    const free = parseFloat(b.free);
-    const locked = parseFloat(b.locked);
-    const isStable = stablecoins.has(b.asset);
-    const unit = isStable ? 1 : (priceOf[b.asset] ?? 0);
-    const usdValue = free * unit;
-    const lockedUsd = locked * unit;
-    if (usdValue < DUST && lockedUsd < DUST) continue;
-    const freeStr = `${fmtAmount(free)}${isStable ? '' : ` ($${usdValue.toFixed(2)})`}`;
-    const lockedStr = locked > 0 ? `${fmtAmount(locked)}${isStable ? '' : ` ($${lockedUsd.toFixed(2)})`}` : '-';
+  const binanceDetailedRows = binanceDetailed
+    .map((b) => {
+      const free = parseFloat(b.free);
+      const locked = parseFloat(b.locked);
+      const isStable = stablecoins.has(b.asset);
+      const unit = isStable ? 1 : (priceOf[b.asset] ?? 0);
+      const usdValue = free * unit;
+      const lockedUsd = locked * unit;
+      return { ...b, free, locked, isStable, unit, usdValue, lockedUsd };
+    })
+    .filter((r) => r.isStable || r.usdValue >= DUST || r.lockedUsd >= DUST)
+    .sort(byUsdDesc);
+  for (const b of binanceDetailedRows) {
+    const freeStr = `${fmtAmount(b.free)}${b.isStable ? '' : ` ($${b.usdValue.toFixed(2)})`}`;
+    const lockedStr = b.locked > 0 ? `${fmtAmount(b.locked)}${b.isStable ? '' : ` ($${b.lockedUsd.toFixed(2)})`}` : '-';
     const text = ` ${exchCell('binance', 'yellow')} ${padRight(b.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight(lockedStr, LOCKED_W)}`;
-    const canClose = !isStable && free > 0 && unit > 0 && usdValue >= DUST;
+    const canClose = !b.isStable && b.free > 0 && b.unit > 0 && b.usdValue >= DUST;
     holdingRows.push({
       text,
       action: canClose ? { kind: 'close-binance', asset: b.asset } : undefined,
     });
   }
 
-  for (const h of krakenHoldings) {
-    if (h.usdValue < DUST) continue;
+  for (const h of krakenHoldings.filter(shouldShowHolding).sort(byUsdDesc)) {
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     holdingRows.push({
       text: ` ${exchCell('kraken', 'cyan')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
     });
   }
 
-  for (const h of coinbaseHoldings) {
-    if (h.usdValue < DUST) continue;
+  for (const h of coinbaseHoldings.filter(shouldShowHolding).sort(byUsdDesc)) {
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     holdingRows.push({
       text: ` ${exchCell('coinbase', 'magenta')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
     });
   }
 
-  for (const h of geminiHoldings) {
-    if (h.usdValue < DUST) continue;
+  for (const h of geminiHoldings.filter(shouldShowHolding).sort(byUsdDesc)) {
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     const canClose = !h.isStable && h.amount > 0 && h.unitPrice > 0 && h.usdValue >= DUST;
     holdingRows.push({
@@ -1214,7 +1220,7 @@ function DashboardInner() {
   ];
 
   const posH = Math.min(posLines.length + 2, 7);
-  const holdingsH = Math.min(holdingsLines.length + 2, 9);
+  const holdingsH = Math.min(holdingsLines.length + 2, 14);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
