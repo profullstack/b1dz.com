@@ -38,6 +38,7 @@ export function RealtimeOHLCChartContainer({
   top = 0,
   left = 0,
   label = ' OHLC Chart ',
+  indicators = { ema: false, sma: false, bollinger: false },
   ...boxProps
 }) {
   const activeTimeframe = timeframe || defaultTimeframe;
@@ -171,6 +172,7 @@ export function RealtimeOHLCChartContainer({
     currentPrice,
     currentPriceDirection,
     lastUpdateTime,
+    indicators,
     ascii: process.env.B1DZ_ASCII_CHARTS === 'true',
     ...boxProps,
   });

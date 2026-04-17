@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { computePriceRange, priceToRow } from './priceScale.js';
 import { drawMarkers } from './markerRenderer.js';
+import { sma, ema, bollinger } from './indicators.js';
 
 const UNICODE_GLYPHS = {
   vert: '│',
@@ -67,6 +68,11 @@ export function renderChart({
   width = 80,
   height = 12,
   ascii = false,
+  indicators = { ema: false, sma: false, bollinger: false },
+  emaPeriod = 9,
+  smaPeriod = 20,
+  bollingerPeriod = 20,
+  bollingerStdDevs = 2,
 }) {
   const headerWidth = Math.max(20, width);
   const rightLabelWidth = 20;
@@ -86,7 +92,24 @@ export function renderChart({
 
   const visibleCount = Math.max(8, Math.floor(plotWidth / barStride));
   const visibleBars = bars.slice(-visibleCount);
-  const { min, max } = computePriceRange({ bars: visibleBars, markers, position, currentPrice });
+
+  // Compute indicator series over the visible window so overlays stay
+  // in sync with what's drawn (not the full history).
+  const emaSeries = indicators.ema ? ema(visibleBars, emaPeriod) : null;
+  const smaSeries = indicators.sma ? sma(visibleBars, smaPeriod) : null;
+  const bands = indicators.bollinger ? bollinger(visibleBars, bollingerPeriod, bollingerStdDevs) : null;
+
+  // Extend the price range so Bollinger upper/lower (if enabled) fit.
+  const extraPrices = [];
+  if (bands) {
+    for (let i = 0; i < visibleBars.length; i += 1) {
+      if (Number.isFinite(bands.upper[i])) extraPrices.push(bands.upper[i]);
+      if (Number.isFinite(bands.lower[i])) extraPrices.push(bands.lower[i]);
+    }
+  }
+  const baseRange = computePriceRange({ bars: visibleBars, markers, position, currentPrice });
+  const min = extraPrices.length ? Math.min(baseRange.min, ...extraPrices) : baseRange.min;
+  const max = extraPrices.length ? Math.max(baseRange.max, ...extraPrices) : baseRange.max;
   const grid = makeGrid(plotRows, plotWidth + rightLabelWidth);
 
   if (volumeOverlayRows > 0) {
@@ -136,6 +159,28 @@ export function renderChart({
     }
   }
 
+  // Draw indicator overlays. Each overlay walks the visible bar grid
+  // and places a single glyph at the indicator's row, skipping cells
+  // that already hold candle glyphs (which take visual priority).
+  function drawSeries(series, color, glyph) {
+    if (!series) return;
+    for (let index = 0; index < visibleBars.length; index += 1) {
+      const value = series[index];
+      if (!Number.isFinite(value)) continue;
+      const x = index * barStride + 1;
+      if (x >= plotWidth) break;
+      const row = priceToRow(value, min, max, plotRows);
+      if (grid[row]?.[x] === ' ') grid[row][x] = colorize(glyph, color);
+    }
+  }
+  drawSeries(emaSeries, 'yellow', '·');
+  drawSeries(smaSeries, 'blue', '·');
+  if (bands) {
+    drawSeries(bands.middle, 'magenta', '·');
+    drawSeries(bands.upper, 'magenta', '˙');
+    drawSeries(bands.lower, 'magenta', '˙');
+  }
+
   if (position?.isOpen && Number.isFinite(position.currentPrice)) {
     const lineRow = priceToRow(position.currentPrice, min, max, plotRows);
     for (let x = 0; x < plotWidth; x += 1) {
@@ -177,7 +222,12 @@ export function renderChart({
     : '';
   const ageLabel = lastUpdateTime ? `  ${colorize('Age', 'cyan')}: ${Math.max(0, Math.floor((Date.now() - lastUpdateTime) / 1000))}s` : '';
   const statusColor = status === 'live' ? 'green' : status === 'error' ? 'red' : status === 'stale' ? 'yellow' : 'white';
-  const header = `${colorize('Pair', 'cyan')}: ${pair} @ ${exchange}  ${colorize('TF', 'cyan')}: ${timeframe}  ${colorize('Last', 'cyan')}: ${colorize(`$${formatPrice(lastPrice)}`, lastPriceColor)}  ${colorize('Status', statusColor)}: ${status.toUpperCase()}${positionLabel}${ageLabel}`;
+  const activeIndicators = [];
+  if (indicators.ema) activeIndicators.push(colorize(`EMA${emaPeriod}`, 'yellow'));
+  if (indicators.sma) activeIndicators.push(colorize(`SMA${smaPeriod}`, 'blue'));
+  if (indicators.bollinger) activeIndicators.push(colorize(`BB${bollingerPeriod}/${bollingerStdDevs}`, 'magenta'));
+  const indicatorLabel = activeIndicators.length ? `  ${activeIndicators.join(' ')}` : '';
+  const header = `${colorize('Pair', 'cyan')}: ${pair} @ ${exchange}  ${colorize('TF', 'cyan')}: ${timeframe}  ${colorize('Last', 'cyan')}: ${colorize(`$${formatPrice(lastPrice)}`, lastPriceColor)}  ${colorize('Status', statusColor)}: ${status.toUpperCase()}${positionLabel}${ageLabel}${indicatorLabel}`;
 
   return [
     header,

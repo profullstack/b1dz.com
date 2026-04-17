@@ -18,6 +18,7 @@ export function OHLCChart({
   currentPriceDirection = 'flat',
   lastUpdateTime = null,
   ascii = false,
+  indicators = { ema: false, sma: false, bollinger: false },
   ...boxProps
 }) {
   const content = renderChart({
@@ -34,6 +35,7 @@ export function OHLCChart({
     width: renderWidth,
     height: renderHeight,
     ascii,
+    indicators,
   });
 
   return React.createElement('box', {

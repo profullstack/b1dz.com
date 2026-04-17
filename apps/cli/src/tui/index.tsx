@@ -40,6 +40,11 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'news');
   });
 
+  // Indicator overlays on both charts
+  screen.key(['e'], () => tuiEvents.emit('toggle-chart-indicator', 'ema'));
+  screen.key(['m'], () => tuiEvents.emit('toggle-chart-indicator', 'sma'));
+  screen.key(['b'], () => tuiEvents.emit('toggle-chart-indicator', 'bollinger'));
+
   screen.key(['1'], () => tuiEvents.emit('set-chart-timeframe', '1m'));
   screen.key(['2'], () => tuiEvents.emit('set-chart-timeframe', '5m'));
   screen.key(['3'], () => tuiEvents.emit('set-chart-timeframe', '15m'));

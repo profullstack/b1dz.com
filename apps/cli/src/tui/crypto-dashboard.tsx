@@ -366,6 +366,9 @@ function DashboardInner() {
   const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(true);
   const [dailyLossLimitOverridePct, setDailyLossLimitOverridePct] = useState<number | null>(null);
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
+  const [chartIndicators, setChartIndicators] = useState<{ ema: boolean; sma: boolean; bollinger: boolean }>({
+    ema: false, sma: false, bollinger: false,
+  });
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [apiClient, setApiClient] = useState<B1dzClient | null>(null);
 
@@ -478,12 +481,22 @@ function DashboardInner() {
         return next;
       });
     };
+    const indicatorToggleHandler = (kind: 'ema' | 'sma' | 'bollinger') => {
+      setChartIndicators((prev) => {
+        const next = { ...prev, [kind]: !prev[kind] };
+        const label = next[kind] ? 'ON' : 'OFF';
+        const color = next[kind] ? 'green' : 'white';
+        addLog(`{${color}-fg}Chart {/}{bold}${kind.toUpperCase()}{/bold} ${label}`);
+        return next;
+      });
+    };
     tuiEvents.on('toggle-auto-trade', handler);
     tuiEvents.on('set-log-tab', tabHandler);
     tuiEvents.on('page-log', pageHandler);
     tuiEvents.on('set-chart-timeframe', timeframeHandler);
     tuiEvents.on('cycle-chart-pair', pairCycleHandler);
     tuiEvents.on('toggle-trading-enabled', tradingToggleHandler);
+    tuiEvents.on('toggle-chart-indicator', indicatorToggleHandler);
     return () => {
       tuiEvents.off('toggle-auto-trade', handler);
       tuiEvents.off('set-log-tab', tabHandler);
@@ -491,6 +504,7 @@ function DashboardInner() {
       tuiEvents.off('set-chart-timeframe', timeframeHandler);
       tuiEvents.off('cycle-chart-pair', pairCycleHandler);
       tuiEvents.off('toggle-trading-enabled', tradingToggleHandler);
+      tuiEvents.off('toggle-chart-indicator', indicatorToggleHandler);
     };
   }, [logTab, arbState, tradeState]);
 
@@ -1508,6 +1522,7 @@ function DashboardInner() {
         timeframe={chartTimeframe}
         positions={positions as any}
         closedTrades={closedTrades as any}
+        indicators={chartIndicators as any}
         mouse={true}
         clickable={true}
         onClick={() => {
@@ -1527,6 +1542,7 @@ function DashboardInner() {
         timeframe={chartTimeframe}
         positions={positions as any}
         closedTrades={closedTrades as any}
+        indicators={chartIndicators as any}
         mouse={true}
         clickable={true}
         onClick={() => {
