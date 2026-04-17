@@ -183,11 +183,20 @@ const DUST_USD_THRESHOLD = 1;
 
 function formatUsdPrice(value: number): string {
   if (!Number.isFinite(value)) return '-';
-  if (Math.abs(value) >= 1000) return value.toFixed(2);
-  if (Math.abs(value) >= 1) return value.toFixed(2);
-  if (Math.abs(value) >= 0.1) return value.toFixed(4);
-  if (Math.abs(value) >= 0.01) return value.toFixed(5);
-  return value.toFixed(6);
+  const abs = Math.abs(value);
+  // Precision ladder — keep BTC/ETH readable at 2 decimals (cents are
+  // plenty) while giving mid-range assets (ICP, LTC, SOL) enough decimals
+  // to show tick-level movement. For sub-dollar assets we scale with
+  // leading zeros so tiny memecoins still show meaningful change.
+  if (abs >= 1000) return value.toFixed(2);   // BTC $75620.67, ETH $3451.23
+  if (abs >= 100) return value.toFixed(3);    // SOL $201.234
+  if (abs >= 10) return value.toFixed(4);     // LTC $95.1234
+  if (abs >= 1) return value.toFixed(4);      // ICP $4.1234
+  if (abs >= 0.1) return value.toFixed(5);    // XRP $0.58234
+  if (abs >= 0.01) return value.toFixed(6);   // $0.012345
+  if (abs >= 0.001) return value.toFixed(7);  // $0.0012345
+  if (abs >= 0.0001) return value.toFixed(8); // $0.00012345
+  return value.toFixed(10);                    // tiny memecoins
 }
 
 function padLeft(value: string, width: number): string {
