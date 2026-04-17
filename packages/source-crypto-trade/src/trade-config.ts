@@ -70,6 +70,29 @@ export const TIME_EXIT_FLAT_PCT = 0.001; // ±0.1%
 /** Don't re-enter the same pair for this long after closing a position. */
 export const COOLDOWN_MS = 3 * 60 * 1000; // 3 min
 
+/** Suppress trailing-stop and strategy-sell exits for this long after entry.
+ *  Take-profit and a deeper "hard stop" still exit — this only blocks the
+ *  shallow early-exits that turn normal noise into a fee-churn treadmill.
+ *  Tune via MIN_HOLD_SECS env (default 120s). */
+export const MIN_HOLD_MS_DEFAULT = 120 * 1000; // 2 min
+
+export function minHoldMsFromEnv(): number {
+  const v = Number.parseFloat(process.env.MIN_HOLD_SECS ?? '120');
+  return Number.isFinite(v) && v >= 0 ? v * 1000 : MIN_HOLD_MS_DEFAULT;
+}
+
+/** Hard stop-loss that overrides MIN_HOLD — if pnl drops past this, exit
+ *  regardless of how recent the entry was. Defends against entering right
+ *  before a real move instead of just normal chop. Tune via HARD_STOP_PCT. */
+export const HARD_STOP_PCT_DEFAULT = -0.02; // -2%
+
+export function hardStopPctFromEnv(): number {
+  const v = Number.parseFloat(process.env.HARD_STOP_PCT ?? '-0.02');
+  // Negative fraction expected. Coerce positive input to negative.
+  if (!Number.isFinite(v)) return HARD_STOP_PCT_DEFAULT;
+  return v > 0 ? -v : v;
+}
+
 /** Halt new entries when cumulative daily net loss exceeds this fraction of starting equity. */
 export const DAILY_LOSS_LIMIT_PCT_DEFAULT = 5; // 5%
 

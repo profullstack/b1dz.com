@@ -57,6 +57,8 @@ import {
   buySlippageBpsFromEnv,
   entryMinScoreFromEnv,
   dailyLossLimitPctFromEnv,
+  minHoldMsFromEnv,
+  hardStopPctFromEnv,
 } from './trade-config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
 import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
@@ -1455,24 +1457,43 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
 
         let exitReason = '';
+        // Suppress shallow exits in the first MIN_HOLD_MS after entry so
+        // we don't bleed to fees on normal chop. A hard loss (deeper than
+        // HARD_STOP_PCT) or a take-profit still exits regardless.
+        const minHoldMs = minHoldMsFromEnv();
+        const hardStopPct = hardStopPctFromEnv();
+        const inMinHold = elapsed < minHoldMs;
 
-        // Take-profit
+        // Take-profit — always allowed.
         if (pnlPct >= TAKE_PROFIT_PCT) {
           exitReason = `take-profit +${(pnlPct * 100).toFixed(2)}%`;
         }
-        // Trailing stop hit
-        else if (item.snap.bid <= stopPrice) {
+        // Trailing stop hit — only allowed after min-hold OR if we're past
+        // the hard-stop floor (real loss, not noise).
+        else if (item.snap.bid <= stopPrice && (!inMinHold || pnlPct <= hardStopPct)) {
           exitReason = `trailing stop at $${stopPrice.toFixed(2)} (${((stopPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2)}%)`;
         }
-        // Time-based flat exit
+        // Time-based flat exit — by definition only fires after TIME_EXIT_MS,
+        // which is strictly later than MIN_HOLD_MS, so no extra guard needed.
         else if (elapsed >= TIME_EXIT_MS && Math.abs(pnlPct) < TIME_EXIT_FLAT_PCT) {
           exitReason = `time exit after ${(elapsed / 60000).toFixed(0)}min (flat ${(pnlPct * 100).toFixed(3)}%)`;
         }
-        // Strategy sell signal
-        else {
+        // Strategy sell signal — suppressed inside MIN_HOLD unless we're
+        // already under the hard-stop line.
+        else if (!inMinHold || pnlPct <= hardStopPct) {
           const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
           if (sig?.side === 'sell' && sig.strength >= 0.75) {
             exitReason = `strategy sell: ${sig.reason}`;
+          }
+        }
+
+        // Debug visibility: log when an exit was suppressed by MIN_HOLD so
+        // the operator can see the guard working instead of guessing why
+        // we're still in the trade.
+        if (!exitReason && inMinHold) {
+          const wouldTrailStop = item.snap.bid <= stopPrice;
+          if (wouldTrailStop && pnlPct > hardStopPct) {
+            console.log(`[trade] HOLD ${item.exchange}:${item.pair} trailing-stop hit at $${stopPrice.toFixed(6)} pnl=${(pnlPct * 100).toFixed(2)}% — suppressed (age ${(elapsed / 1000).toFixed(0)}s < ${(minHoldMs / 1000).toFixed(0)}s min-hold)`);
           }
         }
 
