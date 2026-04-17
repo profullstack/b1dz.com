@@ -15,16 +15,19 @@
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import {
-  KrakenFeed, CoinbaseFeed, BinanceUsFeed,
+  KrakenFeed, CoinbaseFeed, BinanceUsFeed, GeminiFeed,
   placeOrder as placeKrakenOrder,
   placeCoinbaseOrder,
   placeBinanceOrder,
+  placeGeminiOrder,
+  placeGeminiMarketSell,
   getBalance as getKrakenBalance,
   getOpenOrders as getKrakenOpenOrders,
   cancelKrakenOrder,
   getCoinbaseBalance,
   getCoinbaseAvailableBalance,
   getBinanceBalance,
+  getGeminiBalance,
   getCoinbaseFills,
   getBinanceTrades,
   getBinanceTradingRules,
@@ -33,7 +36,7 @@ import {
   hasCoinbaseTradingProduct,
   hasKrakenTradingPair,
   getKrakenPairMinVolume,
-  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
+  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE, GEMINI_TAKER_FEE,
   getActivePairs,
   getPerExchangeVolumes,
 } from '@b1dz/source-crypto-arb';
@@ -135,10 +138,12 @@ function isVenueThin(exchange: string, pair: string): boolean {
 const krakenFeed: PriceFeed = new KrakenFeed();
 const coinbaseFeed: PriceFeed = new CoinbaseFeed();
 const binanceFeed: PriceFeed = new BinanceUsFeed();
+const geminiFeed: PriceFeed = new GeminiFeed();
 const TRADE_FEEDS: { feed: PriceFeed; exchange: string }[] = [
   { feed: krakenFeed, exchange: 'kraken' },
   { feed: coinbaseFeed, exchange: 'coinbase' },
   { feed: binanceFeed, exchange: 'binance-us' },
+  { feed: geminiFeed, exchange: 'gemini' },
 ];
 const histories = new Map<string, MarketSnapshot[]>();
 interface AnalysisPairState {
@@ -732,6 +737,9 @@ async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPa
   } else if (exchange === 'binance-us') {
     const symbol = candidate.pair.replace('-', '');
     await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
+  } else if (exchange === 'gemini') {
+    const symbol = candidate.pair.replace('-', '').toLowerCase();
+    await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
   }
   pendingLiquidations.delete(`${exchange}:${candidate.pair}`);
   return true;
@@ -750,7 +758,7 @@ function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): 
   if (elapsedMs < 60_000 && pnlPct > -0.002) return null;
   if (pnlPct >= TAKE_PROFIT_PCT * 0.75) return null;
 
-  const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+  const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : item.exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
   const fee = currentSnap.bid * current.volume * feeRate;
   const grossPnl = (currentSnap.bid - current.entryPrice) * current.volume;
   const netPnl = grossPnl - fee;
@@ -841,6 +849,21 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
   } catch {
     spendableQuoteBalances['binance-us'] = {};
     accountBalances['binance-us'] = {};
+  }
+
+  try {
+    const bal = await getGeminiBalance();
+    accountBalances.gemini = bal;
+    spendableQuoteBalances.gemini = {
+      // Gemini uses upper-case currency codes on /v1/balances (USD, USDC, etc.).
+      USD: parseFloat(bal.USD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch (e) {
+    spendableQuoteBalances.gemini = {};
+    accountBalances.gemini = {};
+    console.log(`[trade] gemini balance fetch failed: ${(e as Error).message}`);
   }
 }
 
@@ -1613,6 +1636,10 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
               const symbol = pair.replace('-', '');
               const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
               txInfo = `orderId=${result.orderId}`;
+            } else if (exchange === 'gemini') {
+              const symbol = pair.replace('-', '').toLowerCase();
+              const result = await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
+              txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
             }
             pendingLiquidations.delete(liquidationKey);
             console.log(`[trade] LIQUIDATED ${exchange}:${pair} ${txInfo}`);
@@ -1648,8 +1675,12 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             const symbol = pair.replace('-', '');
             const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
             txInfo = `orderId=${result.orderId}`;
+          } else if (exchange === 'gemini') {
+            const symbol = pair.replace('-', '').toLowerCase();
+            const result = await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
+            txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
           }
-          const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+          const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
           const fee = meta.snap.bid * sellVolume * feeRate;
           const grossPnl = (meta.snap.bid - pos.entryPrice) * sellVolume;
           const netPnl = grossPnl - fee;
@@ -1697,6 +1728,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
         } else if (exchange === 'binance-us') {
           availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
+        } else if (exchange === 'gemini') {
+          // No stable-asset auto-conversion for Gemini yet — use the plain
+          // available balance capped under $100 with a 0.5% fee cushion.
+          const bal = await getGeminiBalance();
+          availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
         }
       } catch {}
       if (availableQuote < MIN_SPENDABLE_QUOTE_USD) {
@@ -1711,6 +1747,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
               availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
             } else if (exchange === 'binance-us') {
               availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
+            } else if (exchange === 'gemini') {
+              const bal = await getGeminiBalance();
+              availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
             }
           }
         } catch (freeError) {
@@ -1720,7 +1759,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (availableQuote < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
-      const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+      const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
       const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * Math.max(0.9, 1 - feeRate - 0.02);
       if (spendBudget < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
@@ -1796,6 +1835,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             timeInForce: 'IOC',
           });
           txInfo = `orderId=${result.orderId}`;
+        } else if (exchange === 'gemini') {
+          const symbol = pair.replace('-', '').toLowerCase();
+          const result = await placeGeminiOrder({
+            symbol,
+            side: 'buy',
+            amount: volumeAtAggressive.toFixed(8),
+            price: aggressivePrice.toFixed(2),
+            options: ['immediate-or-cancel'],
+          });
+          txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
         }
         // Track the submitted volume as an upper bound. IOC may have
         // partial-filled, in which case actualBaseBalanceFor(exchange,
