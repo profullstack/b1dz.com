@@ -109,8 +109,16 @@ const WARMUP_TICKS = 20;
 /** Per-exchange 24h USD volume floor. A pair can be tradable globally (admitted
  *  by getActivePairs) yet thin on one specific venue — entering there means
  *  buy-and-sell on a 10k-volume book, which just pays slippage both ways.
- *  Matches the audit-arb tool's MIN_EACH_EXCHANGE_VOL_USD. */
-const MIN_PER_EXCHANGE_VOL_USD = 100_000;
+ *
+ *  Default is $50k (looser than the audit tool's $100k because funds sit on
+ *  venues like Kraken/Coinbase where mid-cap pairs often clear $50k but not
+ *  $100k; blocking them at $100k means those venues never trade). Tune via
+ *  MIN_PER_EXCHANGE_VOL_USD env. */
+const DEFAULT_MIN_PER_EXCHANGE_VOL_USD = 50_000;
+function minPerExchangeVolUsd(): number {
+  const v = Number.parseFloat(process.env.MIN_PER_EXCHANGE_VOL_USD ?? String(DEFAULT_MIN_PER_EXCHANGE_VOL_USD));
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_MIN_PER_EXCHANGE_VOL_USD;
+}
 let cachedPerExchangeVolumes: Awaited<ReturnType<typeof getPerExchangeVolumes>> | null = null;
 let lastPerExchangeVolumeFetch = 0;
 const PER_EXCHANGE_VOL_TTL_MS = 5 * 60_000;
@@ -131,7 +139,7 @@ function isVenueThin(exchange: string, pair: string): boolean {
   const vol = map?.get(pair);
   // Missing pair on that exchange → treat as thin (we shouldn't trade it there).
   if (vol == null) return true;
-  return vol < MIN_PER_EXCHANGE_VOL_USD;
+  return vol < minPerExchangeVolUsd();
 }
 
 // ─── State ─────────────────────────────────────────────────────

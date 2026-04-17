@@ -13,7 +13,16 @@ import { createSign, randomBytes } from 'node:crypto';
 import { getCoinbasePem } from './feeds/coinbase-pem.js';
 import { fetchJson } from './feeds/http.js';
 
-const MIN_VOLUME_USD = 100_000; // $100k minimum combined 24h volume
+/** Per-exchange 24h USD volume floor. A pair listed on a venue with volume
+ *  under this is treated as "not really traded there" and excluded from
+ *  that venue's map. Default $50k — strict enough to skip truly thin books,
+ *  loose enough that mid-caps on Kraken/Coinbase actually qualify.
+ *  Override via MIN_VOLUME_USD env. */
+const DEFAULT_MIN_VOLUME_USD = 50_000;
+function minVolumeUsd(): number {
+  const v = Number.parseFloat(process.env.MIN_VOLUME_USD ?? String(DEFAULT_MIN_VOLUME_USD));
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_MIN_VOLUME_USD;
+}
 const MIN_MARKET_CAP_USD = 10_000_000; // $10M minimum market cap
 const MIN_EXCHANGES = 2;
 const REFRESH_INTERVAL = 5 * 60 * 1000;
@@ -52,7 +61,7 @@ async function getKrakenVolumes(): Promise<Map<string, number>> {
     const vol24h = parseFloat(ticker.v[1]);
     const lastPrice = parseFloat(ticker.c[0]);
     const volUsd = vol24h * lastPrice;
-    if (volUsd < MIN_VOLUME_USD) continue;
+    if (volUsd < minVolumeUsd()) continue;
     const existing = volumes.get(pair) ?? 0;
     if (volUsd > existing) volumes.set(pair, volUsd);
   }
@@ -93,7 +102,7 @@ async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; chang
     const vol = parseFloat(p.volume_24h);
     const price = parseFloat(p.price);
     const volUsd = vol * price;
-    if (volUsd < MIN_VOLUME_USD) continue;
+    if (volUsd < minVolumeUsd()) continue;
     result.set(p.product_id, { volUsd, change24h: parseFloat(p.price_percentage_change_24h || '0') });
   }
   return result;
@@ -117,7 +126,7 @@ async function getBinanceVolumes(): Promise<Map<string, { volUsd: number; change
     if (EXCLUDED.has(base)) continue;
     const pair = `${base}-USD`;
     const volUsd = parseFloat(ticker.quoteVolume);
-    if (!isFinite(volUsd) || volUsd < MIN_VOLUME_USD) continue;
+    if (!isFinite(volUsd) || volUsd < minVolumeUsd()) continue;
     result.set(pair, {
       volUsd,
       change24h: parseFloat(ticker.priceChangePercent || '0'),
@@ -193,7 +202,7 @@ async function discoverPairs(): Promise<string[]> {
   const selected = common;
 
   if (selected.length > 0) {
-    console.log(`[discovery] ${selected.length} pairs (${filteredExchanges} filtered by <${MIN_EXCHANGES} exchanges, ${filteredMcap} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap, min vol $${(MIN_VOLUME_USD / 1e6).toFixed(1)}M), scanning all:`);
+    console.log(`[discovery] ${selected.length} pairs (${filteredExchanges} filtered by <${MIN_EXCHANGES} exchanges, ${filteredMcap} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap, min vol $${(minVolumeUsd() / 1e6).toFixed(2)}M), scanning all:`);
     for (const p of selected.slice(0, 12)) {
       const chg = p.change >= 0 ? `+${p.change.toFixed(1)}%` : `${p.change.toFixed(1)}%`;
       const mcapStr = p.mcap > 0 ? `mcap=$${(p.mcap / 1e9).toFixed(1)}B` : 'mcap=?';
@@ -222,7 +231,7 @@ async function getGeminiVolumes(): Promise<Map<string, number>> {
       // filter threshold so Gemini pairs are accepted (we have no better
       // signal). Downstream filters (candle freshness, directional bias)
       // still guard against stale/phantom quotes.
-      out.set(`${base}-USD`, MIN_VOLUME_USD * 2);
+      out.set(`${base}-USD`, minVolumeUsd() * 2);
     }
     return out;
   } catch {
