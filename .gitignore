@@ -30,3 +30,4 @@ supabase/.branches/
 .dd.log.*
 .notifications-debug.json
 .orders-debug.json
+*.keys
