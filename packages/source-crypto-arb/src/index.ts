@@ -32,13 +32,17 @@ export { getBalance, placeOrder, getOpenOrders, cancelOrder as cancelKrakenOrder
 export { hasTradingPair as hasKrakenTradingPair } from './feeds/kraken-private.js';
 export {
   getBalance as getBinanceBalance,
+  getDetailedBalance as getBinanceDetailedBalance,
   placeOrder as placeBinanceOrder,
   getOpenOrders as getBinanceOpenOrders,
+  cancelOrder as cancelBinanceOrder,
+  closeHolding as closeBinanceHolding,
   getRecentTrades as getBinanceTrades,
   getTradingRules as getBinanceTradingRules,
   hasTradingSymbol as hasBinanceTradingSymbol,
   BINANCE_TAKER_FEE,
   type BinanceTrade,
+  type BinanceAssetBalance,
 } from './feeds/binance-us-private.js';
 export {
   getBalance as getCoinbaseBalance,

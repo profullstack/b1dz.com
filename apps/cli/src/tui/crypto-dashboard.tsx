@@ -4,7 +4,7 @@ import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
-import { setWsLogger } from '@b1dz/source-crypto-arb';
+import { setWsLogger, cancelBinanceOrder, closeBinanceHolding } from '@b1dz/source-crypto-arb';
 import { fetchNews, openUrl, formatNewsTs, type NewsItem } from './news-feed.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
@@ -59,6 +59,8 @@ interface ArbState {
   krakenBalance: Record<string, string>;
   binanceBalance: Record<string, string>;
   coinbaseBalance: Record<string, string>;
+  binanceDetailedBalance?: { asset: string; free: string; locked: string }[];
+  binanceOpenOrders?: { symbol: string; orderId: number; side: string; type: string; price: string; origQty: string; executedQty: string; status: string }[];
   recentTrades: { pair: string; type: string; price: string; vol: string; cost: string; fee: string; time: number }[];
   openOrders: { id: string; descr: { type: string; pair: string; price: string; order: string }; vol: string; vol_exec: string; status: string }[];
   rawLog?: { at: string; text: string }[];
@@ -289,6 +291,39 @@ function ClickablePair({
   );
 }
 
+function ActionButton({
+  top,
+  left,
+  label,
+  color,
+  pending,
+  onClick,
+}: {
+  top: number;
+  left: number | string;
+  label: string;
+  color: 'red' | 'yellow' | 'green';
+  pending?: boolean;
+  onClick: () => void;
+}) {
+  const bg = pending ? 'black' : color;
+  const fg = pending ? 'yellow' : 'black';
+  return (
+    <box
+      top={top}
+      left={left}
+      width={label.length + 4}
+      height={1}
+      mouse={true}
+      clickable={true}
+      tags={true}
+      onClick={onClick}
+      style={{ bg, fg }}
+      content={` ${pending ? '...' : label} `}
+    />
+  );
+}
+
 // Wrap the whole component in error handling so bad data doesn't crash React
 function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
@@ -319,6 +354,7 @@ function DashboardInner() {
   // boot without requiring the operator to toggle. Persisted UI state
   // (if any) replaces this default during hydration below.
   const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(true);
+  const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [apiClient, setApiClient] = useState<B1dzClient | null>(null);
 
@@ -856,6 +892,117 @@ function DashboardInner() {
     posLines.push(' {white-fg}No open positions{/white-fg}');
   }
 
+  // Holdings — per-exchange breakdown with free/locked and inline [close]/[cancel] actions.
+  // Binance has detailed free/locked + open orders. Kraken/Coinbase show totals only.
+  const binanceDetailed = arbState?.binanceDetailedBalance ?? [];
+  const binanceOpenOrdersRich = arbState?.binanceOpenOrders ?? [];
+
+  type HoldingAction =
+    | { kind: 'close-binance'; asset: string }
+    | { kind: 'cancel-binance-order'; symbol: string; orderId: number };
+  interface HoldingRow { text: string; action?: HoldingAction }
+  const holdingRows: HoldingRow[] = [];
+  holdingRows.push({ text: '{bold} Exchange   Asset   Free                Locked             Price        USD Value{/bold}' });
+
+  function fmtAmount(n: number): string {
+    if (n === 0) return '0';
+    if (Math.abs(n) >= 1) return n.toFixed(4);
+    return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  // Binance: detailed rows with locked column and [close] on non-stable free balances.
+  for (const b of binanceDetailed) {
+    const free = parseFloat(b.free);
+    const locked = parseFloat(b.locked);
+    const isStable = stablecoins.has(b.asset);
+    const unit = isStable ? 1 : (priceOf[b.asset] ?? 0);
+    const usdValue = free * unit;
+    const lockedUsd = locked * unit;
+    if (free + locked < 1e-8) continue;
+    const freeCell = padLeft(fmtAmount(free), 18);
+    const lockedCell = padLeft(lockedUsd > 0 ? `${fmtAmount(locked)} ($${lockedUsd.toFixed(2)})` : fmtAmount(locked), 22);
+    const priceCell = padLeft(unit > 0 ? `$${formatUsdPrice(unit)}` : '-', 11);
+    const valueCell = padLeft(`$${usdValue.toFixed(2)}`, 11);
+    const text = ` {yellow-fg}binance{/}    ${padRight(b.asset, 6)}  ${freeCell}  ${lockedCell}  ${priceCell}  ${valueCell}`;
+    const canClose = !isStable && free > 0 && unit > 0;
+    holdingRows.push({
+      text,
+      action: canClose ? { kind: 'close-binance', asset: b.asset } : undefined,
+    });
+  }
+
+  // Kraken totals (no free/locked split available).
+  for (const h of krakenHoldings) {
+    const freeCell = padLeft(fmtAmount(h.amount), 18);
+    const priceCell = padLeft(h.unitPrice > 0 ? `$${formatUsdPrice(h.unitPrice)}` : '-', 11);
+    const valueCell = padLeft(`$${h.usdValue.toFixed(2)}`, 11);
+    holdingRows.push({
+      text: ` {cyan-fg}kraken{/}     ${padRight(h.asset, 6)}  ${freeCell}  ${padLeft('-', 22)}  ${priceCell}  ${valueCell}`,
+    });
+  }
+
+  // Coinbase totals.
+  for (const h of coinbaseHoldings) {
+    const freeCell = padLeft(fmtAmount(h.amount), 18);
+    const priceCell = padLeft(h.unitPrice > 0 ? `$${formatUsdPrice(h.unitPrice)}` : '-', 11);
+    const valueCell = padLeft(`$${h.usdValue.toFixed(2)}`, 11);
+    holdingRows.push({
+      text: ` {magenta-fg}coinbase{/}   ${padRight(h.asset, 6)}  ${freeCell}  ${padLeft('-', 22)}  ${priceCell}  ${valueCell}`,
+    });
+  }
+
+  // Binance open orders that are locking funds — each cancellable.
+  if (binanceOpenOrdersRich.length > 0) {
+    holdingRows.push({ text: ' {white-fg}─── Binance Open Orders (locking funds) ───{/}' });
+    for (const o of binanceOpenOrdersRich) {
+      const remaining = parseFloat(o.origQty) - parseFloat(o.executedQty);
+      const price = parseFloat(o.price);
+      const notional = remaining * price;
+      const text = ` {yellow-fg}binance{/}    ${padRight(o.symbol, 10)}  ${o.side.padEnd(4)} ${o.type.padEnd(6)}  qty=${o.origQty}  @$${o.price}  locks=$${notional.toFixed(2)}  ${o.status}`;
+      holdingRows.push({ text, action: { kind: 'cancel-binance-order', symbol: o.symbol, orderId: o.orderId } });
+    }
+  }
+
+  if (holdingRows.length === 1) {
+    holdingRows.push({ text: ' {white-fg}No holdings yet (waiting for daemon private-API fetch — 60s cadence){/white-fg}' });
+  }
+
+  const holdingsLines = holdingRows.map((r) => r.text);
+
+  async function runAction(id: string, fn: () => Promise<void>) {
+    if (pendingActions.has(id)) return;
+    setPendingActions((prev) => new Set(prev).add(id));
+    try {
+      await fn();
+    } catch (e) {
+      addLog(`{red-fg}✗ ${id}: ${(e as Error).message.slice(0, 100)}{/}`);
+    } finally {
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  const onCloseBinanceHolding = (asset: string) => {
+    const id = `close-binance:${asset}`;
+    void runAction(id, async () => {
+      addLog(`{yellow-fg}⚡ closing Binance ${asset} at market...{/}`);
+      const res = await closeBinanceHolding(asset);
+      addLog(`{green-fg}✓ Binance ${asset} sold: orderId=${res.orderId} status=${res.status} executed=${res.executedQty}{/}`);
+    });
+  };
+
+  const onCancelBinanceOrder = (symbol: string, orderId: number) => {
+    const id = `cancel-binance:${orderId}`;
+    void runAction(id, async () => {
+      addLog(`{yellow-fg}⚡ cancelling Binance ${symbol} order ${orderId}...{/}`);
+      await cancelBinanceOrder(symbol, orderId);
+      addLog(`{green-fg}✓ Binance ${symbol} order ${orderId} cancelled{/}`);
+    });
+  };
+
   // Arb spreads — show top 5
   const displaySpreads = spreads.filter((s) => s?.pair && s?.spread != null).slice(0, 5);
   const arbLines: string[] = ['{bold} Pair       Spread    Route                 Status{/bold}'];
@@ -1003,18 +1150,20 @@ function DashboardInner() {
   ];
 
   const posH = Math.min(posLines.length + 2, 7);
+  const holdingsH = Math.min(holdingsLines.length + 2, 14);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
-  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - row2H - row3H - 6));
-  const chartTop = 2 + posH;
+  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - holdingsH - row2H - row3H - 6));
+  const holdingsTop = 2 + posH;
+  const chartTop = 2 + posH + holdingsH;
   const primaryChartWidthPct = 44;
   const secondaryChartWidthPct = 44;
   const chartControlsWidthPct = 12;
   const screenCols = process.stdout.columns ?? 120;
   const primaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (primaryChartWidthPct / 100)) - 3);
   const secondaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (secondaryChartWidthPct / 100)) - 3);
-  const footerTop = 2 + posH + chartH + row2H + row3H;
+  const footerTop = 2 + posH + holdingsH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
 
@@ -1186,6 +1335,43 @@ function DashboardInner() {
         />
       ))}
 
+      <box label=" Holdings " top={holdingsTop} left={0} width="100%" height={holdingsH}
+        border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
+        style={{ border: { fg: 'green' } }}
+        content={holdingsLines.join('\n')} />
+      {holdingRows.map((row, index) => {
+        if (!row.action) return null;
+        const rowTop = holdingsTop + 1 + index;
+        if (row.action.kind === 'close-binance') {
+          const asset = row.action.asset;
+          const id = `close-binance:${asset}`;
+          return (
+            <ActionButton
+              key={`holding-action-${id}`}
+              top={rowTop}
+              left={'100%-12' as any}
+              label="close"
+              color="red"
+              pending={pendingActions.has(id)}
+              onClick={() => onCloseBinanceHolding(asset)}
+            />
+          );
+        }
+        const { symbol, orderId } = row.action;
+        const id = `cancel-binance:${orderId}`;
+        return (
+          <ActionButton
+            key={`holding-action-${id}`}
+            top={rowTop}
+            left={'100%-12' as any}
+            label="cancel"
+            color="yellow"
+            pending={pendingActions.has(id)}
+            onClick={() => onCancelBinanceOrder(symbol, orderId)}
+          />
+        );
+      })}
+
       <RealtimeOHLCChartContainer
         top={chartTop}
         left={0}
@@ -1351,13 +1537,13 @@ function DashboardInner() {
         ))}
       </box>
 
-      <box label=" Arb Spreads " top={2 + posH + chartH} left={0} width="40%" height={row2H}
+      <box label=" Arb Spreads " top={2 + posH + holdingsH + chartH} left={0} width="40%" height={row2H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={arbLines.join('\n')} />
       {displaySpreads.map((s, index) => (
         <ClickablePair
           key={`spread-pair-${s.pair}-${index}`}
-          top={3 + posH + chartH + index}
+          top={3 + posH + holdingsH + chartH + index}
           left={2}
           pair={s.pair}
           exchange={s.buyExchange || undefined}
@@ -1367,12 +1553,12 @@ function DashboardInner() {
         />
       ))}
 
-      <box label=" Open Orders " top={2 + posH + chartH} left="40%" width="30%" height={row2H}
+      <box label=" Open Orders " top={2 + posH + holdingsH + chartH} left="40%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'magenta' } }}
         content={orderLines.join('\n')} />
 
-      <box label=" Trade Signals " top={2 + posH + chartH} left="70%" width="30%" height={row2H}
+      <box label=" Trade Signals " top={2 + posH + holdingsH + chartH} left="70%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true} keys={true} vi={true} alwaysScroll={true}
         scrollbar={{ ch: ' ', track: { bg: 'gray' }, style: { bg: 'cyan' } }}
         style={{ border: { fg: 'cyan' } }}
@@ -1385,7 +1571,7 @@ function DashboardInner() {
       {recentClosedRows.map((trade: ClosedTradeRow, index: number) => (
         <ClickablePair
           key={`closed-pair-${trade.exchange}-${trade.pair}-${trade.exitTime}`}
-          top={3 + posH + chartH + row2H + (index * 2)}
+          top={3 + posH + holdingsH + chartH + row2H + (index * 2)}
           left={13}
           pair={trade.pair}
           exchange={trade.exchange}

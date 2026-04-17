@@ -249,15 +249,33 @@ interface AccountInfo {
 }
 
 export async function getBalance(): Promise<Record<string, string>> {
+  // Spendable-only view. Locked funds (open orders) are excluded — the arb
+  // sizer must not treat them as available, or BUYs fail with -2010.
   const info = await binancePrivate<AccountInfo>('GET', '/api/v3/account');
   const result: Record<string, string> = {};
   for (const b of info.balances) {
     const free = parseFloat(b.free);
-    const locked = parseFloat(b.locked);
-    const total = free + locked;
-    if (total > 0) result[b.asset] = total.toFixed(8);
+    if (free > 0) result[b.asset] = free.toFixed(8);
   }
   return result;
+}
+
+export interface BinanceAssetBalance {
+  asset: string;
+  free: string;
+  locked: string;
+}
+
+export async function getDetailedBalance(): Promise<BinanceAssetBalance[]> {
+  const info = await binancePrivate<AccountInfo>('GET', '/api/v3/account');
+  const out: BinanceAssetBalance[] = [];
+  for (const b of info.balances) {
+    const free = parseFloat(b.free);
+    const locked = parseFloat(b.locked);
+    if (free + locked <= 0) continue;
+    out.push({ asset: b.asset, free: b.free, locked: b.locked });
+  }
+  return out;
 }
 
 export interface OrderOpts {
@@ -308,6 +326,24 @@ export async function getOpenOrders(symbol?: string): Promise<OrderResult[]> {
   const params: Record<string, string> = {};
   if (symbol) params.symbol = symbol;
   return binancePrivate<OrderResult[]>('GET', '/api/v3/openOrders', params);
+}
+
+export async function cancelOrder(symbol: string, orderId: number): Promise<OrderResult> {
+  return binancePrivate<OrderResult>('DELETE', '/api/v3/order', {
+    symbol,
+    orderId: String(orderId),
+  });
+}
+
+/** MARKET SELL for the full free balance of `asset` on its USD pair. */
+export async function closeHolding(asset: string): Promise<OrderResult> {
+  const detailed = await getDetailedBalance();
+  const entry = detailed.find((b) => b.asset === asset);
+  if (!entry) throw new Error(`Binance: no balance for ${asset}`);
+  const free = parseFloat(entry.free);
+  if (!isFinite(free) || free <= 0) throw new Error(`Binance: ${asset} free balance is 0 (locked=${entry.locked})`);
+  const symbol = `${asset}USD`;
+  return placeOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: free.toFixed(8) });
 }
 
 export interface BinanceTrade {
