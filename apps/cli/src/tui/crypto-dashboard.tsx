@@ -743,10 +743,18 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const pnlPctStr = realizedPnlPct >= 0 ? `{green-fg}(+${realizedPnlPct.toFixed(2)}%){/}` : `{red-fg}(${realizedPnlPct.toFixed(2)}%){/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
-  const currentDailyLimitPct = dailyLossLimitOverridePct ?? ts?.dailyLossLimitPct ?? 5;
+  // Show the daemon-authoritative value in the badge (that's what's actually
+  // enforced). If the user's local override differs, surface it as "pending"
+  // so there's no ambiguity about which limit just halted us.
+  const daemonLimitPct = ts?.dailyLossLimitPct ?? 5;
+  const uiLimitPct = dailyLossLimitOverridePct ?? daemonLimitPct;
+  const pendingSuffix = dailyLossLimitOverridePct != null && Math.abs(dailyLossLimitOverridePct - daemonLimitPct) > 0.01
+    ? ` {yellow-fg}(pending ${uiLimitPct.toFixed(1)}%){/}`
+    : '';
+  const currentDailyLimitPct = uiLimitPct;
   const haltStr = ts?.dailyLossLimitHit
-    ? `  {black-fg}{yellow-bg} HALTED ${currentDailyLimitPct.toFixed(1)}% daily limit {/}`
-    : `  {white-fg}daily-limit:${currentDailyLimitPct.toFixed(1)}%{/}`;
+    ? `  {black-fg}{yellow-bg} HALTED ${daemonLimitPct.toFixed(1)}% daily limit {/}${pendingSuffix}`
+    : `  {white-fg}daily-limit:${daemonLimitPct.toFixed(1)}%{/}${pendingSuffix}`;
   const tradingStr = tradingEnabled === true
     ? `  {black-fg}{green-bg} TRADING: ENABLED (override) {/}`
     : tradingEnabled === false
