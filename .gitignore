@@ -31,3 +31,4 @@ supabase/.branches/
 .notifications-debug.json
 .orders-debug.json
 *.keys
+.claude/

@@ -19,8 +19,18 @@
  */
 
 import { defaultCexAdapters } from '@b1dz/adapters-cex';
-import { ZeroExAdapter, OneInchAdapter } from '@b1dz/adapters-evm';
+import {
+  ZeroExAdapter,
+  OneInchAdapter,
+  UniswapV3Adapter,
+  ViemGasOracle,
+  createPublicClient,
+  http,
+  base as baseChain,
+  type PublicClient,
+} from '@b1dz/adapters-evm';
 import { JupiterAdapter } from '@b1dz/adapters-solana';
+import { TriangularEngine } from '@b1dz/triangular-engine';
 import {
   InMemoryEventChannel,
   type OpportunityStatus,
@@ -97,6 +107,7 @@ interface PipelineState {
   channel: ObservableChannel;
   observer: ObserveEngine;
   daemon: TradeDaemon;
+  triangular: TriangularEngine | null;
   pairs: string[];
   mode: TradeMode;
   startedAt: number;
@@ -112,7 +123,7 @@ const executors: Executor[] = [];
  *  TradeDaemon captures the list at construction. */
 export function registerExecutor(executor: Executor): void {
   if (instance) {
-    console.warn('[v2] registerExecutor called after pipeline start — ignored');
+    console.warn('[arb] registerExecutor called after pipeline start — ignored');
     return;
   }
   executors.push(executor);
@@ -121,6 +132,9 @@ export function registerExecutor(executor: Executor): void {
 function buildAdapters(): VenueAdapter[] {
   const list: VenueAdapter[] = [...defaultCexAdapters()];
   list.push(new JupiterAdapter());
+  if (process.env.BASE_RPC_URL) {
+    list.push(new UniswapV3Adapter({ chain: 'base' }));
+  }
   if (process.env.ZEROX_API_KEY) {
     list.push(new ZeroExAdapter({ chain: 'base', apiKey: process.env.ZEROX_API_KEY }));
   }
@@ -142,9 +156,9 @@ function floatEnv(key: string, fallback: number): number {
 }
 
 function resolveMode(): TradeMode {
-  const raw = (process.env.V2_MODE ?? 'observe').toLowerCase();
+  const raw = (process.env.ARB_MODE ?? process.env.V2_MODE ?? 'observe').toLowerCase();
   if (raw === 'observe' || raw === 'paper' || raw === 'live') return raw;
-  console.warn(`[v2] invalid V2_MODE="${raw}", defaulting to observe`);
+  console.warn(`[arb] invalid ARB_MODE="${raw}", defaulting to observe`);
   return 'observe';
 }
 
@@ -152,19 +166,19 @@ export async function initV2Pipeline(): Promise<PipelineState> {
   if (instance) return instance;
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const maxPairs = intEnv('V2_MAX_PAIRS', 10);
-    const sizeUsd = floatEnv('V2_SIZE_USD', 100);
-    const intervalMs = intEnv('V2_INTERVAL_MS', 5000);
-    const minNetUsd = floatEnv('V2_MIN_NET_USD', DEFAULT_RISK_LIMITS.minNetUsd);
-    const minNetBps = floatEnv('V2_MIN_NET_BPS', DEFAULT_RISK_LIMITS.minNetBps);
-    const maxTradeUsd = floatEnv('V2_MAX_TRADE_USD', 5);
+    const maxPairs = intEnv('ARB_MAX_PAIRS', intEnv('V2_MAX_PAIRS', 10));
+    const sizeUsd = floatEnv('ARB_SIZE_USD', floatEnv('V2_SIZE_USD', 100));
+    const intervalMs = intEnv('ARB_INTERVAL_MS', intEnv('V2_INTERVAL_MS', 5000));
+    const minNetUsd = floatEnv('ARB_MIN_NET_USD', floatEnv('V2_MIN_NET_USD', DEFAULT_RISK_LIMITS.minNetUsd));
+    const minNetBps = floatEnv('ARB_MIN_NET_BPS', floatEnv('V2_MIN_NET_BPS', DEFAULT_RISK_LIMITS.minNetBps));
+    const maxTradeUsd = floatEnv('ARB_MAX_TRADE_USD', floatEnv('V2_MAX_TRADE_USD', 5));
     const mode = resolveMode();
 
     // Build any env-armed executors before TradeDaemon is constructed —
     // TradeDaemon captures its executor list at construction time, so
     // later `registerExecutor()` calls are ignored.
     const armedExecutor = await maybeBuildUniswapV3BaseExecutor().catch((e: unknown) => {
-      console.error(`[v2] executor init failed: ${(e as Error).message}`);
+      console.error(`[arb] executor init failed: ${(e as Error).message}`);
       return null;
     });
     if (armedExecutor && !executors.includes(armedExecutor)) {
@@ -173,7 +187,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
 
     const adapters = buildAdapters();
     const discovered = await getActivePairs().catch((e: unknown) => {
-      console.error(`[v2] pair discovery failed, using fallback: ${(e as Error).message}`);
+      console.error(`[arb] pair discovery failed, using fallback: ${(e as Error).message}`);
       return [] as string[];
     });
     const fallback = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
@@ -193,7 +207,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       intervalMs,
       minNetUsd,
       minNetBps,
-      log: (m) => console.log(`[v2-observer] ${m}`),
+      log: (m) => console.log(`[arb-observer] ${m}`),
     });
     const daemon = new TradeDaemon({
       channel,
@@ -202,14 +216,17 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       batchSize: 10,
       risk: { minNetUsd, minNetBps, maxTradeUsd },
       executors: executors.length > 0 ? [...executors] : undefined,
-      log: (m) => console.log(`[v2-trader] ${m}`),
+      log: (m) => console.log(`[arb-trader] ${m}`),
     });
+
+    const triangular = maybeBuildTriangularEngine(channel);
 
     observer.start();
     daemon.start();
+    if (triangular) triangular.start();
     const startedAt = Date.now();
     console.log(
-      `[v2] pipeline started mode=${mode} pairs=${pairList.length} adapters=${adapters.map((a) => a.venue).join(',')} executors=${executors.length}`,
+      `[arb] pipeline started mode=${mode} pairs=${pairList.length} adapters=${adapters.map((a) => a.venue).join(',')} executors=${executors.length} triangular=${triangular ? triangular.triangleCount() : 'off'}`,
     );
 
     instance = {
@@ -217,6 +234,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       channel,
       observer,
       daemon,
+      triangular,
       pairs: pairList,
       mode,
       startedAt,
@@ -225,6 +243,68 @@ export async function initV2Pipeline(): Promise<PipelineState> {
     return instance;
   })();
   return initPromise;
+}
+
+/** Build a TriangularEngine if the env says so and Base RPC is available.
+ *
+ *  Enabling requires both:
+ *    ARB_TRIANGULAR=true       explicit opt-in
+ *    BASE_RPC_URL              RPC reachable for QuoterV2 calls
+ *
+ *  Tunables (all optional, safe defaults):
+ *    ARB_TRIANGULAR_ANCHOR     default USDC
+ *    ARB_TRIANGULAR_SIZE_USD   default 100
+ *    ARB_TRIANGULAR_FEE_TIER   default 3000 (0.3%)
+ *    ARB_TRIANGULAR_INTERVAL_MS default 10000
+ *    ARB_TRIANGULAR_MIN_NET_USD default 0.05
+ *    ARB_TRIANGULAR_MAX_PER_TICK default 40
+ *    ARB_TRIANGULAR_TOKENS     comma-separated symbol list, default
+ *                              WETH,cbBTC,AERO,DEGEN,BRETT,TOSHI,DAI
+ *    ETH_USD_HINT              numeric ETH→USD for gas math, default 2500
+ */
+function maybeBuildTriangularEngine(channel: ObservableChannel): TriangularEngine | null {
+  if ((process.env.ARB_TRIANGULAR ?? '').toLowerCase() !== 'true') return null;
+  const rpcUrl = process.env.BASE_RPC_URL;
+  if (!rpcUrl) {
+    console.warn('[arb] ARB_TRIANGULAR=true but BASE_RPC_URL missing — triangular engine disabled');
+    return null;
+  }
+
+  const addresses = UniswapV3Adapter.addressesFor('base');
+  if (!addresses) {
+    console.warn('[arb] triangular: no Uniswap V3 addresses for base — engine disabled');
+    return null;
+  }
+
+  const client = createPublicClient({ chain: baseChain, transport: http(rpcUrl) }) as PublicClient;
+  const gasOracle = new ViemGasOracle({ clients: { base: client } });
+
+  const anchor = process.env.ARB_TRIANGULAR_ANCHOR ?? 'USDC';
+  const amountInDecimal = process.env.ARB_TRIANGULAR_SIZE_USD ?? '100';
+  const feeTier = Number.parseInt(process.env.ARB_TRIANGULAR_FEE_TIER ?? '3000', 10);
+  const intervalMs = Number.parseInt(process.env.ARB_TRIANGULAR_INTERVAL_MS ?? '10000', 10);
+  const minNetUsd = Number.parseFloat(process.env.ARB_TRIANGULAR_MIN_NET_USD ?? '0.05');
+  const maxPerTick = Number.parseInt(process.env.ARB_TRIANGULAR_MAX_PER_TICK ?? '40', 10);
+  const tokensEnv = process.env.ARB_TRIANGULAR_TOKENS ?? 'WETH,cbBTC,AERO,DEGEN,BRETT,TOSHI,DAI';
+  const tokens = tokensEnv.split(',').map((s) => s.trim()).filter(Boolean);
+  const ethUsd = Number.parseFloat(process.env.ETH_USD_HINT ?? '2500');
+
+  return new TriangularEngine({
+    chain: 'base',
+    client,
+    quoter: addresses.quoter,
+    anchor,
+    tokens,
+    amountInDecimal,
+    feeTier,
+    gasOracle,
+    nativeUsd: () => ethUsd,
+    channel,
+    intervalMs,
+    minNetUsd,
+    maxPerTick,
+    log: (m) => console.log(`[arb] ${m}`),
+  });
 }
 
 export function v2Snapshot(): V2PipelineSnapshot | null {

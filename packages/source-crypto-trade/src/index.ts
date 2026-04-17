@@ -15,38 +15,50 @@
 
 import type { Source, MarketSnapshot, Opportunity, ActionResult, PriceFeed } from '@b1dz/core';
 import {
-  KrakenFeed, CoinbaseFeed, BinanceUsFeed,
+  KrakenFeed, CoinbaseFeed, BinanceUsFeed, GeminiFeed,
   placeOrder as placeKrakenOrder,
   placeCoinbaseOrder,
   placeBinanceOrder,
+  placeGeminiOrder,
+  placeGeminiMarketSell,
   getBalance as getKrakenBalance,
   getOpenOrders as getKrakenOpenOrders,
   cancelKrakenOrder,
   getCoinbaseBalance,
   getCoinbaseAvailableBalance,
   getBinanceBalance,
+  getGeminiBalance,
   getCoinbaseFills,
   getBinanceTrades,
   getBinanceTradingRules,
+  getCoinbaseTradableLimits,
   hasBinanceTradingSymbol,
   hasCoinbaseTradingProduct,
   hasKrakenTradingPair,
   getKrakenPairMinVolume,
-  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE,
+  MAX_POSITION_USD, KRAKEN_TAKER_FEE, COINBASE_TAKER_FEE, BINANCE_TAKER_FEE, GEMINI_TAKER_FEE,
   getActivePairs,
+  getPerExchangeVolumes,
 } from '@b1dz/source-crypto-arb';
 import type { Candle } from './analysis/candles.js';
+import {
+  sellVolumeWithCushion,
+  sellabilityBlocker,
+  type VenueSellLimits,
+} from './sellability.js';
 import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
 import {
   TAKE_PROFIT_PCT,
-  INITIAL_STOP_PCT,
-  BREAKEVEN_TRIGGER_PCT,
-  LOCK_TRIGGER_PCT,
-  LOCK_STOP_PCT,
   TIME_EXIT_MS,
   TIME_EXIT_FLAT_PCT,
   COOLDOWN_MS,
+  trailingStopPriceFor,
+  trailPctFromEnv,
+  buySlippageBpsFromEnv,
+  entryMinScoreFromEnv,
   dailyLossLimitPctFromEnv,
+  minHoldMsFromEnv,
+  hardStopPctFromEnv,
 } from './trade-config.js';
 import { applySnapshotToCandles, fetchHistoricalCandles } from './analysis/candles.js';
 import { analyzeSignal, type AnalysisSignal } from './analysis/engine.js';
@@ -94,6 +106,41 @@ interface TradeItem {
 
 const DAILY_LOSS_LIMIT_PCT = dailyLossLimitPctFromEnv();
 const WARMUP_TICKS = 20;
+/** Per-exchange 24h USD volume floor. A pair can be tradable globally (admitted
+ *  by getActivePairs) yet thin on one specific venue — entering there means
+ *  buy-and-sell on a 10k-volume book, which just pays slippage both ways.
+ *
+ *  Default is $50k (looser than the audit tool's $100k because funds sit on
+ *  venues like Kraken/Coinbase where mid-cap pairs often clear $50k but not
+ *  $100k; blocking them at $100k means those venues never trade). Tune via
+ *  MIN_PER_EXCHANGE_VOL_USD env. */
+const DEFAULT_MIN_PER_EXCHANGE_VOL_USD = 50_000;
+function minPerExchangeVolUsd(): number {
+  const v = Number.parseFloat(process.env.MIN_PER_EXCHANGE_VOL_USD ?? String(DEFAULT_MIN_PER_EXCHANGE_VOL_USD));
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_MIN_PER_EXCHANGE_VOL_USD;
+}
+let cachedPerExchangeVolumes: Awaited<ReturnType<typeof getPerExchangeVolumes>> | null = null;
+let lastPerExchangeVolumeFetch = 0;
+const PER_EXCHANGE_VOL_TTL_MS = 5 * 60_000;
+
+async function refreshPerExchangeVolumesIfStale(): Promise<void> {
+  if (cachedPerExchangeVolumes && Date.now() - lastPerExchangeVolumeFetch < PER_EXCHANGE_VOL_TTL_MS) return;
+  try {
+    cachedPerExchangeVolumes = await getPerExchangeVolumes();
+    lastPerExchangeVolumeFetch = Date.now();
+  } catch (e) {
+    console.log(`[trade] per-exchange volumes fetch failed: ${(e as Error).message}`);
+  }
+}
+
+function isVenueThin(exchange: string, pair: string): boolean {
+  if (!cachedPerExchangeVolumes) return false; // no data yet — don't over-block
+  const map = (cachedPerExchangeVolumes as Record<string, Map<string, number>>)[exchange];
+  const vol = map?.get(pair);
+  // Missing pair on that exchange → treat as thin (we shouldn't trade it there).
+  if (vol == null) return true;
+  return vol < minPerExchangeVolUsd();
+}
 
 // ─── State ─────────────────────────────────────────────────────
 
@@ -101,10 +148,12 @@ const WARMUP_TICKS = 20;
 const krakenFeed: PriceFeed = new KrakenFeed();
 const coinbaseFeed: PriceFeed = new CoinbaseFeed();
 const binanceFeed: PriceFeed = new BinanceUsFeed();
+const geminiFeed: PriceFeed = new GeminiFeed();
 const TRADE_FEEDS: { feed: PriceFeed; exchange: string }[] = [
   { feed: krakenFeed, exchange: 'kraken' },
   { feed: coinbaseFeed, exchange: 'coinbase' },
   { feed: binanceFeed, exchange: 'binance-us' },
+  { feed: geminiFeed, exchange: 'gemini' },
 ];
 const histories = new Map<string, MarketSnapshot[]>();
 interface AnalysisPairState {
@@ -180,6 +229,10 @@ let tradePollCount = 0;
 let lastEligiblePairs: string[] = [];
 let lastQuoteBalanceRefresh = 0;
 let lastDailyLossLimitLogAt = 0;
+/** Per-pair throttle for "weak buy signal" logs (one line per minute
+ *  per pair so operators can see what the strategy IS seeing without
+ *  filling the log every 5s). */
+const lastWeakSignalLogAt = new Map<string, number>();
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
@@ -591,6 +644,67 @@ async function actualBaseBalanceFor(exchange: string, pair: string): Promise<num
   return 0;
 }
 
+/** Look up the venue's sell-side limits for a pair, normalized into the
+ *  shape the pure `sellability.ts` helpers accept. Returns null when no
+ *  metadata is available — caller treats that as "unknown, defer to
+ *  exchange validation". */
+async function getVenueSellLimits(exchange: string, pair: string): Promise<VenueSellLimits | null> {
+  try {
+    if (exchange === 'coinbase') {
+      const l = await getCoinbaseTradableLimits(pair);
+      if (!l) return null;
+      return {
+        baseMinSize: l.baseMinSize > 0 ? l.baseMinSize : null,
+        quoteMinSize: l.quoteMinSize > 0 ? l.quoteMinSize : null,
+      };
+    }
+    if (exchange === 'kraken') {
+      const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      const minVol = await getKrakenPairMinVolume(krakenPair);
+      return minVol != null ? { baseMinSize: minVol } : null;
+    }
+    if (exchange === 'binance-us') {
+      const symbol = pair.replace('-', '');
+      const rules = await getBinanceTradingRules(symbol);
+      if (!rules) return null;
+      return { baseMinSize: rules.minQty, minNotional: rules.minNotional };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Compute the SELL exit volume for the given cap and live balance.
+ *
+ *  Defers the cushion-vs-min decision to the pure `sellVolumeWithCushion`
+ *  helper so the venue lookup here stays as a thin dispatcher. Without
+ *  this the 0.5% fee-skim cushion zeroes out coarse-increment tokens
+ *  like RAVE-USD on Coinbase (base_min_size 0.1 — see sellability.ts). */
+async function computeVenueSellVolume(
+  exchange: string,
+  pair: string,
+  availableBase: number,
+  cap: number,
+): Promise<number> {
+  const limits = await getVenueSellLimits(exchange, pair);
+  return sellVolumeWithCushion(availableBase, cap, limits);
+}
+
+/** Pre-flight check for BUY orders. Refuses buys that would settle
+ *  into a position too small to sell back (post-fee base < venue min,
+ *  or post-fee notional < venue quote min). Returns a reason string
+ *  to include in the SKIPPED activity log, or null to allow the buy. */
+async function checkSellableAfterBuy(
+  exchange: string,
+  pair: string,
+  baseAmount: number,
+  price: number,
+): Promise<string | null> {
+  const limits = await getVenueSellLimits(exchange, pair);
+  return sellabilityBlocker(baseAmount, price, limits);
+}
+
 async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPair: string): Promise<boolean> {
   if (hasPositionOnExchange(exchange)) return false;
 
@@ -621,7 +735,7 @@ async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPa
   if (!candidate) return false;
 
   const availableBase = await actualBaseBalanceFor(exchange, candidate.pair);
-  const sellVolume = Math.min(candidate.amount, availableBase * 0.995);
+  const sellVolume = await computeVenueSellVolume(exchange, candidate.pair, availableBase, candidate.amount);
   if (!Number.isFinite(sellVolume) || sellVolume <= 0) return false;
 
   console.log(`[trade] FREE FUNDS ${exchange}:${candidate.pair} value≈$${candidate.usdValue.toFixed(2)} to fund ${targetPair}`);
@@ -633,6 +747,9 @@ async function maybeLiquidateUntrackedHoldingForFunds(exchange: string, targetPa
   } else if (exchange === 'binance-us') {
     const symbol = candidate.pair.replace('-', '');
     await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
+  } else if (exchange === 'gemini') {
+    const symbol = candidate.pair.replace('-', '').toLowerCase();
+    await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
   }
   pendingLiquidations.delete(`${exchange}:${candidate.pair}`);
   return true;
@@ -651,7 +768,7 @@ function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): 
   if (elapsedMs < 60_000 && pnlPct > -0.002) return null;
   if (pnlPct >= TAKE_PROFIT_PCT * 0.75) return null;
 
-  const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+  const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : item.exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
   const fee = currentSnap.bid * current.volume * feeRate;
   const grossPnl = (currentSnap.bid - current.entryPrice) * current.volume;
   const netPnl = grossPnl - fee;
@@ -716,6 +833,7 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     if (msg.includes('Temporary lockout')) {
       krakenHydrationBlockedUntil = Math.max(krakenHydrationBlockedUntil, Date.now() + KRAKEN_HYDRATION_LOCKOUT_MS);
     }
+    console.log(`[trade] kraken balance fetch failed: ${msg}`);
   }
 
   try {
@@ -726,9 +844,10 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
       USDC: parseFloat(availableBal.USDC ?? '0'),
       USDT: parseFloat(availableBal.USDT ?? '0'),
     };
-  } catch {
+  } catch (e) {
     spendableQuoteBalances.coinbase = {};
     accountBalances.coinbase = {};
+    console.log(`[trade] coinbase balance fetch failed: ${(e as Error).message}`);
   }
 
   try {
@@ -739,9 +858,25 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
       USDC: parseFloat(bal.USDC ?? '0'),
       USDT: parseFloat(bal.USDT ?? '0'),
     };
-  } catch {
+  } catch (e) {
     spendableQuoteBalances['binance-us'] = {};
     accountBalances['binance-us'] = {};
+    console.log(`[trade] binance balance fetch failed: ${(e as Error).message}`);
+  }
+
+  try {
+    const bal = await getGeminiBalance();
+    accountBalances.gemini = bal;
+    spendableQuoteBalances.gemini = {
+      // Gemini uses upper-case currency codes on /v1/balances (USD, USDC, etc.).
+      USD: parseFloat(bal.USD ?? '0'),
+      USDC: parseFloat(bal.USDC ?? '0'),
+      USDT: parseFloat(bal.USDT ?? '0'),
+    };
+  } catch (e) {
+    spendableQuoteBalances.gemini = {};
+    accountBalances.gemini = {};
+    console.log(`[trade] gemini balance fetch failed: ${(e as Error).message}`);
   }
 }
 
@@ -1091,10 +1226,26 @@ function dailyPnlPct(): number {
   return (dailyPnl / dailyEquityBaselineUsd) * 100;
 }
 
+/** Runtime-adjustable daily-loss threshold. Defaults to the env/config value
+ *  but can be raised/lowered via the TUI and persisted in crypto-ui-settings. */
+let dailyLossLimitPctRuntime = DAILY_LOSS_LIMIT_PCT;
+
+export function setDailyLossLimitPct(pct: number | null): void {
+  const next = pct == null || !Number.isFinite(pct) || pct <= 0 ? DAILY_LOSS_LIMIT_PCT : pct;
+  if (next !== dailyLossLimitPctRuntime) {
+    dailyLossLimitPctRuntime = next;
+    console.log(`[trade] daily loss limit → ${next.toFixed(1)}%`);
+  }
+}
+
+export function getDailyLossLimitPct(): number {
+  return dailyLossLimitPctRuntime;
+}
+
 function isDailyLossLimitHit(): boolean {
   refreshDailyEquityBaselineIfNeeded();
   if (!(dailyEquityBaselineUsd > 0)) return false;
-  return dailyPnlPct() <= -DAILY_LOSS_LIMIT_PCT;
+  return dailyPnlPct() <= -dailyLossLimitPctRuntime;
 }
 
 /**
@@ -1147,9 +1298,20 @@ export function getTradeStatus(): TradeStatus {
     .reduce((sum, trade) => sum + trade.netPnl, 0);
   const positions = [...openPositions.values()]
     .map((pos) => {
-      const currentPrice = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1)?.bid ?? pos.entryPrice;
+      const lastSnap = histories.get(`${pos.exchange}:${pos.pair}`)?.at(-1);
+      const currentPrice = lastSnap?.bid ?? pos.entryPrice;
+      const quoteAgeMs = lastSnap?.ts ? Date.now() - lastSnap.ts : 0;
       const pnlPct = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
       const pnlUsd = (currentPrice - pos.entryPrice) * pos.volume;
+      const ageMs = Date.now() - pos.entryTime;
+      const ageSec = Math.floor(ageMs / 1000);
+      const elapsed = ageSec < 3600
+        ? `${Math.floor(ageSec / 60)}:${String(ageSec % 60).padStart(2, '0')}`
+        : `${Math.floor(ageSec / 3600)}h${Math.floor((ageSec % 3600) / 60)}m`;
+      // If quote hasn't advanced in >15s, flag it with a `~` suffix so the
+      // operator can see "Last" is cached, not live. Real movement would
+      // refresh the snap.ts every tick (5s cadence).
+      const stale = quoteAgeMs > 15_000 ? ` ~${Math.floor(quoteAgeMs / 1000)}s` : '';
       return {
         exchange: pos.exchange,
         pair: pos.pair,
@@ -1159,7 +1321,7 @@ export function getTradeStatus(): TradeStatus {
         pnlPct,
         pnlUsd,
         stopPrice: trailingStopPrice(pos),
-        elapsed: `${Math.floor((Date.now() - pos.entryTime) / 60000)}m`,
+        elapsed: elapsed + stale,
       };
     })
     .filter((pos) => (pos.currentPrice * pos.volume) >= DUST_USD_THRESHOLD);
@@ -1185,8 +1347,8 @@ export function getTradeStatus(): TradeStatus {
     position: pos,
     dailyPnl: trackedDailyPnl,
     dailyPnlPct: dailyEquityBaselineUsd > 0 ? (trackedDailyPnl / dailyEquityBaselineUsd) * 100 : 0,
-    dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -DAILY_LOSS_LIMIT_PCT : false,
-    dailyLossLimitPct: DAILY_LOSS_LIMIT_PCT,
+    dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -dailyLossLimitPctRuntime : false,
+    dailyLossLimitPct: dailyLossLimitPctRuntime,
     cooldowns,
     eligiblePairs: lastEligiblePairs.length,
     observedPairs: new Set([...histories.keys()].map((key) => key.split(':').slice(1).join(':'))).size,
@@ -1197,20 +1359,13 @@ export function getTradeStatus(): TradeStatus {
   };
 }
 
-/** Compute the current trailing stop price for a position. */
+/** Compute the current trailing stop price for a position. Delegates to
+ *  `trailingStopPriceFor` in trade-config.ts so the live daemon and the
+ *  backtest simulator compute identical stops. TRAIL_PCT is resolved
+ *  from env on each call so operators can widen/tighten the trail
+ *  without redeploying. */
 function trailingStopPrice(pos: Position): number {
-  const pnlPct = (pos.highWaterMark - pos.entryPrice) / pos.entryPrice;
-
-  if (pnlPct >= LOCK_TRIGGER_PCT) {
-    // Lock in profit: stop at entry + LOCK_STOP_PCT
-    return pos.entryPrice * (1 + LOCK_STOP_PCT);
-  }
-  if (pnlPct >= BREAKEVEN_TRIGGER_PCT) {
-    // Breakeven stop
-    return pos.entryPrice;
-  }
-  // Initial stop
-  return pos.entryPrice * (1 - INITIAL_STOP_PCT);
+  return trailingStopPriceFor(pos.entryPrice, pos.highWaterMark, trailPctFromEnv());
 }
 
 // ─── Source ────────────────────────────────────────────────────
@@ -1244,10 +1399,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const PAIRS = await getActivePairs();
       lastEligiblePairs = [...PAIRS];
       pruneInactivePairState(PAIRS);
+      await refreshPerExchangeVolumesIfStale();
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
       for (const { feed, exchange } of TRADE_FEEDS) {
         for (const pair of PAIRS) {
+          const posKeyForVenueCheck = `${exchange}:${pair}`;
+          const hasOpenPosition = openPositions.has(posKeyForVenueCheck);
+          // Skip thin venues for new entries, but keep polling if we're already in.
+          // We need the price feed to manage an existing position's exit.
+          if (!hasOpenPosition && isVenueThin(exchange, pair)) continue;
           const snap = await feed.snapshot(pair);
           if (!snap) continue;
           if (!isFinite(snap.bid) || !isFinite(snap.ask) || snap.bid <= 0 || snap.ask <= 0) continue;
@@ -1318,24 +1479,43 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
 
         let exitReason = '';
+        // Suppress shallow exits in the first MIN_HOLD_MS after entry so
+        // we don't bleed to fees on normal chop. A hard loss (deeper than
+        // HARD_STOP_PCT) or a take-profit still exits regardless.
+        const minHoldMs = minHoldMsFromEnv();
+        const hardStopPct = hardStopPctFromEnv();
+        const inMinHold = elapsed < minHoldMs;
 
-        // Take-profit
+        // Take-profit — always allowed.
         if (pnlPct >= TAKE_PROFIT_PCT) {
           exitReason = `take-profit +${(pnlPct * 100).toFixed(2)}%`;
         }
-        // Trailing stop hit
-        else if (item.snap.bid <= stopPrice) {
+        // Trailing stop hit — only allowed after min-hold OR if we're past
+        // the hard-stop floor (real loss, not noise).
+        else if (item.snap.bid <= stopPrice && (!inMinHold || pnlPct <= hardStopPct)) {
           exitReason = `trailing stop at $${stopPrice.toFixed(2)} (${((stopPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2)}%)`;
         }
-        // Time-based flat exit
+        // Time-based flat exit — by definition only fires after TIME_EXIT_MS,
+        // which is strictly later than MIN_HOLD_MS, so no extra guard needed.
         else if (elapsed >= TIME_EXIT_MS && Math.abs(pnlPct) < TIME_EXIT_FLAT_PCT) {
           exitReason = `time exit after ${(elapsed / 60000).toFixed(0)}min (flat ${(pnlPct * 100).toFixed(3)}%)`;
         }
-        // Strategy sell signal
-        else {
+        // Strategy sell signal — suppressed inside MIN_HOLD unless we're
+        // already under the hard-stop line.
+        else if (!inMinHold || pnlPct <= hardStopPct) {
           const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
           if (sig?.side === 'sell' && sig.strength >= 0.75) {
             exitReason = `strategy sell: ${sig.reason}`;
+          }
+        }
+
+        // Debug visibility: log when an exit was suppressed by MIN_HOLD so
+        // the operator can see the guard working instead of guessing why
+        // we're still in the trade.
+        if (!exitReason && inMinHold) {
+          const wouldTrailStop = item.snap.bid <= stopPrice;
+          if (wouldTrailStop && pnlPct > hardStopPct) {
+            console.log(`[trade] HOLD ${item.exchange}:${item.pair} trailing-stop hit at $${stopPrice.toFixed(6)} pnl=${(pnlPct * 100).toFixed(2)}% — suppressed (age ${(elapsed / 1000).toFixed(0)}s < ${(minHoldMs / 1000).toFixed(0)}s min-hold)`);
           }
         }
 
@@ -1411,7 +1591,25 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // Run strategy
       const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
       if (!sig || sig.side !== 'buy') return null;
-      if (sig.strength < (DEFAULT_ANALYSIS_CONFIG.thresholds.minScore / 100)) return null;
+
+      // Entry threshold is env-tunable via ENTRY_MIN_SCORE (0-100,
+      // default 75). `sig.strength` is 0-1 so we divide. A suppressed
+      // buy signal is throttled-logged once per pair per minute so
+      // operators can see the strategy IS seeing setups (just below
+      // the threshold) rather than wondering why nothing fires.
+      const entryThreshold = entryMinScoreFromEnv() / 100;
+      if (sig.strength < entryThreshold) {
+        const throttleKey = `${item.exchange}:${item.pair}`;
+        const lastLog = lastWeakSignalLogAt.get(throttleKey) ?? 0;
+        if (Date.now() - lastLog >= 60_000) {
+          lastWeakSignalLogAt.set(throttleKey, Date.now());
+          console.log(
+            `[trade] weak buy signal ${throttleKey} str=${sig.strength.toFixed(2)} ` +
+            `< threshold=${entryThreshold.toFixed(2)} reason="${sig.reason ?? 'n/a'}"`,
+          );
+        }
+        return null;
+      }
 
       // Already have a position for this pair on this exchange
       const posKey2 = `${tradeExchange}:${item.pair}`;
@@ -1464,7 +1662,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const liquidationKey = `${exchange}:${pair}`;
           try {
             const availableBase = await actualBaseBalanceFor(exchange, pair);
-            const sellVolume = Math.min(meta.liquidation.volume, availableBase * 0.995);
+            const sellVolume = await computeVenueSellVolume(exchange, pair, availableBase, meta.liquidation.volume);
             if (!Number.isFinite(sellVolume) || sellVolume <= 0 || sellVolume * meta.snap.bid < 0.01) {
               pendingLiquidations.delete(liquidationKey);
               return { ok: false, message: `cleared stale ${pair} liquidation on ${exchange} (no sellable balance)` };
@@ -1481,6 +1679,10 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
               const symbol = pair.replace('-', '');
               const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
               txInfo = `orderId=${result.orderId}`;
+            } else if (exchange === 'gemini') {
+              const symbol = pair.replace('-', '').toLowerCase();
+              const result = await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
+              txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
             }
             pendingLiquidations.delete(liquidationKey);
             console.log(`[trade] LIQUIDATED ${exchange}:${pair} ${txInfo}`);
@@ -1499,7 +1701,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         if (!pos) return { ok: false, message: 'no open position to sell' };
         try {
           const availableBase = await actualBaseBalanceFor(exchange, pair);
-          const sellVolume = Math.min(pos.volume, availableBase * 0.995);
+          const sellVolume = await computeVenueSellVolume(exchange, pair, availableBase, pos.volume);
           if (!Number.isFinite(sellVolume) || sellVolume <= 0 || sellVolume * meta.snap.bid < 0.01) {
             clearTrackedPosition(posKey, exchange);
             return { ok: false, message: `cleared stale ${pair} position on ${exchange} (no sellable balance)` };
@@ -1516,8 +1718,12 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             const symbol = pair.replace('-', '');
             const result = await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellVolume.toFixed(8) });
             txInfo = `orderId=${result.orderId}`;
+          } else if (exchange === 'gemini') {
+            const symbol = pair.replace('-', '').toLowerCase();
+            const result = await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
+            txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
           }
-          const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+          const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
           const fee = meta.snap.bid * sellVolume * feeRate;
           const grossPnl = (meta.snap.bid - pos.entryPrice) * sellVolume;
           const netPnl = grossPnl - fee;
@@ -1565,6 +1771,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
         } else if (exchange === 'binance-us') {
           availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
+        } else if (exchange === 'gemini') {
+          // No stable-asset auto-conversion for Gemini yet — use the plain
+          // available balance capped under $100 with a 0.5% fee cushion.
+          const bal = await getGeminiBalance();
+          availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
         }
       } catch {}
       if (availableQuote < MIN_SPENDABLE_QUOTE_USD) {
@@ -1579,6 +1790,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
               availableQuote = await maybeAutoConvertCoinbaseQuote(quoteAsset, MAX_POSITION_USD);
             } else if (exchange === 'binance-us') {
               availableQuote = await maybeAutoConvertBinanceQuote(quoteAsset, MAX_POSITION_USD);
+            } else if (exchange === 'gemini') {
+              const bal = await getGeminiBalance();
+              availableQuote = Math.min(parseFloat(bal[quoteAsset] ?? '0') * 0.995, 99.50);
             }
           }
         } catch (freeError) {
@@ -1588,40 +1802,110 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (availableQuote < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
-      const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : BINANCE_TAKER_FEE;
+      const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
       const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * Math.max(0.9, 1 - feeRate - 0.02);
       if (spendBudget < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
       const volume = spendBudget / price;
 
-      console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volume.toFixed(8)} @ $${price.toFixed(2)}`);
+      // Pre-flight: will this position be sellable afterward? If the
+      // post-fee base balance would sit below the venue's sell-side
+      // minimums we'd open an un-exitable dust position. Skip instead.
+      const postFeeVolume = volume * (1 - feeRate);
+      const unsellableReason = await checkSellableAfterBuy(exchange, pair, postFeeVolume, price);
+      if (unsellableReason) {
+        return { ok: false, message: `skip buy ${exchange}:${pair} — would be unsellable (${unsellableReason})` };
+      }
+
+      // Verbose sizing trace — lets ops audit why a given buy came out
+      // at its actual size (availableQuote vs MAX_POSITION_USD cap vs
+      // fee cushion). Suppress with `TRADE_VERBOSE_SIZING=false`.
+      if (process.env.TRADE_VERBOSE_SIZING !== 'false') {
+        const cap = MAX_POSITION_USD;
+        const cushion = Math.max(0.9, 1 - feeRate - 0.02);
+        const notionalPostFee = postFeeVolume * price;
+        console.log(
+          `[trade] SIZE ${exchange}:${pair} availableQuote=$${availableQuote.toFixed(2)} ` +
+          `cap=$${cap} cushion=${cushion.toFixed(3)} ` +
+          `spendBudget=$${spendBudget.toFixed(2)} ` +
+          `price=$${price.toFixed(6)} volume=${volume.toFixed(8)} ` +
+          `postFeeNotional=$${notionalPostFee.toFixed(2)}`,
+        );
+      }
+
+      // Walk up to BUY_SLIPPAGE_BPS above the observed ask and submit as
+      // IOC so the order either fills immediately up to our price ceiling
+      // or cancels. Prevents the stuck-dust pattern where a GTC limit at
+      // the exact ask only sweeps the top-of-book layer on thin markets
+      // (e.g. RAVE-USD) and leaves the rest as an open order that locks
+      // our quote balance indefinitely.
+      const slippageBps = buySlippageBpsFromEnv();
+      const aggressivePrice = price * (1 + slippageBps / 10_000);
+      const volumeAtAggressive = spendBudget / aggressivePrice;
+
+      console.log(`[trade] ATTEMPT BUY ${exchange}:${pair} vol=${volumeAtAggressive.toFixed(8)} @ $${aggressivePrice.toFixed(6)} (ask=$${price.toFixed(6)} +${slippageBps}bps IOC)`);
       try {
         let txInfo = '';
         if (exchange === 'kraken') {
           const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
-          const result = await placeKrakenOrder({ pair: krakenPair, type: 'buy', ordertype: 'limit', volume: volume.toFixed(8), price: price.toFixed(2) });
+          const result = await placeKrakenOrder({
+            pair: krakenPair,
+            type: 'buy',
+            ordertype: 'limit',
+            volume: volumeAtAggressive.toFixed(8),
+            price: aggressivePrice.toFixed(2),
+            timeinforce: 'IOC',
+          });
           txInfo = `${result.descr.order} txid=${result.txid}`;
         } else if (exchange === 'coinbase') {
-          const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volume.toFixed(8), limitPrice: String(price) });
+          const result = await placeCoinbaseOrder({
+            productId: pair,
+            side: 'BUY',
+            size: volumeAtAggressive.toFixed(8),
+            limitPrice: String(aggressivePrice),
+            ioc: true,
+          });
           txInfo = `orderId=${result.order_id}`;
         } else if (exchange === 'binance-us') {
           const symbol = pair.replace('-', '');
-          const result = await placeBinanceOrder({ symbol, side: 'BUY', type: 'LIMIT', quantity: volume.toFixed(8), price: price.toFixed(2) });
+          const result = await placeBinanceOrder({
+            symbol,
+            side: 'BUY',
+            type: 'LIMIT',
+            quantity: volumeAtAggressive.toFixed(8),
+            price: aggressivePrice.toFixed(2),
+            timeInForce: 'IOC',
+          });
           txInfo = `orderId=${result.orderId}`;
+        } else if (exchange === 'gemini') {
+          const symbol = pair.replace('-', '').toLowerCase();
+          const result = await placeGeminiOrder({
+            symbol,
+            side: 'buy',
+            amount: volumeAtAggressive.toFixed(8),
+            price: aggressivePrice.toFixed(2),
+            options: ['immediate-or-cancel'],
+          });
+          txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
         }
+        // Track the submitted volume as an upper bound. IOC may have
+        // partial-filled, in which case actualBaseBalanceFor(exchange,
+        // pair) returns the real balance at exit time and the exit path
+        // uses `Math.min(pos.volume, availableBase)` to sell only what
+        // we actually hold.
         const posKey = `${exchange}:${pair}`;
         openPositions.set(posKey, {
           pair,
           exchange,
-          entryPrice: price,
-          volume,
+          entryPrice: aggressivePrice,
+          volume: volumeAtAggressive,
           entryTime: Date.now(),
-          highWaterMark: price,
+          highWaterMark: aggressivePrice,
           strategyId: meta.strategy ?? 'composite',
         });
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
-        return { ok: true, message: `bought ${volume.toFixed(8)} on ${exchange} @ ${price.toFixed(2)}` };
+        return { ok: true, message: `bought up to ${volumeAtAggressive.toFixed(8)} on ${exchange} @ ≤$${aggressivePrice.toFixed(6)}` };
       } catch (e) {
         const msg = (e as Error).message;
         if (exchange === 'kraken' && msg.includes('Insufficient funds')) {
@@ -1649,3 +1933,8 @@ export {
 } from './analysis/backtest.js';
 export { computeBacktestMetrics, type BacktestMetrics, type BacktestTrade } from './analysis/analytics.js';
 export { fetchHistoricalCandles, type Candle, type AnalysisTimeframe } from './analysis/candles.js';
+export {
+  sellVolumeWithCushion,
+  sellabilityBlocker,
+  type VenueSellLimits,
+} from './sellability.js';

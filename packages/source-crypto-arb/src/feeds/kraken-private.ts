@@ -143,6 +143,10 @@ export interface OrderOpts {
   volume: string;        // quantity in base currency
   price?: string;        // required for limit orders
   leverage?: string;     // e.g. '2:1' — only if MARGIN_TRADING=true
+  /** Kraken `timeinforce`: 'GTC' (default), 'IOC', or 'GTD'.
+   *  Use 'IOC' for aggressive limit buys to avoid orphan open orders
+   *  on thin books. */
+  timeinforce?: 'GTC' | 'IOC' | 'GTD';
 }
 
 export interface OrderResult {
@@ -178,6 +182,7 @@ export async function placeOrder(opts: OrderOpts): Promise<OrderResult> {
   };
   if (opts.price) params.price = opts.price;
   if (opts.leverage && process.env.MARGIN_TRADING === 'true') params.leverage = opts.leverage;
+  if (opts.timeinforce) params.timeinforce = opts.timeinforce;
 
   return krakenPrivate<OrderResult>('/0/private/AddOrder', params);
 }

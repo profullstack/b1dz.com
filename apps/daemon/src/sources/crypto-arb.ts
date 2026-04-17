@@ -4,9 +4,11 @@ import {
   evaluateArbStrategies,
   KrakenFeed, BinanceUsFeed, CoinbaseFeed,
   getBalance, getBinanceBalance, getCoinbaseBalance, getCoinbaseAuthDebug,
+  getBinanceDetailedBalance, getBinanceOpenOrders,
   getTradeHistory, getOpenOrders,
   getActivePairs,
   subscribeWs, wsCacheSize, setWsLogger,
+  type BinanceAssetBalance,
 } from '@b1dz/source-crypto-arb';
 import { AlertBus, getB1dzVersion } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
@@ -20,6 +22,8 @@ const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
 let cachedKrakenBalance: Record<string, string> = {};
 let cachedBinanceBalance: Record<string, string> = {};
 let cachedCoinbaseBalance: Record<string, string> = {};
+let cachedBinanceDetailedBalance: BinanceAssetBalance[] = [];
+let cachedBinanceOpenOrders: unknown[] = [];
 let cachedRecentTrades: unknown[] = [];
 let cachedOpenOrders: unknown[] = [];
 let lastPrivateFetch = 0;
@@ -90,6 +94,18 @@ export const cryptoArbWorker: SourceWorker = {
       } catch (e) {
         cachedBinanceBalance = {};
         logRaw(`[binance] ✗ Unable to connect: ${(e as Error).message}`, 'crypto-arb');
+      }
+      try {
+        cachedBinanceDetailedBalance = await getBinanceDetailedBalance();
+      } catch (e) {
+        cachedBinanceDetailedBalance = [];
+        logRaw(`[binance] ✗ detailed balance: ${(e as Error).message}`, 'crypto-arb');
+      }
+      try {
+        cachedBinanceOpenOrders = await getBinanceOpenOrders();
+      } catch (e) {
+        cachedBinanceOpenOrders = [];
+        logRaw(`[binance] ✗ open orders: ${(e as Error).message}`, 'crypto-arb');
       }
       try {
         const coinbaseAuth = getCoinbaseAuthDebug();
@@ -211,6 +227,8 @@ export const cryptoArbWorker: SourceWorker = {
       krakenBalance: cachedKrakenBalance,
       binanceBalance: cachedBinanceBalance,
       coinbaseBalance: cachedCoinbaseBalance,
+      binanceDetailedBalance: cachedBinanceDetailedBalance,
+      binanceOpenOrders: cachedBinanceOpenOrders,
       recentTrades: cachedRecentTrades,
       openOrders: cachedOpenOrders,
       activityLog: getActivityLog('crypto-arb'),

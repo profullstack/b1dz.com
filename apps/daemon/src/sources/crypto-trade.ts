@@ -6,6 +6,7 @@ import {
   serializeAnalysisCache,
   serializeTradeState,
   setTradingOverride,
+  setDailyLossLimitPct,
 } from '@b1dz/source-crypto-trade';
 import { AlertBus, getAnalysisCache, getB1dzVersion, setAnalysisCache } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
@@ -74,9 +75,27 @@ export const cryptoTradeWorker: SourceWorker = {
         }
       }
 
-      const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
-      const override = uiSettings?.tradingEnabled;
-      setTradingOverride(override === true || override === false ? override : null);
+      // Resolve the trading override in priority order:
+      //   1. UI toggle (crypto-ui-settings.tradingEnabled)  — user's explicit choice via TUI
+      //   2. TRADING_ENABLED env flag                       — operator deploy-time setting
+      //   3. Built-in default: true (ENABLED, override)
+      // Only an explicit `false` at any layer halts entries. `null`
+      // or missing values at a layer fall through to the next.
+      const uiSettings = await storage.get<{ tradingEnabled?: boolean | null; dailyLossLimitPct?: number | null }>('source-state', 'crypto-ui-settings');
+      const uiOverride = uiSettings?.tradingEnabled;
+      const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+      const envOverride = envRaw === 'true' ? true : envRaw === 'false' ? false : null;
+      const resolved = uiOverride === true || uiOverride === false
+        ? uiOverride
+        : envOverride === true || envOverride === false
+          ? envOverride
+          : true;
+      setTradingOverride(resolved);
+      setDailyLossLimitPct(
+        typeof uiSettings?.dailyLossLimitPct === 'number' && Number.isFinite(uiSettings.dailyLossLimitPct) && uiSettings.dailyLossLimitPct > 0
+          ? uiSettings.dailyLossLimitPct
+          : null,
+      );
 
       const items = await cryptoTradeSource.poll(sourceCtx);
       const signals: unknown[] = (ctx.payload?.signals as unknown[]) ?? [];

@@ -32,18 +32,47 @@ export { getBalance, placeOrder, getOpenOrders, cancelOrder as cancelKrakenOrder
 export { hasTradingPair as hasKrakenTradingPair } from './feeds/kraken-private.js';
 export {
   getBalance as getBinanceBalance,
+  getDetailedBalance as getBinanceDetailedBalance,
   placeOrder as placeBinanceOrder,
   getOpenOrders as getBinanceOpenOrders,
+  cancelOrder as cancelBinanceOrder,
+  closeHolding as closeBinanceHolding,
   getRecentTrades as getBinanceTrades,
   getTradingRules as getBinanceTradingRules,
   hasTradingSymbol as hasBinanceTradingSymbol,
   BINANCE_TAKER_FEE,
   type BinanceTrade,
+  type BinanceAssetBalance,
 } from './feeds/binance-us-private.js';
-export { getBalance as getCoinbaseBalance, getAvailableBalance as getCoinbaseAvailableBalance, placeOrder as placeCoinbaseOrder, getOpenOrders as getCoinbaseOpenOrders, getRecentFills as getCoinbaseFills, COINBASE_TAKER_FEE, getCoinbaseAuthDebug, hasTradingProduct as hasCoinbaseTradingProduct } from './feeds/coinbase-private.js';
+export {
+  getBalance as getCoinbaseBalance,
+  getAvailableBalance as getCoinbaseAvailableBalance,
+  placeOrder as placeCoinbaseOrder,
+  getOpenOrders as getCoinbaseOpenOrders,
+  getRecentFills as getCoinbaseFills,
+  getTradableLimits as getCoinbaseTradableLimits,
+  COINBASE_TAKER_FEE,
+  getCoinbaseAuthDebug,
+  hasTradingProduct as hasCoinbaseTradingProduct,
+  type CoinbaseTradableLimits,
+} from './feeds/coinbase-private.js';
+export {
+  getBalance as getGeminiBalance,
+  getDetailedBalance as getGeminiDetailedBalance,
+  placeOrder as placeGeminiOrder,
+  placeMarketSell as placeGeminiMarketSell,
+  cancelOrder as cancelGeminiOrder,
+  closeHolding as closeGeminiHolding,
+  getOpenOrders as getGeminiOpenOrders,
+  getRecentTrades as getGeminiTrades,
+  GEMINI_TAKER_FEE,
+  type GeminiAssetBalance,
+  type GeminiTrade,
+} from './feeds/gemini-private.js';
 import { placeOrder as placeKrakenOrder } from './feeds/kraken-private.js';
 import { placeOrder as placeBinanceOrder } from './feeds/binance-us-private.js';
 import { placeOrder as placeCoinbaseOrder } from './feeds/coinbase-private.js';
+import { placeOrder as placeGeminiOrder } from './feeds/gemini-private.js';
 import { normalizePair } from './feeds/pairs.js';
 import { getActivePairs } from './pair-discovery.js';
 export { getActivePairs, getPerExchangeVolumes } from './pair-discovery.js';
@@ -51,7 +80,7 @@ export { normalizePair } from './feeds/pairs.js';
 
 const MAX_POSITION_USD = 100;
 const MIN_EXECUTABLE_USD = 5;
-const SUPPORTED_TRADE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase']);
+const SUPPORTED_TRADE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase', 'gemini']);
 const STABLE_ASSETS = ['USD', 'USDC', 'USDT'];
 const KRAKEN_ASSET_ALIASES: Record<string, string[]> = {
   BTC: ['XXBT', 'XBT', 'BTC'],
@@ -299,6 +328,15 @@ export const cryptoArbSource: Source<ArbItem> = {
           limitPrice: arb.buyPrice.toFixed(2),
         });
         console.log(`[arb] BUY on coinbase: orderId=${result.order_id}`);
+      } else if (arb.buyExchange === 'gemini') {
+        const result = await placeGeminiOrder({
+          symbol: normalizePair(arb.pair, 'gemini'),
+          side: 'buy',
+          amount: volume.toFixed(8),
+          price: arb.buyPrice.toFixed(2),
+          options: ['immediate-or-cancel'],
+        });
+        console.log(`[arb] BUY on gemini: order_id=${result.order_id} executed=${result.executed_amount}`);
       }
 
       // Place sell leg
@@ -328,6 +366,15 @@ export const cryptoArbSource: Source<ArbItem> = {
           limitPrice: arb.sellPrice.toFixed(2),
         });
         console.log(`[arb] SELL on coinbase: orderId=${result.order_id}`);
+      } else if (arb.sellExchange === 'gemini') {
+        const result = await placeGeminiOrder({
+          symbol: normalizePair(arb.pair, 'gemini'),
+          side: 'sell',
+          amount: volume.toFixed(8),
+          price: arb.sellPrice.toFixed(2),
+          options: ['immediate-or-cancel'],
+        });
+        console.log(`[arb] SELL on gemini: order_id=${result.order_id} executed=${result.executed_amount}`);
       }
 
       return { ok: true, message: `arb executed, net ~$${netProfit.toFixed(4)}` };

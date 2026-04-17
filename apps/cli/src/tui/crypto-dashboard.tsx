@@ -4,7 +4,7 @@ import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
 import { RealtimeOHLCChartContainer } from './chart/RealtimeOHLCChartContainer.js';
-import { setWsLogger } from '@b1dz/source-crypto-arb';
+import { setWsLogger, cancelBinanceOrder, closeBinanceHolding } from '@b1dz/source-crypto-arb';
 import { fetchNews, openUrl, formatNewsTs, type NewsItem } from './news-feed.js';
 
 // ─── API client (talks to b1dz API, never Supabase directly) ──
@@ -59,20 +59,37 @@ interface ArbState {
   krakenBalance: Record<string, string>;
   binanceBalance: Record<string, string>;
   coinbaseBalance: Record<string, string>;
+  binanceDetailedBalance?: { asset: string; free: string; locked: string }[];
+  binanceOpenOrders?: { symbol: string; orderId: number; side: string; type: string; price: string; origQty: string; executedQty: string; status: string }[];
   recentTrades: { pair: string; type: string; price: string; vol: string; cost: string; fee: string; time: number }[];
   openOrders: { id: string; descr: { type: string; pair: string; price: string; order: string }; vol: string; vol_exec: string; status: string }[];
   rawLog?: { at: string; text: string }[];
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
-interface V2State {
+interface ArbPipelineState {
   enabled: boolean;
   v2?: {
     mode: string;
     pairs: string[];
     adapters: string[];
     health: Record<string, { ok: boolean; latencyMs?: number }>;
-    recentOpportunities: { pair: string; buyVenue: string; sellVenue: string; netUsd: number; netBps: number; executable: boolean; at: number }[];
+    recentOpportunities: {
+      asset?: string;
+      buyQuote?: { pair?: string };
+      buyVenue: string;
+      sellVenue: string;
+      expectedNetUsd?: number;
+      expectedNetBps?: number;
+      executable: boolean;
+      observedAt?: number;
+      category?: string;
+      route?: {
+        chain?: string;
+        venue?: string;
+        hops?: { tokenIn: string; tokenOut: string; fee: number }[];
+      } | null;
+    }[];
     recentDecisions: { queueId: string; status: string; reason: string; at: number }[];
     circuit: { state: string; trip?: { reason: string; at: number } };
     startedAt: string;
@@ -166,11 +183,20 @@ const DUST_USD_THRESHOLD = 1;
 
 function formatUsdPrice(value: number): string {
   if (!Number.isFinite(value)) return '-';
-  if (Math.abs(value) >= 1000) return value.toFixed(2);
-  if (Math.abs(value) >= 1) return value.toFixed(2);
-  if (Math.abs(value) >= 0.1) return value.toFixed(4);
-  if (Math.abs(value) >= 0.01) return value.toFixed(5);
-  return value.toFixed(6);
+  const abs = Math.abs(value);
+  // Precision ladder — keep BTC/ETH readable at 2 decimals (cents are
+  // plenty) while giving mid-range assets (ICP, LTC, SOL) enough decimals
+  // to show tick-level movement. For sub-dollar assets we scale with
+  // leading zeros so tiny memecoins still show meaningful change.
+  if (abs >= 1000) return value.toFixed(2);   // BTC $75620.67, ETH $3451.23
+  if (abs >= 100) return value.toFixed(3);    // SOL $201.234
+  if (abs >= 10) return value.toFixed(4);     // LTC $95.1234
+  if (abs >= 1) return value.toFixed(4);      // ICP $4.1234
+  if (abs >= 0.1) return value.toFixed(5);    // XRP $0.58234
+  if (abs >= 0.01) return value.toFixed(6);   // $0.012345
+  if (abs >= 0.001) return value.toFixed(7);  // $0.0012345
+  if (abs >= 0.0001) return value.toFixed(8); // $0.00012345
+  return value.toFixed(10);                    // tiny memecoins
 }
 
 function padLeft(value: string, width: number): string {
@@ -274,22 +300,55 @@ function ClickablePair({
   );
 }
 
+function ActionButton({
+  top,
+  left,
+  label,
+  color,
+  pending,
+  onClick,
+}: {
+  top: number;
+  left: number | string;
+  label: string;
+  color: 'red' | 'yellow' | 'green';
+  pending?: boolean;
+  onClick: () => void;
+}) {
+  const bg = pending ? 'black' : color;
+  const fg = pending ? 'yellow' : 'black';
+  return (
+    <box
+      top={top}
+      left={left}
+      width={label.length + 4}
+      height={1}
+      mouse={true}
+      clickable={true}
+      tags={true}
+      onClick={onClick}
+      style={{ bg, fg }}
+      content={` ${pending ? '...' : label} `}
+    />
+  );
+}
+
 // Wrap the whole component in error handling so bad data doesn't crash React
 function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
   const [tradeState, setTradeState] = useState<TradeState | null>(null);
-  const [v2State, setV2State] = useState<V2State | null>(null);
+  const [arbPipeState, setArbPipeState] = useState<ArbPipelineState | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [autoTrade, setAutoTrade] = useState(true);
   const [tickCount, setTickCount] = useState(0);
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'v2'>('v2');
+  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'arb'>('arb');
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [newsPage, setNewsPage] = useState(0);
-  const [v2Page, setV2Page] = useState(0);
+  const [arbPage, setV2Page] = useState(0);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [chartPair, setChartPair] = useState<string | null>(null);
   const [chartPairB, setChartPairB] = useState<string | null>(null);
@@ -300,7 +359,12 @@ function DashboardInner() {
   const [chartTarget, setChartTarget] = useState<'A' | 'B'>('A');
   const [chartPauseUntilA, setChartPauseUntilA] = useState(0);
   const [chartPauseUntilB, setChartPauseUntilB] = useState(0);
-  const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(null);
+  // Default to ENABLED (override=true) so the daemon trades on first
+  // boot without requiring the operator to toggle. Persisted UI state
+  // (if any) replaces this default during hydration below.
+  const [tradingEnabled, setTradingEnabled] = useState<boolean | null>(true);
+  const [dailyLossLimitOverridePct, setDailyLossLimitOverridePct] = useState<number | null>(null);
+  const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [apiClient, setApiClient] = useState<B1dzClient | null>(null);
 
@@ -377,7 +441,7 @@ function DashboardInner() {
     const pageHandler = (delta: number) => {
       if (logTab === 'activity') setActivityPage((prev) => Math.max(0, prev + delta));
       else if (logTab === 'logs') setRawPage((prev) => Math.max(0, prev + delta));
-      else if (logTab === 'v2') setV2Page((prev) => Math.max(0, prev + delta));
+      else if (logTab === 'arb') setV2Page((prev) => Math.max(0, prev + delta));
       else setNewsPage((prev) => Math.max(0, prev + delta));
     };
     const timeframeHandler = (next: ChartTimeframe) => {
@@ -435,6 +499,7 @@ function DashboardInner() {
     let active = true;
     apiClient.storage.get<{
       tradingEnabled?: boolean | null;
+      dailyLossLimitPct?: number | null;
       chartPairA?: string | null;
       chartPairB?: string | null;
       chartExchangeA?: string | null;
@@ -446,6 +511,9 @@ function DashboardInner() {
       if (settings) {
         if (settings.tradingEnabled === true || settings.tradingEnabled === false) {
           setTradingEnabled(settings.tradingEnabled);
+        }
+        if (typeof settings.dailyLossLimitPct === 'number' && isFinite(settings.dailyLossLimitPct) && settings.dailyLossLimitPct > 0) {
+          setDailyLossLimitOverridePct(settings.dailyLossLimitPct);
         }
         if (settings.chartPairA) setChartPair(settings.chartPairA);
         if (settings.chartPairB) setChartPairB(settings.chartPairB);
@@ -471,6 +539,7 @@ function DashboardInner() {
     const handle = setTimeout(() => {
       apiClient.storage.put('source-state', 'crypto-ui-settings', {
         tradingEnabled,
+        dailyLossLimitPct: dailyLossLimitOverridePct,
         chartPairA: chartPair,
         chartPairB,
         chartExchangeA,
@@ -480,7 +549,7 @@ function DashboardInner() {
       }).catch((e) => addLog(`{red-fg}Persist settings failed: ${(e as Error).message?.slice(0, 60)}{/red-fg}`));
     }, 500);
     return () => clearTimeout(handle);
-  }, [apiClient, settingsHydrated, tradingEnabled, chartPair, chartPairB, chartExchangeA, chartExchangeB, chartTimeframe, chartTarget]);
+  }, [apiClient, settingsHydrated, tradingEnabled, dailyLossLimitOverridePct, chartPair, chartPairB, chartExchangeA, chartExchangeB, chartTimeframe, chartTarget]);
 
   // Poll API for daemon state
   useEffect(() => {
@@ -538,9 +607,9 @@ function DashboardInner() {
           }
         }
 
-        const v2 = await client.storage.get<V2State>('source-state', 'v2-pipeline').catch(() => null);
+        const v2 = await client.storage.get<ArbPipelineState>('source-state', 'arb-pipeline').catch(() => null);
         if (v2 && active) {
-          setV2State(v2);
+          setArbPipeState(v2);
           if (v2.daemon?.lastTickAt) {
             const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
             if (age < 15000) setDaemonOnline(true);
@@ -683,14 +752,33 @@ function DashboardInner() {
   const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
   const pnlPctStr = realizedPnlPct >= 0 ? `{green-fg}(+${realizedPnlPct.toFixed(2)}%){/}` : `{red-fg}(${realizedPnlPct.toFixed(2)}%){/}`;
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
-  const haltStr = ts?.dailyLossLimitHit
-    ? `  {black-fg}{yellow-bg} HALTED ${ts?.dailyLossLimitPct?.toFixed(1) ?? '5.0'}% daily limit {/}`
+  // Show the daemon-authoritative value in the badge (that's what's actually
+  // enforced). If the user's local override differs, surface it as "pending"
+  // so there's no ambiguity about which limit just halted us.
+  const daemonLimitPct = ts?.dailyLossLimitPct ?? 5;
+  const uiLimitPct = dailyLossLimitOverridePct ?? daemonLimitPct;
+  const pendingSuffix = dailyLossLimitOverridePct != null && Math.abs(dailyLossLimitOverridePct - daemonLimitPct) > 0.01
+    ? ` {yellow-fg}(pending ${uiLimitPct.toFixed(1)}%){/}`
     : '';
+  const currentDailyLimitPct = uiLimitPct;
+  const haltStr = ts?.dailyLossLimitHit
+    ? `  {black-fg}{yellow-bg} HALTED ${daemonLimitPct.toFixed(1)}% daily limit {/}${pendingSuffix}`
+    : `  {white-fg}daily-limit:${daemonLimitPct.toFixed(1)}%{/}${pendingSuffix}`;
   const tradingStr = tradingEnabled === true
     ? `  {black-fg}{green-bg} TRADING: ENABLED (override) {/}`
     : tradingEnabled === false
       ? `  {white-fg}{red-bg} TRADING: DISABLED {/}`
       : '';
+
+  const adjustDailyLimit = (deltaPct: number) => {
+    setDailyLossLimitOverridePct((prev) => {
+      const current = prev ?? ts?.dailyLossLimitPct ?? 5;
+      const next = Math.max(1, Math.min(100, Math.round((current + deltaPct) * 10) / 10));
+      addLog(`{yellow-fg}⚙ daily loss limit → ${next.toFixed(1)}% (saves to settings){/}`);
+      return next;
+    });
+  };
+
   const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr} ${pnlPctStr}${haltStr}${tradingStr}  fees:$${totalFees.toFixed(2)}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
@@ -837,6 +925,122 @@ function DashboardInner() {
   if (visiblePositions.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
   }
+
+  // Holdings — per-exchange breakdown with free/locked and inline [close]/[cancel] actions.
+  // Binance has detailed free/locked + open orders. Kraken/Coinbase show totals only.
+  const binanceDetailed = arbState?.binanceDetailedBalance ?? [];
+  const binanceOpenOrdersRich = arbState?.binanceOpenOrders ?? [];
+
+  type HoldingAction =
+    | { kind: 'close-binance'; asset: string }
+    | { kind: 'cancel-binance-order'; symbol: string; orderId: number };
+  interface HoldingRow { text: string; action?: HoldingAction }
+  const holdingRows: HoldingRow[] = [];
+
+  function fmtAmount(n: number): string {
+    if (n === 0) return '0';
+    if (Math.abs(n) >= 1) return n.toFixed(4);
+    return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+  }
+
+  // A row earns its line only if it has a non-trivial value OR it locks funds
+  // OR it's an open order. Dust gets silently filtered so the box stays small.
+  const DUST = 0.10;
+
+  // Column widths — visible cell widths. ANSI/blessed tags wrap the padded
+  // text so the tag itself doesn't throw alignment off.
+  const EXCH_W = 9;   // 'binance ', 'kraken  ', 'coinbase'
+  const ASSET_W = 6;  // asset ticker
+  const FREE_W = 26;
+  const LOCKED_W = 22;
+  function exchCell(name: string, color: string): string {
+    return `{${color}-fg}${padRight(name, EXCH_W)}{/}`;
+  }
+
+  // Binance: detailed rows with locked column and [close] on non-stable free balances.
+  for (const b of binanceDetailed) {
+    const free = parseFloat(b.free);
+    const locked = parseFloat(b.locked);
+    const isStable = stablecoins.has(b.asset);
+    const unit = isStable ? 1 : (priceOf[b.asset] ?? 0);
+    const usdValue = free * unit;
+    const lockedUsd = locked * unit;
+    if (usdValue < DUST && lockedUsd < DUST) continue;
+    const freeStr = `${fmtAmount(free)}${isStable ? '' : ` ($${usdValue.toFixed(2)})`}`;
+    const lockedStr = locked > 0 ? `${fmtAmount(locked)}${isStable ? '' : ` ($${lockedUsd.toFixed(2)})`}` : '-';
+    const text = ` ${exchCell('binance', 'yellow')} ${padRight(b.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight(lockedStr, LOCKED_W)}`;
+    const canClose = !isStable && free > 0 && unit > 0 && usdValue >= DUST;
+    holdingRows.push({
+      text,
+      action: canClose ? { kind: 'close-binance', asset: b.asset } : undefined,
+    });
+  }
+
+  for (const h of krakenHoldings) {
+    if (h.usdValue < DUST) continue;
+    const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
+    holdingRows.push({
+      text: ` ${exchCell('kraken', 'cyan')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+    });
+  }
+
+  for (const h of coinbaseHoldings) {
+    if (h.usdValue < DUST) continue;
+    const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
+    holdingRows.push({
+      text: ` ${exchCell('coinbase', 'magenta')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+    });
+  }
+
+  if (binanceOpenOrdersRich.length > 0) {
+    for (const o of binanceOpenOrdersRich) {
+      const remaining = parseFloat(o.origQty) - parseFloat(o.executedQty);
+      const price = parseFloat(o.price);
+      const notional = remaining * price;
+      const text = ` ${exchCell('binance', 'yellow')} ${padRight(o.symbol, ASSET_W)} ${o.side} ${o.type} qty=${o.origQty} @$${o.price} locks=$${notional.toFixed(2)}`;
+      holdingRows.push({ text, action: { kind: 'cancel-binance-order', symbol: o.symbol, orderId: o.orderId } });
+    }
+  }
+
+  if (holdingRows.length === 0) {
+    holdingRows.push({ text: ' {white-fg}No holdings (or waiting for daemon — 60s cadence){/}' });
+  }
+
+  const holdingsLines = holdingRows.map((r) => r.text);
+
+  async function runAction(id: string, fn: () => Promise<void>) {
+    if (pendingActions.has(id)) return;
+    setPendingActions((prev) => new Set(prev).add(id));
+    try {
+      await fn();
+    } catch (e) {
+      addLog(`{red-fg}✗ ${id}: ${(e as Error).message.slice(0, 100)}{/}`);
+    } finally {
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  const onCloseBinanceHolding = (asset: string) => {
+    const id = `close-binance:${asset}`;
+    void runAction(id, async () => {
+      addLog(`{yellow-fg}⚡ closing Binance ${asset} at market...{/}`);
+      const res = await closeBinanceHolding(asset);
+      addLog(`{green-fg}✓ Binance ${asset} sold: orderId=${res.orderId} status=${res.status} executed=${res.executedQty}{/}`);
+    });
+  };
+
+  const onCancelBinanceOrder = (symbol: string, orderId: number) => {
+    const id = `cancel-binance:${orderId}`;
+    void runAction(id, async () => {
+      addLog(`{yellow-fg}⚡ cancelling Binance ${symbol} order ${orderId}...{/}`);
+      await cancelBinanceOrder(symbol, orderId);
+      addLog(`{green-fg}✓ Binance ${symbol} order ${orderId} cancelled{/}`);
+    });
+  };
 
   // Arb spreads — show top 5
   const displaySpreads = spreads.filter((s) => s?.pair && s?.spread != null).slice(0, 5);
@@ -985,18 +1189,20 @@ function DashboardInner() {
   ];
 
   const posH = Math.min(posLines.length + 2, 7);
+  const holdingsH = Math.min(holdingsLines.length + 2, 9);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
-  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - row2H - row3H - 6));
-  const chartTop = 2 + posH;
+  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - holdingsH - row2H - row3H - 6));
+  const holdingsTop = 2 + posH;
+  const chartTop = 2 + posH + holdingsH;
   const primaryChartWidthPct = 44;
   const secondaryChartWidthPct = 44;
   const chartControlsWidthPct = 12;
   const screenCols = process.stdout.columns ?? 120;
   const primaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (primaryChartWidthPct / 100)) - 3);
   const secondaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (secondaryChartWidthPct / 100)) - 3);
-  const footerTop = 2 + posH + chartH + row2H + row3H;
+  const footerTop = 2 + posH + holdingsH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
 
@@ -1025,9 +1231,9 @@ function DashboardInner() {
   let footerPage: number;
   let footerPages: number;
   let footerTabLabel: string;
-  const v2Lines: string[] = (() => {
-    if (!v2State?.v2) return ['{yellow-fg}v2 pipeline not started{/}'];
-    const v = v2State.v2;
+  const arbPipeLines: string[] = (() => {
+    if (!arbPipeState?.v2) return ['{yellow-fg}arb pipeline not started{/}'];
+    const v = arbPipeState.v2;
     const hdr = `{cyan-fg}mode={/}{bold}${v.mode}{/bold}  {cyan-fg}pairs={/}${v.pairs.length}  {cyan-fg}adapters={/}${v.adapters.join(',')}  {cyan-fg}circuit={/}${v.circuit.state === 'closed' ? '{green-fg}closed{/}' : '{red-fg}OPEN ' + (v.circuit.trip?.reason ?? '') + '{/}'}`;
     const lines = [hdr, ''];
     if (v.recentOpportunities.length === 0) {
@@ -1035,22 +1241,47 @@ function DashboardInner() {
     } else {
       lines.push('{bold}Recent Opportunities:{/bold}');
       for (const o of v.recentOpportunities.slice(-15)) {
-        const ts = new Date(o.at).toLocaleTimeString('en-US', { hour12: false });
+        const ts = o.observedAt ? new Date(o.observedAt).toLocaleTimeString('en-US', { hour12: false }) : '??:??:??';
         const exec = o.executable ? '{green-fg}✓{/}' : '{red-fg}✗{/}';
-        lines.push(`{white-fg}${ts}{/} ${exec} ${o.pair} {yellow-fg}${o.buyVenue}→${o.sellVenue}{/} net={bold}$${o.netUsd.toFixed(2)}{/bold} ${o.netBps.toFixed(0)}bps`);
+        const netStr = `net={bold}$${(o.expectedNetUsd ?? 0).toFixed(2)}{/bold} ${(o.expectedNetBps ?? 0).toFixed(0)}bps`;
+        if (o.category === 'dex_triangular' && o.route?.hops?.length) {
+          const path = o.route.hops.map((h) => h.tokenOut).join('→');
+          const anchor = o.route.hops[0]?.tokenIn ?? '?';
+          const chain = o.route.chain ?? '?';
+          lines.push(`{white-fg}${ts}{/} ${exec} {magenta-fg}TRI{/} ${anchor}→${path} {yellow-fg}${o.route.venue}@${chain}{/} ${netStr}`);
+        } else {
+          const pair = o.buyQuote?.pair ?? o.asset ?? '?';
+          lines.push(`{white-fg}${ts}{/} ${exec} ${pair} {yellow-fg}${o.buyVenue ?? '?'}→${o.sellVenue ?? '?'}{/} ${netStr}`);
+        }
       }
     }
     if (v.recentDecisions.length > 0) {
       lines.push('', '{bold}Recent Decisions:{/bold}');
-      for (const d of v.recentDecisions.slice(-10)) {
+      // Collapse consecutive-duplicate decisions (same status + reason)
+      // into one row with a (×N) multiplier. Without this, a steady
+      // stream of "no executor can handle category=cex_cex ..." rejects
+      // fills the whole tab and drowns out actual fills.
+      type Row = { ts: string; status: string; reason: string; count: number };
+      const collapsed: Row[] = [];
+      for (const d of v.recentDecisions) {
         const ts = new Date(d.at).toLocaleTimeString('en-US', { hour12: false });
-        const color = d.status === 'filled' ? '{green-fg}' : d.status === 'rejected' ? '{red-fg}' : '{yellow-fg}';
-        lines.push(`{white-fg}${ts}{/} ${color}${d.status}{/} ${d.reason}`);
+        const last = collapsed[collapsed.length - 1];
+        if (last && last.status === d.status && last.reason === d.reason) {
+          last.count++;
+          last.ts = ts; // advance to latest timestamp in the run
+        } else {
+          collapsed.push({ ts, status: d.status, reason: d.reason, count: 1 });
+        }
+      }
+      for (const row of collapsed.slice(-10)) {
+        const color = row.status === 'filled' ? '{green-fg}' : row.status === 'rejected' ? '{red-fg}' : '{yellow-fg}';
+        const multiplier = row.count > 1 ? ` {white-fg}(×${row.count}){/}` : '';
+        lines.push(`{white-fg}${row.ts}{/} ${color}${row.status}{/} ${row.reason}${multiplier}`);
       }
     }
     return lines;
   })();
-  const pagedV2 = paginateNewestFirst(v2Lines, v2Page);
+  const pagedArbPipe = paginateNewestFirst(arbPipeLines, arbPage);
 
   if (logTab === 'activity') {
     footerLines = pagedActivity.pageLines;
@@ -1062,11 +1293,11 @@ function DashboardInner() {
     footerPage = pagedRaw.page;
     footerPages = pagedRaw.totalPages;
     footerTabLabel = 'Logs';
-  } else if (logTab === 'v2') {
-    footerLines = pagedV2.pageLines;
-    footerPage = pagedV2.page;
-    footerPages = pagedV2.totalPages;
-    footerTabLabel = 'V2 Pipeline';
+  } else if (logTab === 'arb') {
+    footerLines = pagedArbPipe.pageLines;
+    footerPage = pagedArbPipe.page;
+    footerPages = pagedArbPipe.totalPages;
+    footerTabLabel = 'Arb Pipeline';
   } else {
     footerLines = [];
     footerPage = newsSafePage;
@@ -1079,6 +1310,39 @@ function DashboardInner() {
     <>
       <box top={0} left={0} width="100%" height={1} tags={true}
         style={{ bg: 'blue', fg: 'white' }} content={statusText} />
+      <box
+        top={0}
+        left={'100%-14' as any}
+        width={3}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => adjustDailyLimit(-5)}
+        style={{ bg: 'red', fg: 'white' }}
+        content=" - "
+      />
+      <box
+        top={0}
+        left={'100%-10' as any}
+        width={6}
+        height={1}
+        tags={true}
+        style={{ bg: 'blue', fg: 'white' }}
+        content={` ${currentDailyLimitPct.toFixed(1).padStart(4, ' ')}%`}
+      />
+      <box
+        top={0}
+        left={'100%-4' as any}
+        width={3}
+        height={1}
+        mouse={true}
+        clickable={true}
+        tags={true}
+        onClick={() => adjustDailyLimit(5)}
+        style={{ bg: 'green', fg: 'black' }}
+        content=" + "
+      />
 
       <box top={1} left={0} width="100%" height={1}
         style={{ bg: 'black', fg: 'white' }} />
@@ -1122,10 +1386,10 @@ function DashboardInner() {
         height={1}
         mouse={true}
         clickable={true}
-        onClick={() => setLogTab('v2')}
+        onClick={() => setLogTab('arb')}
         tags={true}
-        style={{ bg: logTab === 'v2' ? 'yellow' : 'black', fg: logTab === 'v2' ? 'black' : 'white' }}
-        content=" V2 " />
+        style={{ bg: logTab === 'arb' ? 'yellow' : 'black', fg: logTab === 'arb' ? 'black' : 'white' }}
+        content=" Arb " />
 
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
@@ -1142,6 +1406,46 @@ function DashboardInner() {
           width={pos.pair.length + 2}
         />
       ))}
+
+      <box label=" Holdings " top={holdingsTop} left={0} width="100%" height={holdingsH}
+        border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
+        style={{ border: { fg: 'green' } }}
+        content={holdingsLines.join('\n')} />
+      {holdingRows.map((row, index) => {
+        if (!row.action) return null;
+        // Only render a button if its row is visible inside the box.
+        // Box content area = holdingsH - 2 (borders top + bottom).
+        if (index >= holdingsH - 2) return null;
+        const rowTop = holdingsTop + 1 + index;
+        if (row.action.kind === 'close-binance') {
+          const asset = row.action.asset;
+          const id = `close-binance:${asset}`;
+          return (
+            <ActionButton
+              key={`holding-action-${id}`}
+              top={rowTop}
+              left={'100%-10' as any}
+              label="close"
+              color="red"
+              pending={pendingActions.has(id)}
+              onClick={() => onCloseBinanceHolding(asset)}
+            />
+          );
+        }
+        const { symbol, orderId } = row.action;
+        const id = `cancel-binance:${orderId}`;
+        return (
+          <ActionButton
+            key={`holding-action-${id}`}
+            top={rowTop}
+            left={'100%-11' as any}
+            label="cancel"
+            color="yellow"
+            pending={pendingActions.has(id)}
+            onClick={() => onCancelBinanceOrder(symbol, orderId)}
+          />
+        );
+      })}
 
       <RealtimeOHLCChartContainer
         top={chartTop}
@@ -1295,7 +1599,7 @@ function DashboardInner() {
         tags={true}
         style={{ bg: 'black', fg: 'white' }}
       >
-        {displayPricePairs.map((pair, index) => (
+        {displayPricePairs.slice(0, Math.max(0, chartH - 6)).map((pair, index) => (
           <ClickablePair
             key={`chart-pair-${pair}`}
             top={index}
@@ -1308,13 +1612,13 @@ function DashboardInner() {
         ))}
       </box>
 
-      <box label=" Arb Spreads " top={2 + posH + chartH} left={0} width="40%" height={row2H}
+      <box label=" Arb Spreads " top={2 + posH + holdingsH + chartH} left={0} width="40%" height={row2H}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
         content={arbLines.join('\n')} />
       {displaySpreads.map((s, index) => (
         <ClickablePair
           key={`spread-pair-${s.pair}-${index}`}
-          top={3 + posH + chartH + index}
+          top={3 + posH + holdingsH + chartH + index}
           left={2}
           pair={s.pair}
           exchange={s.buyExchange || undefined}
@@ -1324,25 +1628,25 @@ function DashboardInner() {
         />
       ))}
 
-      <box label=" Open Orders " top={2 + posH + chartH} left="40%" width="30%" height={row2H}
+      <box label=" Open Orders " top={2 + posH + holdingsH + chartH} left="40%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true}
         style={{ border: { fg: 'magenta' } }}
         content={orderLines.join('\n')} />
 
-      <box label=" Trade Signals " top={2 + posH + chartH} left="70%" width="30%" height={row2H}
+      <box label=" Trade Signals " top={2 + posH + holdingsH + chartH} left="70%" width="30%" height={row2H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true} keys={true} vi={true} alwaysScroll={true}
         scrollbar={{ ch: ' ', track: { bg: 'gray' }, style: { bg: 'cyan' } }}
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 
-      <box label=" Closed Trades " top={2 + posH + chartH + row2H} left={0} width="55%" height={row3H}
+      <box label=" Closed Trades " top={2 + posH + holdingsH + chartH + row2H} left={0} width="55%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
       {recentClosedRows.map((trade: ClosedTradeRow, index: number) => (
         <ClickablePair
           key={`closed-pair-${trade.exchange}-${trade.pair}-${trade.exitTime}`}
-          top={3 + posH + chartH + row2H + (index * 2)}
+          top={3 + posH + holdingsH + chartH + row2H + (index * 2)}
           left={13}
           pair={trade.pair}
           exchange={trade.exchange}
@@ -1352,7 +1656,7 @@ function DashboardInner() {
         />
       ))}
 
-      <box label=" Balances " top={2 + posH + chartH + row2H} left="55%" width="45%" height={row3H}
+      <box label=" Balances " top={2 + posH + holdingsH + chartH + row2H} left="55%" width="45%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={balLines.join('\n')} />
@@ -1360,12 +1664,12 @@ function DashboardInner() {
       <box label={` ${footerLabel} `} top={footerTop} left={0} width="100%"
         height={footerH}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
-        style={{ border: { fg: logTab === 'v2' ? 'yellow' : logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
+        style={{ border: { fg: logTab === 'arb' ? 'yellow' : logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
         content={logTab === 'news'
           ? (news.length === 0
               ? (newsError ? ` {red-fg}news error: ${newsError.slice(0, 80)}{/red-fg}` : ' Loading crypto news...')
               : '')
-          : (footerLines.join('\n') || (logTab === 'v2' ? ' Waiting for v2 pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
+          : (footerLines.join('\n') || (logTab === 'arb' ? ' Waiting for arb pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
       {logTab === 'news' && pagedNews.map((item, index) => (
         <box
           key={`news-row-${newsSafePage}-${index}-${item.uuid}`}

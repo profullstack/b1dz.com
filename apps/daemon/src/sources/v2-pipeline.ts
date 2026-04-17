@@ -1,8 +1,8 @@
 /**
- * v2-pipeline daemon worker.
+ * arb-pipeline daemon worker.
  *
  * Surfaces the shared process-wide v2 pipeline (observer + trade daemon)
- * to any user with a source_state row for source_id='v2-pipeline' and
+ * to any user with a source_state row for source_id='arb-pipeline' and
  * payload.enabled=true. The pipeline itself runs at process scope — the
  * tick just snapshots its state into the caller's source_state so the
  * TUI can read it.
@@ -18,7 +18,7 @@ import { getB1dzVersion } from '@b1dz/core';
 import { initV2Pipeline, v2Snapshot } from '../v2/pipeline.js';
 
 export const v2PipelineWorker: SourceWorker = {
-  id: 'v2-pipeline',
+  id: 'arb-pipeline',
   pollIntervalMs: 5000,
   hasCredentials(payload) {
     return !!payload?.enabled;
@@ -31,7 +31,7 @@ export const v2PipelineWorker: SourceWorker = {
         enabled: ctx.payload?.enabled ?? true,
         daemon: {
           lastTickAt: new Date().toISOString(),
-          worker: 'v2-pipeline',
+          worker: 'arb-pipeline',
           status: 'warming',
           version: getB1dzVersion(),
         },
@@ -53,7 +53,7 @@ export const v2PipelineWorker: SourceWorker = {
       },
       daemon: {
         lastTickAt: new Date().toISOString(),
-        worker: 'v2-pipeline',
+        worker: 'arb-pipeline',
         status: snap.circuit.state === 'open' ? 'circuit-open' : 'running',
         version: getB1dzVersion(),
       },
