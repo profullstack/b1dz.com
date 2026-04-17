@@ -1599,7 +1599,7 @@ function DashboardInner() {
         tags={true}
         style={{ bg: 'black', fg: 'white' }}
       >
-        {displayPricePairs.map((pair, index) => (
+        {displayPricePairs.slice(0, Math.max(0, chartH - 6)).map((pair, index) => (
           <ClickablePair
             key={`chart-pair-${pair}`}
             top={index}
@@ -1639,7 +1639,7 @@ function DashboardInner() {
         style={{ border: { fg: 'cyan' } }}
         content={sigLines.join('\n')} />
 
-      <box label=" Closed Trades " top={2 + posH + chartH + row2H} left={0} width="55%" height={row3H}
+      <box label=" Closed Trades " top={2 + posH + holdingsH + chartH + row2H} left={0} width="55%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={tradeLines.join('\n')} />
@@ -1656,7 +1656,7 @@ function DashboardInner() {
         />
       ))}
 
-      <box label=" Balances " top={2 + posH + chartH + row2H} left="55%" width="45%" height={row3H}
+      <box label=" Balances " top={2 + posH + holdingsH + chartH + row2H} left="55%" width="45%" height={row3H}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
         style={{ border: { fg: 'green' } }}
         content={balLines.join('\n')} />
