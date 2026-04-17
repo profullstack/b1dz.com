@@ -72,7 +72,7 @@ interface ArbPipelineState {
     pairs: string[];
     adapters: string[];
     health: Record<string, { ok: boolean; latencyMs?: number }>;
-    recentOpportunities: { pair: string; buyVenue: string; sellVenue: string; netUsd: number; netBps: number; executable: boolean; at: number }[];
+    recentOpportunities: { asset?: string; buyQuote?: { pair?: string }; buyVenue: string; sellVenue: string; expectedNetUsd?: number; expectedNetBps?: number; executable: boolean; observedAt?: number }[];
     recentDecisions: { queueId: string; status: string; reason: string; at: number }[];
     circuit: { state: string; trip?: { reason: string; at: number } };
     startedAt: string;
@@ -1035,9 +1035,10 @@ function DashboardInner() {
     } else {
       lines.push('{bold}Recent Opportunities:{/bold}');
       for (const o of v.recentOpportunities.slice(-15)) {
-        const ts = new Date(o.at).toLocaleTimeString('en-US', { hour12: false });
+        const ts = o.observedAt ? new Date(o.observedAt).toLocaleTimeString('en-US', { hour12: false }) : '??:??:??';
         const exec = o.executable ? '{green-fg}✓{/}' : '{red-fg}✗{/}';
-        lines.push(`{white-fg}${ts}{/} ${exec} ${o.pair ?? '?'} {yellow-fg}${o.buyVenue ?? '?'}→${o.sellVenue ?? '?'}{/} net={bold}$${(o.netUsd ?? 0).toFixed(2)}{/bold} ${(o.netBps ?? 0).toFixed(0)}bps`);
+        const pair = o.buyQuote?.pair ?? o.asset ?? '?';
+        lines.push(`{white-fg}${ts}{/} ${exec} ${pair} {yellow-fg}${o.buyVenue ?? '?'}→${o.sellVenue ?? '?'}{/} net={bold}$${(o.expectedNetUsd ?? 0).toFixed(2)}{/bold} ${(o.expectedNetBps ?? 0).toFixed(0)}bps`);
       }
     }
     if (v.recentDecisions.length > 0) {
