@@ -35,19 +35,21 @@ function floatEnv(key: string, fallback: number): number {
 }
 
 export async function maybeBuildUniswapV3BaseExecutor(): Promise<Executor | null> {
-  if (process.env.V2_EXECUTOR_UNISWAP_BASE !== 'true') return null;
-  if (process.env.V2_MODE !== 'live') {
-    console.warn('[v2] V2_EXECUTOR_UNISWAP_BASE=true but V2_MODE!=live — skipping executor registration');
+  const executorEnabled = process.env.ARB_EXECUTOR_UNISWAP_BASE ?? process.env.V2_EXECUTOR_UNISWAP_BASE;
+  if (executorEnabled !== 'true') return null;
+  const mode = (process.env.ARB_MODE ?? process.env.V2_MODE ?? '').toLowerCase();
+  if (mode !== 'live') {
+    console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but ARB_MODE!=live — skipping executor registration');
     return null;
   }
   const privateKey = process.env.EVM_PRIVATE_KEY;
   if (!privateKey) {
-    console.warn('[v2] V2_EXECUTOR_UNISWAP_BASE=true but EVM_PRIVATE_KEY missing — skipping');
+    console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but EVM_PRIVATE_KEY missing — skipping');
     return null;
   }
   const rpcUrl = process.env.BASE_RPC_URL;
   if (!rpcUrl) {
-    console.warn('[v2] V2_EXECUTOR_UNISWAP_BASE=true but BASE_RPC_URL missing — skipping');
+    console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but BASE_RPC_URL missing — skipping');
     return null;
   }
 
@@ -56,7 +58,7 @@ export async function maybeBuildUniswapV3BaseExecutor(): Promise<Executor | null
     ? await wallet.getAddress('base')
     : null;
   if (!address) {
-    console.warn('[v2] wallet provider returned no address for base — skipping');
+    console.warn('[arb] wallet provider returned no address for base — skipping');
     return null;
   }
 
@@ -72,9 +74,9 @@ export async function maybeBuildUniswapV3BaseExecutor(): Promise<Executor | null
     gasOracle,
   });
 
-  const maxTradeUsd = floatEnv('V2_MAX_TRADE_USD', 5);
+  const maxTradeUsd = floatEnv('ARB_MAX_TRADE_USD', floatEnv('V2_MAX_TRADE_USD', 5));
   console.log(
-    `[v2] UniswapV3BaseExecutor armed  wallet=${address}  maxTradeUsd=$${maxTradeUsd}`,
+    `[arb] UniswapV3BaseExecutor armed  wallet=${address}  maxTradeUsd=$${maxTradeUsd}`,
   );
   return new UniswapV3BaseExecutor({
     walletService,

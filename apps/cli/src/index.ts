@@ -87,8 +87,8 @@ At a glance:
   Dashboard:          b1dz tui
   Backtesting:        b1dz backtest <tf>
   Spread/edge audit:  b1dz audit-arb
-  Live quotes (v2):   b1dz observe        (CEX + DEX multi-venue)
-  Decision loop:      b1dz v2-daemon      (observer + paper/live)
+  Live quotes:        b1dz observe        (CEX + DEX multi-venue)
+  Arb daemon:         b1dz arb-daemon     (observer + paper/live)
   Discovery:          b1dz pumpfun discover
   Headless sources:   b1dz crypto-arb run | crypto-trade run | all
   Alert stream:       b1dz alerts
@@ -149,9 +149,9 @@ Pump.fun discovery (observe-only, opt-in scrape):
     --limit 20                             rows to show (default 20)
   Requires PUMPFUN_ENABLE_SCRAPE=true (PRD §27 opt-in)
 
-v2 trade daemon (observer + decision loop):
-  b1dz v2-daemon                           run observer + daemon in one process
-    --mode observe|paper|live              default paper (live currently stubbed)
+Cross-venue arb daemon (observer + decision loop):
+  b1dz arb-daemon                          run observer + daemon in one process
+    --mode observe|paper|live              default paper
     --pair SOL-USDC                        pair to scan
     --amount 1                             trade notional
     --chain all|cex|solana|base|...        adapter set
@@ -252,13 +252,13 @@ if (source === 'backtest') {
     console.error(`pumpfun failed: ${(e as Error).message}`);
     process.exit(1);
   }
-} else if (source === 'v2-daemon') {
+} else if (source === 'arb-daemon' || source === 'v2-daemon') {
   const { runV2DaemonCli } = await import('./v2-daemon.js');
   try {
     await runV2DaemonCli(process.argv.slice(3));
     process.exit(0);
   } catch (e) {
-    console.error(`v2-daemon failed: ${(e as Error).message}`);
+    console.error(`arb-daemon failed: ${(e as Error).message}`);
     process.exit(1);
   }
 } else if (source === 'tui') {

@@ -65,7 +65,7 @@ interface ArbState {
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
-interface V2State {
+interface ArbPipelineState {
   enabled: boolean;
   v2?: {
     mode: string;
@@ -278,18 +278,18 @@ function ClickablePair({
 function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
   const [tradeState, setTradeState] = useState<TradeState | null>(null);
-  const [v2State, setV2State] = useState<V2State | null>(null);
+  const [arbPipeState, setArbPipeState] = useState<ArbPipelineState | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [autoTrade, setAutoTrade] = useState(true);
   const [tickCount, setTickCount] = useState(0);
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'v2'>('v2');
+  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'arb'>('arb');
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [newsPage, setNewsPage] = useState(0);
-  const [v2Page, setV2Page] = useState(0);
+  const [arbPage, setV2Page] = useState(0);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [chartPair, setChartPair] = useState<string | null>(null);
   const [chartPairB, setChartPairB] = useState<string | null>(null);
@@ -377,7 +377,7 @@ function DashboardInner() {
     const pageHandler = (delta: number) => {
       if (logTab === 'activity') setActivityPage((prev) => Math.max(0, prev + delta));
       else if (logTab === 'logs') setRawPage((prev) => Math.max(0, prev + delta));
-      else if (logTab === 'v2') setV2Page((prev) => Math.max(0, prev + delta));
+      else if (logTab === 'arb') setV2Page((prev) => Math.max(0, prev + delta));
       else setNewsPage((prev) => Math.max(0, prev + delta));
     };
     const timeframeHandler = (next: ChartTimeframe) => {
@@ -538,9 +538,9 @@ function DashboardInner() {
           }
         }
 
-        const v2 = await client.storage.get<V2State>('source-state', 'v2-pipeline').catch(() => null);
+        const v2 = await client.storage.get<ArbPipelineState>('source-state', 'arb-pipeline').catch(() => null);
         if (v2 && active) {
-          setV2State(v2);
+          setArbPipeState(v2);
           if (v2.daemon?.lastTickAt) {
             const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
             if (age < 15000) setDaemonOnline(true);
@@ -1025,9 +1025,9 @@ function DashboardInner() {
   let footerPage: number;
   let footerPages: number;
   let footerTabLabel: string;
-  const v2Lines: string[] = (() => {
-    if (!v2State?.v2) return ['{yellow-fg}v2 pipeline not started{/}'];
-    const v = v2State.v2;
+  const arbPipeLines: string[] = (() => {
+    if (!arbPipeState?.v2) return ['{yellow-fg}arb pipeline not started{/}'];
+    const v = arbPipeState.v2;
     const hdr = `{cyan-fg}mode={/}{bold}${v.mode}{/bold}  {cyan-fg}pairs={/}${v.pairs.length}  {cyan-fg}adapters={/}${v.adapters.join(',')}  {cyan-fg}circuit={/}${v.circuit.state === 'closed' ? '{green-fg}closed{/}' : '{red-fg}OPEN ' + (v.circuit.trip?.reason ?? '') + '{/}'}`;
     const lines = [hdr, ''];
     if (v.recentOpportunities.length === 0) {
@@ -1050,7 +1050,7 @@ function DashboardInner() {
     }
     return lines;
   })();
-  const pagedV2 = paginateNewestFirst(v2Lines, v2Page);
+  const pagedArbPipe = paginateNewestFirst(arbPipeLines, arbPage);
 
   if (logTab === 'activity') {
     footerLines = pagedActivity.pageLines;
@@ -1062,11 +1062,11 @@ function DashboardInner() {
     footerPage = pagedRaw.page;
     footerPages = pagedRaw.totalPages;
     footerTabLabel = 'Logs';
-  } else if (logTab === 'v2') {
-    footerLines = pagedV2.pageLines;
-    footerPage = pagedV2.page;
-    footerPages = pagedV2.totalPages;
-    footerTabLabel = 'V2 Pipeline';
+  } else if (logTab === 'arb') {
+    footerLines = pagedArbPipe.pageLines;
+    footerPage = pagedArbPipe.page;
+    footerPages = pagedArbPipe.totalPages;
+    footerTabLabel = 'Arb Pipeline';
   } else {
     footerLines = [];
     footerPage = newsSafePage;
@@ -1122,10 +1122,10 @@ function DashboardInner() {
         height={1}
         mouse={true}
         clickable={true}
-        onClick={() => setLogTab('v2')}
+        onClick={() => setLogTab('arb')}
         tags={true}
-        style={{ bg: logTab === 'v2' ? 'yellow' : 'black', fg: logTab === 'v2' ? 'black' : 'white' }}
-        content=" V2 " />
+        style={{ bg: logTab === 'arb' ? 'yellow' : 'black', fg: logTab === 'arb' ? 'black' : 'white' }}
+        content=" Arb " />
 
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
@@ -1360,12 +1360,12 @@ function DashboardInner() {
       <box label={` ${footerLabel} `} top={footerTop} left={0} width="100%"
         height={footerH}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
-        style={{ border: { fg: logTab === 'v2' ? 'yellow' : logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
+        style={{ border: { fg: logTab === 'arb' ? 'yellow' : logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
         content={logTab === 'news'
           ? (news.length === 0
               ? (newsError ? ` {red-fg}news error: ${newsError.slice(0, 80)}{/red-fg}` : ' Loading crypto news...')
               : '')
-          : (footerLines.join('\n') || (logTab === 'v2' ? ' Waiting for v2 pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
+          : (footerLines.join('\n') || (logTab === 'arb' ? ' Waiting for arb pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
       {logTab === 'news' && pagedNews.map((item, index) => (
         <box
           key={`news-row-${newsSafePage}-${index}-${item.uuid}`}

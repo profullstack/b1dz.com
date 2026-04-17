@@ -105,7 +105,7 @@ export async function runV2DaemonCli(argv: string[]): Promise<void> {
     },
   });
 
-  console.log(`b1dz v2-daemon  mode=${args.mode}  pair=${args.pair}  amount=${args.amount}  chain=${args.chain}`);
+  console.log(`b1dz arb-daemon  mode=${args.mode}  pair=${args.pair}  amount=${args.amount}  chain=${args.chain}`);
   console.log(`  venues: ${adapters.map((a) => a.venue).join(', ')}`);
   console.log(`  tick=${args.intervalMs}ms  min-net=$${args.minNetUsd}  min-bps=${args.minNetBps}`);
   console.log('  Ctrl+C to stop\n');

@@ -112,7 +112,7 @@ const executors: Executor[] = [];
  *  TradeDaemon captures the list at construction. */
 export function registerExecutor(executor: Executor): void {
   if (instance) {
-    console.warn('[v2] registerExecutor called after pipeline start — ignored');
+    console.warn('[arb] registerExecutor called after pipeline start — ignored');
     return;
   }
   executors.push(executor);
@@ -142,9 +142,9 @@ function floatEnv(key: string, fallback: number): number {
 }
 
 function resolveMode(): TradeMode {
-  const raw = (process.env.V2_MODE ?? 'observe').toLowerCase();
+  const raw = (process.env.ARB_MODE ?? process.env.V2_MODE ?? 'observe').toLowerCase();
   if (raw === 'observe' || raw === 'paper' || raw === 'live') return raw;
-  console.warn(`[v2] invalid V2_MODE="${raw}", defaulting to observe`);
+  console.warn(`[arb] invalid ARB_MODE="${raw}", defaulting to observe`);
   return 'observe';
 }
 
@@ -152,19 +152,19 @@ export async function initV2Pipeline(): Promise<PipelineState> {
   if (instance) return instance;
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const maxPairs = intEnv('V2_MAX_PAIRS', 10);
-    const sizeUsd = floatEnv('V2_SIZE_USD', 100);
-    const intervalMs = intEnv('V2_INTERVAL_MS', 5000);
-    const minNetUsd = floatEnv('V2_MIN_NET_USD', DEFAULT_RISK_LIMITS.minNetUsd);
-    const minNetBps = floatEnv('V2_MIN_NET_BPS', DEFAULT_RISK_LIMITS.minNetBps);
-    const maxTradeUsd = floatEnv('V2_MAX_TRADE_USD', 5);
+    const maxPairs = intEnv('ARB_MAX_PAIRS', intEnv('V2_MAX_PAIRS', 10));
+    const sizeUsd = floatEnv('ARB_SIZE_USD', floatEnv('V2_SIZE_USD', 100));
+    const intervalMs = intEnv('ARB_INTERVAL_MS', intEnv('V2_INTERVAL_MS', 5000));
+    const minNetUsd = floatEnv('ARB_MIN_NET_USD', floatEnv('V2_MIN_NET_USD', DEFAULT_RISK_LIMITS.minNetUsd));
+    const minNetBps = floatEnv('ARB_MIN_NET_BPS', floatEnv('V2_MIN_NET_BPS', DEFAULT_RISK_LIMITS.minNetBps));
+    const maxTradeUsd = floatEnv('ARB_MAX_TRADE_USD', floatEnv('V2_MAX_TRADE_USD', 5));
     const mode = resolveMode();
 
     // Build any env-armed executors before TradeDaemon is constructed —
     // TradeDaemon captures its executor list at construction time, so
     // later `registerExecutor()` calls are ignored.
     const armedExecutor = await maybeBuildUniswapV3BaseExecutor().catch((e: unknown) => {
-      console.error(`[v2] executor init failed: ${(e as Error).message}`);
+      console.error(`[arb] executor init failed: ${(e as Error).message}`);
       return null;
     });
     if (armedExecutor && !executors.includes(armedExecutor)) {
@@ -173,7 +173,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
 
     const adapters = buildAdapters();
     const discovered = await getActivePairs().catch((e: unknown) => {
-      console.error(`[v2] pair discovery failed, using fallback: ${(e as Error).message}`);
+      console.error(`[arb] pair discovery failed, using fallback: ${(e as Error).message}`);
       return [] as string[];
     });
     const fallback = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
@@ -193,7 +193,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       intervalMs,
       minNetUsd,
       minNetBps,
-      log: (m) => console.log(`[v2-observer] ${m}`),
+      log: (m) => console.log(`[arb-observer] ${m}`),
     });
     const daemon = new TradeDaemon({
       channel,
@@ -202,14 +202,14 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       batchSize: 10,
       risk: { minNetUsd, minNetBps, maxTradeUsd },
       executors: executors.length > 0 ? [...executors] : undefined,
-      log: (m) => console.log(`[v2-trader] ${m}`),
+      log: (m) => console.log(`[arb-trader] ${m}`),
     });
 
     observer.start();
     daemon.start();
     const startedAt = Date.now();
     console.log(
-      `[v2] pipeline started mode=${mode} pairs=${pairList.length} adapters=${adapters.map((a) => a.venue).join(',')} executors=${executors.length}`,
+      `[arb] pipeline started mode=${mode} pairs=${pairList.length} adapters=${adapters.map((a) => a.venue).join(',')} executors=${executors.length}`,
     );
 
     instance = {
