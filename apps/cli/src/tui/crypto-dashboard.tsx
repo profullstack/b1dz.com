@@ -65,6 +65,21 @@ interface ArbState {
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
+interface V2State {
+  enabled: boolean;
+  v2?: {
+    mode: string;
+    pairs: string[];
+    adapters: string[];
+    health: Record<string, { ok: boolean; latencyMs?: number }>;
+    recentOpportunities: { pair: string; buyVenue: string; sellVenue: string; netUsd: number; netBps: number; executable: boolean; at: number }[];
+    recentDecisions: { queueId: string; status: string; reason: string; at: number }[];
+    circuit: { state: string; trip?: { reason: string; at: number } };
+    startedAt: string;
+  };
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+}
+
 interface TradeStatusData {
   positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
   position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
@@ -263,16 +278,18 @@ function ClickablePair({
 function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
   const [tradeState, setTradeState] = useState<TradeState | null>(null);
+  const [v2State, setV2State] = useState<V2State | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [autoTrade, setAutoTrade] = useState(true);
   const [tickCount, setTickCount] = useState(0);
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
-  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news'>('activity');
+  const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'v2'>('v2');
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [newsPage, setNewsPage] = useState(0);
+  const [v2Page, setV2Page] = useState(0);
   const [newsError, setNewsError] = useState<string | null>(null);
   const [chartPair, setChartPair] = useState<string | null>(null);
   const [chartPairB, setChartPairB] = useState<string | null>(null);
@@ -360,6 +377,7 @@ function DashboardInner() {
     const pageHandler = (delta: number) => {
       if (logTab === 'activity') setActivityPage((prev) => Math.max(0, prev + delta));
       else if (logTab === 'logs') setRawPage((prev) => Math.max(0, prev + delta));
+      else if (logTab === 'v2') setV2Page((prev) => Math.max(0, prev + delta));
       else setNewsPage((prev) => Math.max(0, prev + delta));
     };
     const timeframeHandler = (next: ChartTimeframe) => {
@@ -517,6 +535,15 @@ function DashboardInner() {
           if (trade.daemon?.version && trade.daemon.version !== seenDaemonVersion) {
             addLog(`{cyan-fg}Daemon version{/cyan-fg} ${trade.daemon.worker}=v${trade.daemon.version}`);
             seenDaemonVersion = trade.daemon.version;
+          }
+        }
+
+        const v2 = await client.storage.get<V2State>('source-state', 'v2-pipeline').catch(() => null);
+        if (v2 && active) {
+          setV2State(v2);
+          if (v2.daemon?.lastTickAt) {
+            const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
+            if (age < 15000) setDaemonOnline(true);
           }
         }
 
@@ -998,6 +1025,33 @@ function DashboardInner() {
   let footerPage: number;
   let footerPages: number;
   let footerTabLabel: string;
+  const v2Lines: string[] = (() => {
+    if (!v2State?.v2) return ['{yellow-fg}v2 pipeline not started{/}'];
+    const v = v2State.v2;
+    const hdr = `{cyan-fg}mode={/}{bold}${v.mode}{/bold}  {cyan-fg}pairs={/}${v.pairs.length}  {cyan-fg}adapters={/}${v.adapters.join(',')}  {cyan-fg}circuit={/}${v.circuit.state === 'closed' ? '{green-fg}closed{/}' : '{red-fg}OPEN ' + (v.circuit.trip?.reason ?? '') + '{/}'}`;
+    const lines = [hdr, ''];
+    if (v.recentOpportunities.length === 0) {
+      lines.push('{white-fg}No opportunities yet — scanning...{/}');
+    } else {
+      lines.push('{bold}Recent Opportunities:{/bold}');
+      for (const o of v.recentOpportunities.slice(-15)) {
+        const ts = new Date(o.at).toLocaleTimeString('en-US', { hour12: false });
+        const exec = o.executable ? '{green-fg}✓{/}' : '{red-fg}✗{/}';
+        lines.push(`{white-fg}${ts}{/} ${exec} ${o.pair} {yellow-fg}${o.buyVenue}→${o.sellVenue}{/} net={bold}$${o.netUsd.toFixed(2)}{/bold} ${o.netBps.toFixed(0)}bps`);
+      }
+    }
+    if (v.recentDecisions.length > 0) {
+      lines.push('', '{bold}Recent Decisions:{/bold}');
+      for (const d of v.recentDecisions.slice(-10)) {
+        const ts = new Date(d.at).toLocaleTimeString('en-US', { hour12: false });
+        const color = d.status === 'filled' ? '{green-fg}' : d.status === 'rejected' ? '{red-fg}' : '{yellow-fg}';
+        lines.push(`{white-fg}${ts}{/} ${color}${d.status}{/} ${d.reason}`);
+      }
+    }
+    return lines;
+  })();
+  const pagedV2 = paginateNewestFirst(v2Lines, v2Page);
+
   if (logTab === 'activity') {
     footerLines = pagedActivity.pageLines;
     footerPage = pagedActivity.page;
@@ -1008,6 +1062,11 @@ function DashboardInner() {
     footerPage = pagedRaw.page;
     footerPages = pagedRaw.totalPages;
     footerTabLabel = 'Logs';
+  } else if (logTab === 'v2') {
+    footerLines = pagedV2.pageLines;
+    footerPage = pagedV2.page;
+    footerPages = pagedV2.totalPages;
+    footerTabLabel = 'V2 Pipeline';
   } else {
     footerLines = [];
     footerPage = newsSafePage;
@@ -1056,6 +1115,17 @@ function DashboardInner() {
         tags={true}
         style={{ bg: logTab === 'news' ? 'magenta' : 'black', fg: logTab === 'news' ? 'black' : 'white' }}
         content=" News " />
+      <box
+        top={1}
+        left={32}
+        width={6}
+        height={1}
+        mouse={true}
+        clickable={true}
+        onClick={() => setLogTab('v2')}
+        tags={true}
+        style={{ bg: logTab === 'v2' ? 'yellow' : 'black', fg: logTab === 'v2' ? 'black' : 'white' }}
+        content=" V2 " />
 
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
@@ -1290,12 +1360,12 @@ function DashboardInner() {
       <box label={` ${footerLabel} `} top={footerTop} left={0} width="100%"
         height={footerH}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
-        style={{ border: { fg: logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
+        style={{ border: { fg: logTab === 'v2' ? 'yellow' : logTab === 'news' ? 'magenta' : 'gray' }, bg: 'black', fg: 'white' }}
         content={logTab === 'news'
           ? (news.length === 0
               ? (newsError ? ` {red-fg}news error: ${newsError.slice(0, 80)}{/red-fg}` : ' Loading crypto news...')
               : '')
-          : (footerLines.join('\n') || (logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
+          : (footerLines.join('\n') || (logTab === 'v2' ? ' Waiting for v2 pipeline data...' : logTab === 'activity' ? ' Waiting for daemon data...' : ' Waiting for raw logs...'))} />
       {logTab === 'news' && pagedNews.map((item, index) => (
         <box
           key={`news-row-${newsSafePage}-${index}-${item.uuid}`}
