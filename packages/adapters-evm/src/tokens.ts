@@ -73,12 +73,22 @@ export const TOKENS: Record<EvmChain, Record<string, TokenInfo>> = {
   },
 };
 
+const SYMBOL_ALIASES: Record<string, string> = {
+  USD: 'USDC',
+  BTC: 'WBTC',
+};
+
 export function tokenFor(chain: EvmChain, symbol: string): TokenInfo | null {
   const upper = symbol.toUpperCase();
   const byChain = TOKENS[chain];
   if (!byChain) return null;
   const direct = byChain[upper] ?? byChain[symbol];
   if (direct) return direct;
+  const aliased = SYMBOL_ALIASES[upper];
+  if (aliased) {
+    const fromAlias = byChain[aliased];
+    if (fromAlias) return fromAlias;
+  }
   for (const t of Object.values(byChain)) {
     if (t.symbol.toUpperCase() === upper) return t;
   }
