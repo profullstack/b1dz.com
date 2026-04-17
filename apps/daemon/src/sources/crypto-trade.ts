@@ -74,13 +74,22 @@ export const cryptoTradeWorker: SourceWorker = {
         }
       }
 
-      // Default to ENABLED (override=true) when no explicit UI setting
-      // exists — matches the TUI's default display and lets the daemon
-      // trade on first boot without requiring a manual toggle. Only an
-      // explicit `false` from the UI halts entries.
+      // Resolve the trading override in priority order:
+      //   1. UI toggle (crypto-ui-settings.tradingEnabled)  — user's explicit choice via TUI
+      //   2. TRADING_ENABLED env flag                       — operator deploy-time setting
+      //   3. Built-in default: true (ENABLED, override)
+      // Only an explicit `false` at any layer halts entries. `null`
+      // or missing values at a layer fall through to the next.
       const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
-      const override = uiSettings?.tradingEnabled;
-      setTradingOverride(override === false ? false : true);
+      const uiOverride = uiSettings?.tradingEnabled;
+      const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+      const envOverride = envRaw === 'true' ? true : envRaw === 'false' ? false : null;
+      const resolved = uiOverride === true || uiOverride === false
+        ? uiOverride
+        : envOverride === true || envOverride === false
+          ? envOverride
+          : true;
+      setTradingOverride(resolved);
 
       const items = await cryptoTradeSource.poll(sourceCtx);
       const signals: unknown[] = (ctx.payload?.signals as unknown[]) ?? [];
