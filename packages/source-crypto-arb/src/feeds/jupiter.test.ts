@@ -11,14 +11,12 @@ describe('JupiterFeed', () => {
   });
   afterEach(() => { (globalThis as { fetch: typeof fetch }).fetch = origFetch; });
 
-  it('parses the /price/v2 response into bid/ask with a 10-bps spread', async () => {
+  it('parses the v3 response (keyed by mint) and returns bid/ask with 10-bps spread', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({
-        data: {
-          BONK: { id: 'BONK', type: 'derivedPrice', price: '0.00002345' },
-          SOL: { id: 'SOL', type: 'derivedPrice', price: '175.50' },
-        },
+        'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': { usdPrice: 0.00002345, liquidity: 1e6, decimals: 5 },
+        'So11111111111111111111111111111111111111112':  { usdPrice: 175.50, liquidity: 7e8, decimals: 9 },
       }),
     });
     const feed = new JupiterFeed();
@@ -32,10 +30,12 @@ describe('JupiterFeed', () => {
   it('returns null when the token is missing from the response', async () => {
     fetchMock.mockResolvedValue({
       ok: true,
-      json: async () => ({ data: { SOL: { id: 'SOL', type: 'derivedPrice', price: '175' } } }),
+      json: async () => ({
+        'So11111111111111111111111111111111111111112': { usdPrice: 175, liquidity: 7e8 },
+      }),
     });
     const feed = new JupiterFeed();
-    expect(await feed.snapshot('UNKNOWNCOIN-USD')).toBeNull();
+    expect(await feed.snapshot('BONK-USD')).toBeNull();
   });
 
   it('returns null when the fetch fails', async () => {

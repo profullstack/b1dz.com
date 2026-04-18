@@ -49,11 +49,29 @@ function getAdapter(): Adapter | null {
   }
 }
 
+/** Canonical "BTC-USD" style pair names from the arb pair-discovery don't
+ *  match what's actually listed on Base Uniswap. Map here so the feed
+ *  works uniformly with the rest of the pipeline. */
+const BASE_PAIR_MAP: Record<string, string> = {
+  'BTC-USD': 'cbBTC-USDC',
+  'BTC-USDC': 'cbBTC-USDC',
+  'ETH-USD': 'WETH-USDC',
+  'ETH-USDC': 'WETH-USDC',
+  'WETH-USD': 'WETH-USDC',
+  'cbBTC-USD': 'cbBTC-USDC',
+};
+
 export class UniswapBaseFeed implements PriceFeed {
   exchange = 'uniswap-v3';
 
   async snapshot(pair: string): Promise<MarketSnapshot | null> {
-    const cached = cache.get(pair);
+    const mappedPair = BASE_PAIR_MAP[pair] ?? pair;
+    // If the pair doesn't map AND the request quote isn't USDC, skip —
+    // Uniswap V3 Base quotes in USDC not USD, so USD-denominated pairs
+    // that aren't in the map can't be served here.
+    if (!BASE_PAIR_MAP[pair] && !mappedPair.endsWith('-USDC')) return null;
+
+    const cached = cache.get(mappedPair);
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
       return { exchange: this.exchange, pair, bid: cached.bid, ask: cached.ask, bidSize: 0, askSize: 0, ts: cached.at };
     }
@@ -62,9 +80,9 @@ export class UniswapBaseFeed implements PriceFeed {
 
     try {
       // Ask leg: sell 1 base → USDC out.
-      const ask = await a.quote({ pair, side: 'sell', amountIn: '1', chain: 'base' });
+      const ask = await a.quote({ pair: mappedPair, side: 'sell', amountIn: '1', chain: 'base' });
       // Bid leg: spend 1 USDC → get base. Price = 1 / amountOut.
-      const buy = await a.quote({ pair, side: 'buy', amountIn: '1', chain: 'base' });
+      const buy = await a.quote({ pair: mappedPair, side: 'buy', amountIn: '1', chain: 'base' });
       if (!ask || !buy) return null;
 
       const askPrice = parseFloat(ask.amountOut);
@@ -73,7 +91,7 @@ export class UniswapBaseFeed implements PriceFeed {
       const bidPrice = 1 / bidBaseOut;
 
       const entry = { at: Date.now(), bid: bidPrice, ask: askPrice };
-      cache.set(pair, entry);
+      cache.set(mappedPair, entry);
       return { exchange: this.exchange, pair, bid: bidPrice, ask: askPrice, bidSize: 0, askSize: 0, ts: entry.at };
     } catch {
       return null;

@@ -1415,7 +1415,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       attemptedExchangeActions.clear();
       tradePollCount++;
 
-      const PAIRS = await getActivePairs();
+      const cexPairs = await getActivePairs();
+      // Inject DEX-native pairs so the DEX feeds (Uniswap V3, Jupiter)
+      // actually get scanned by the momentum engine. Canonical names with
+      // a USD suffix are mapped to each DEX's native equivalent inside
+      // the feeds themselves.
+      const dexPairsRaw = process.env.DCA_DEX_TRADE_PAIRS ?? process.env.ARB_DEX_PAIRS ?? 'SOL-USD,BONK-USD,WIF-USD,JUP-USD,JTO-USD';
+      const dexPairs = dexPairsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+      const PAIRS = [...new Set([...cexPairs, ...dexPairs])];
       lastEligiblePairs = [...PAIRS];
       pruneInactivePairState(PAIRS);
       await refreshPerExchangeVolumesIfStale();
