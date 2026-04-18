@@ -360,6 +360,10 @@ function connectBinance(pairs: string[]) {
 
 const geminiSockets = new Map<string, WebSocket>();
 const geminiTopBook = new Map<string, { bid: number | null; ask: number | null }>();
+/** Pairs that returned a 400 on the ws handshake — meaning Gemini doesn't
+ *  list that symbol. Stop retrying them to avoid the reconnect-storm that
+ *  spammed hundreds of log lines per minute. */
+const geminiDeadSymbols = new Set<string>();
 
 interface GeminiChangeEvent {
   type: 'change';
@@ -372,12 +376,15 @@ interface GeminiChangeEvent {
 function connectGeminiPair(pair: string): void {
   const symbol = websocketSymbol('gemini', pair).toLowerCase();
   if (geminiSockets.has(symbol)) return;
+  if (geminiDeadSymbols.has(symbol)) return; // Gemini doesn't list this pair
   const ws = new WebSocket(`wss://api.gemini.com/v1/marketdata/${symbol}`);
   geminiSockets.set(symbol, ws);
   geminiTopBook.set(symbol, { bid: null, ask: null });
+  let opened = false;
 
   ws.on('open', () => {
     if (geminiSockets.get(symbol) !== ws) return;
+    opened = true;
     wsLog(`[ws] gemini connected ${symbol}`);
   });
 
@@ -409,15 +416,25 @@ function connectGeminiPair(pair: string): void {
 
   ws.on('close', () => {
     if (geminiSockets.get(symbol) !== ws) return;
-    wsLog(`[ws] ✗ gemini disconnected ${symbol}, reconnecting in 5s...`);
     geminiSockets.delete(symbol);
     geminiTopBook.delete(symbol);
-    // Only reconnect if still subscribed.
+    // If the socket never successfully opened, Gemini doesn't list this
+    // symbol. Mark dead to prevent a reconnect storm.
+    if (!opened) {
+      geminiDeadSymbols.add(symbol);
+      wsLog(`[ws] gemini ${symbol} not listed — won't retry`);
+      return;
+    }
+    wsLog(`[ws] ✗ gemini disconnected ${symbol}, reconnecting in 5s...`);
     if (subscribedPairs.has(pair)) setTimeout(() => connectGeminiPair(pair), 5000);
   });
 
   ws.on('error', (e) => {
-    wsLog(`[ws] ✗ gemini error ${symbol}: ${e.message}`);
+    // 400 "Unexpected server response" = symbol not listed. Handled by
+    // the close handler's `opened` check; suppress the noisy error log.
+    const msg = e?.message ?? '';
+    if (msg.includes('400')) return;
+    wsLog(`[ws] ✗ gemini error ${symbol}: ${msg}`);
   });
 }
 
