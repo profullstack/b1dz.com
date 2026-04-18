@@ -1134,7 +1134,8 @@ async function hydrateGeminiPositions(): Promise<void> {
   let allTrades: Array<{ symbol: string; price: string; side: 'Buy' | 'Sell'; timestampms: number }> = [];
   try {
     allTrades = (await getGeminiTrades(undefined, 500)).sort((a, b) => b.timestampms - a.timestampms);
-    console.log(`[trade] gemini mytrades returned ${allTrades.length} total trades`);
+    const distinct = [...new Set(allTrades.map((t) => (t.symbol ?? '').toLowerCase()))];
+    console.log(`[trade] gemini mytrades returned ${allTrades.length} total trades; symbols=${distinct.join(',') || 'none'}`);
   } catch (e) {
     console.log(`[trade] gemini mytrades failed: ${(e as Error).message.slice(0, 120)}`);
   }
@@ -1145,14 +1146,28 @@ async function hydrateGeminiPositions(): Promise<void> {
     const buyTrade = allTrades.find(
       (t) => (t.symbol ?? '').toLowerCase() === symbolMatch && t.side === 'Buy',
     );
-    if (!buyTrade) {
-      console.log(`[trade] holding gemini:${pair}=${holding.amount} but no buy trade found in history`);
-      rememberLiquidation('gemini', pair, holding.amount, 'no buy trade found');
+    if (buyTrade) {
+      const entryPrice = parseFloat(buyTrade.price);
+      if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+      restorePosition('gemini', pair, holding.amount, entryPrice, buyTrade.timestampms, 'from trade history');
       continue;
     }
-    const entryPrice = parseFloat(buyTrade.price);
-    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
-    restorePosition('gemini', pair, holding.amount, entryPrice, buyTrade.timestampms, 'from trade history');
+
+    // No buy trade in the API-key's mytrades history (pre-existing
+    // holding, or bought via a different key / web UI). Fallback: use
+    // the current market price as the entry so the position becomes
+    // tracked and the normal exit rules apply. PnL starts at 0 — we
+    // lose the historical cost basis, but the alternative is leaving
+    // the holding untracked forever.
+    const snapshot = await geminiFeed.snapshot(pair).catch(() => null);
+    const markPrice = snapshot?.bid;
+    if (!markPrice || !(markPrice > 0)) {
+      console.log(`[trade] holding gemini:${pair}=${holding.amount} — no buy trade AND no current bid; queued for liquidation`);
+      rememberLiquidation('gemini', pair, holding.amount, 'no buy trade, no bid');
+      continue;
+    }
+    console.log(`[trade] holding gemini:${pair}=${holding.amount} — no buy trade in mytrades; restoring at current bid $${markPrice.toFixed(2)} as entry (PnL resets)`);
+    restorePosition('gemini', pair, holding.amount, markPrice, Date.now(), 'current price fallback — no mytrades entry');
   }
 }
 
