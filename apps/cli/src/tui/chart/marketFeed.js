@@ -52,6 +52,23 @@ function chooseCoinbaseFetchTimeframe(timeframe) {
   return { fetchTimeframe: timeframe, aggregate: null };
 }
 
+function timeframeToGeminiInterval(timeframe) {
+  return {
+    '1m': '1m',
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1hr',
+    '6h': '6hr',
+    '1d': '1day',
+  }[timeframe] ?? '1m';
+}
+
+function chooseGeminiFetchTimeframe(timeframe) {
+  if (timeframe === '4h') return { fetchTimeframe: '1h', aggregate: '4h' };
+  if (timeframe === '1w') return { fetchTimeframe: '1d', aggregate: '1w' };
+  return { fetchTimeframe: timeframe, aggregate: null };
+}
+
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { accept: 'application/json' } });
   if (!res.ok) {
@@ -122,6 +139,34 @@ export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 1
         .filter((bar) => Number.isFinite(bar.close))
         .sort((a, b) => a.time - b.time);
       return aggregate ? aggregateBars(rawBars, aggregate).slice(-limit) : rawBars.slice(-limit);
+    }
+
+    if (exchange === 'gemini') {
+      const { fetchTimeframe, aggregate } = chooseGeminiFetchTimeframe(timeframe);
+      const interval = timeframeToGeminiInterval(fetchTimeframe);
+      const symbol = normalizePair(pair, 'gemini');
+      // Gemini returns [time_ms, open, high, low, close, volume], newest-first.
+      const data = await fetchJson(`https://api.gemini.com/v2/candles/${symbol}/${interval}`);
+      const rawBars = (Array.isArray(data) ? data : [])
+        .map((row) => ({
+          time: Number(row[0]),
+          open: Number(row[1]),
+          high: Number(row[2]),
+          low: Number(row[3]),
+          close: Number(row[4]),
+          volume: Number(row[5] ?? 0),
+        }))
+        .filter((bar) => Number.isFinite(bar.close))
+        .sort((a, b) => a.time - b.time);
+      return aggregate ? aggregateBars(rawBars, aggregate).slice(-limit) : rawBars.slice(-limit);
+    }
+
+    // DEX venues: no native OHLC endpoint, so we can't backfill history.
+    // Return an empty history and rely on createLiveFeed to synthesize
+    // bars tick-by-tick from snapshot prices (already handled by the
+    // ws-cache path below).
+    if (exchange === 'uniswap-v3' || exchange === 'jupiter') {
+      return [];
     }
   } catch (error) {
     return [];
