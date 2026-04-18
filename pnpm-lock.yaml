@@ -425,6 +425,9 @@ importers:
 
   packages/source-crypto-arb:
     dependencies:
+      '@b1dz/adapters-evm':
+        specifier: workspace:*
+        version: link:../adapters-evm
       '@b1dz/core':
         specifier: workspace:*
         version: link:../core

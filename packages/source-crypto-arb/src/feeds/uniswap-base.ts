@@ -30,23 +30,29 @@ type Adapter = {
   quote(req: { pair: string; side: 'buy' | 'sell'; amountIn: string; chain?: string }): Promise<AdapterQuote | null>;
 };
 
-/** Lazy adapter singleton. Lives on the first snapshot call so imports
- *  don't fail when BASE_RPC_URL isn't set at module-load time. */
-let adapter: Adapter | null | undefined;
-function getAdapter(): Adapter | null {
-  if (adapter !== undefined) return adapter;
-  if (!process.env.BASE_RPC_URL) { adapter = null; return null; }
-  try {
-    // Lazy require avoids pulling viem + adapters-evm into packages that
-    // just import GeminiFeed / KrakenFeed / etc.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const evm = require('@b1dz/adapters-evm') as { UniswapV3Adapter: new (opts: { chain: string }) => Adapter };
-    adapter = new evm.UniswapV3Adapter({ chain: 'base' });
-    return adapter;
-  } catch {
-    adapter = null;
-    return null;
+/** Lazy adapter singleton. Awaited on the first snapshot call so this
+ *  package doesn't pull viem + adapters-evm into the bundle for
+ *  CEX-only consumers until the DEX feed is actually used. */
+let adapterPromise: Promise<Adapter | null> | null = null;
+function getAdapter(): Promise<Adapter | null> {
+  if (adapterPromise) return adapterPromise;
+  if (!process.env.BASE_RPC_URL) {
+    adapterPromise = Promise.resolve(null);
+    return adapterPromise;
   }
+  adapterPromise = (async () => {
+    try {
+      const evm = await import('@b1dz/adapters-evm') as { UniswapV3Adapter: new (opts: { chain: string }) => Adapter };
+      return new evm.UniswapV3Adapter({ chain: 'base' });
+    } catch (e) {
+      // Reset so a later call can retry if the transient import failed.
+      adapterPromise = null;
+      // eslint-disable-next-line no-console
+      console.warn(`[uniswap-v3 feed] adapter load failed: ${(e as Error).message}`);
+      return null;
+    }
+  })();
+  return adapterPromise;
 }
 
 /** Canonical "BTC-USD" style pair names from the arb pair-discovery don't
@@ -75,7 +81,7 @@ export class UniswapBaseFeed implements PriceFeed {
     if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
       return { exchange: this.exchange, pair, bid: cached.bid, ask: cached.ask, bidSize: 0, askSize: 0, ts: cached.at };
     }
-    const a = getAdapter();
+    const a = await getAdapter();
     if (!a) return null;
 
     try {

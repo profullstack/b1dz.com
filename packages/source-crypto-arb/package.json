@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@b1dz/adapters-evm": "workspace:*",
     "@b1dz/core": "workspace:*",
     "undici": "^8.0.2",
     "ws": "^8.20.0"
