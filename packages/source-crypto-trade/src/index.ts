@@ -1120,11 +1120,27 @@ async function hydrateBinancePositions(): Promise<void> {
 }
 
 async function hydrateGeminiPositions(): Promise<void> {
-  console.log('[trade] hydrating gemini positions...');
-  const balance = await getGeminiBalance();
+  // Use process.stderr.write to dodge the daemon worker's console.log
+  // wrapper (which sends [trade]-prefixed lines to rawLog, not stdout).
+  // Hydration fires once per process boot — worth the direct output so
+  // we can see it in Railway logs without having to query source-state.
+  const log = (msg: string) => process.stderr.write(`HYDRATE-GEMINI: ${msg}\n`);
+  log('starting');
+  let balance: Record<string, string>;
+  try {
+    balance = await getGeminiBalance();
+  } catch (e) {
+    log(`getGeminiBalance threw: ${(e as Error).message.slice(0, 160)}`);
+    return;
+  }
   const holdings = findNonStableHoldings(balance);
+  log(`balance keys=${Object.keys(balance).join(',') || '(empty)'} nonStable=${holdings.length}`);
+  console.log('[trade] hydrating gemini positions...');
   console.log(`[trade] gemini balance keys=${Object.keys(balance).join(',')} nonStable=${holdings.length}`);
-  if (holdings.length === 0) return;
+  if (holdings.length === 0) {
+    log('no non-stable holdings — nothing to restore');
+    return;
+  }
 
   console.log(`[trade] found ${holdings.length} crypto holdings on gemini`);
 
@@ -1135,8 +1151,10 @@ async function hydrateGeminiPositions(): Promise<void> {
   try {
     allTrades = (await getGeminiTrades(undefined, 500)).sort((a, b) => b.timestampms - a.timestampms);
     const distinct = [...new Set(allTrades.map((t) => (t.symbol ?? '').toLowerCase()))];
+    log(`mytrades returned ${allTrades.length} trades; symbols=${distinct.join(',') || 'none'}`);
     console.log(`[trade] gemini mytrades returned ${allTrades.length} total trades; symbols=${distinct.join(',') || 'none'}`);
   } catch (e) {
+    log(`mytrades failed: ${(e as Error).message.slice(0, 120)}`);
     console.log(`[trade] gemini mytrades failed: ${(e as Error).message.slice(0, 120)}`);
   }
 
@@ -1149,6 +1167,7 @@ async function hydrateGeminiPositions(): Promise<void> {
     if (buyTrade) {
       const entryPrice = parseFloat(buyTrade.price);
       if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+      log(`restoring ${pair}=${holding.amount} @ $${entryPrice} (mytrades)`);
       restorePosition('gemini', pair, holding.amount, entryPrice, buyTrade.timestampms, 'from trade history');
       continue;
     }
@@ -1162,13 +1181,16 @@ async function hydrateGeminiPositions(): Promise<void> {
     const snapshot = await geminiFeed.snapshot(pair).catch(() => null);
     const markPrice = snapshot?.bid;
     if (!markPrice || !(markPrice > 0)) {
+      log(`${pair}=${holding.amount} — no buy trade, no bid — queued for liquidation`);
       console.log(`[trade] holding gemini:${pair}=${holding.amount} — no buy trade AND no current bid; queued for liquidation`);
       rememberLiquidation('gemini', pair, holding.amount, 'no buy trade, no bid');
       continue;
     }
+    log(`restoring ${pair}=${holding.amount} @ current bid $${markPrice.toFixed(2)} (fallback)`);
     console.log(`[trade] holding gemini:${pair}=${holding.amount} — no buy trade in mytrades; restoring at current bid $${markPrice.toFixed(2)} as entry (PnL resets)`);
     restorePosition('gemini', pair, holding.amount, markPrice, Date.now(), 'current price fallback — no mytrades entry');
   }
+  log(`done — openPositions now has ${openPositions.size} entries`);
 }
 
 /**
