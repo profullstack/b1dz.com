@@ -1954,6 +1954,19 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             options: ['immediate-or-cancel'],
           });
           txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
+        } else if (exchange === 'uniswap-v3' || exchange === 'jupiter') {
+          // DEX execution not yet wired into the trade-daemon. Analysis
+          // + signals fire for DEX pairs (good — they feed the Trade
+          // Signals pane), but no on-chain swap gets placed yet. This
+          // needs adapter-level buy()/sell() methods added to
+          // UniswapV3Adapter and JupiterAdapter so both the arb executor
+          // and this code path can share one implementation.
+          //
+          // For now, log explicitly + skip so it's obvious why a DEX
+          // signal didn't open a position, instead of silently falling
+          // through the if/else chain with empty txInfo.
+          console.log(`[trade] DEX-BUY SKIPPED ${exchange}:${pair} vol=${volumeAtAggressive.toFixed(8)} @ $${aggressivePrice.toFixed(6)} — DEX execution not yet implemented`);
+          return { ok: false, message: `DEX execution not implemented for ${exchange}`, permanent: true };
         }
         // Track the submitted volume as an upper bound. IOC may have
         // partial-filled, in which case actualBaseBalanceFor(exchange,
