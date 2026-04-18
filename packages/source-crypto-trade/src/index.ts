@@ -1247,9 +1247,22 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
   }
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  dailyPnl = closedTrades
+  const recomputedFromClosed = closedTrades
     .filter((trade) => trade.exitTime >= todayStart.getTime())
     .reduce((sum, trade) => sum + trade.netPnl, 0);
+  // Prefer the explicitly-saved dailyPnl when the date still matches
+  // today — closedTrades may be truncated (100-entry ring) or never
+  // populated on cold start, but the dailyPnl scalar is cheap to save
+  // and restore verbatim. Fall back to the recompute if the saved
+  // value is for a prior day or missing.
+  const savedDailyPnl = Number(tradeState.dailyPnl);
+  const savedDateIsToday = savedDailyPnlDate === new Date().toDateString();
+  if (savedDateIsToday && Number.isFinite(savedDailyPnl)) {
+    dailyPnl = Math.abs(savedDailyPnl) > Math.abs(recomputedFromClosed) ? savedDailyPnl : recomputedFromClosed;
+  } else {
+    dailyPnl = recomputedFromClosed;
+  }
+  console.log(`[trade] RESTORED trade state: positions=${openPositions.size} closedTrades=${closedTrades.length} dailyPnl=$${dailyPnl.toFixed(2)} dailyPnlDate=${dailyPnlDate} baseline=$${dailyEquityBaselineUsd.toFixed(2)}`);
 }
 
 /**
