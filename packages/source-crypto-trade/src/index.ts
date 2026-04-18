@@ -1617,6 +1617,26 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null;
       }
 
+      // 15m-uptrend entry gate: "buy, hold, sell higher" only works if
+      // the higher timeframe agrees. When the 15m confirm trend is not
+      // bullish, skip the entry — we're either in chop or a pullback
+      // inside a larger downtrend. Both are scenarios where 5m signals
+      // tend to stop out at a loss. Override via
+      // REQUIRE_CONFIRM_UPTREND=false to restore the old behavior.
+      const requireUptrend = (process.env.REQUIRE_CONFIRM_UPTREND ?? 'true').toLowerCase() !== 'false';
+      if (requireUptrend && item.analysis?.confirmTrend && item.analysis.confirmTrend !== 'bull') {
+        const throttleKey = `${item.exchange}:${item.pair}:confirm`;
+        const lastLog = lastWeakSignalLogAt.get(throttleKey) ?? 0;
+        if (Date.now() - lastLog >= 60_000) {
+          lastWeakSignalLogAt.set(throttleKey, Date.now());
+          console.log(
+            `[trade] SKIP ENTRY ${item.exchange}:${item.pair} — 15m trend is ${item.analysis.confirmTrend}, not bull ` +
+            `(set REQUIRE_CONFIRM_UPTREND=false to disable)`,
+          );
+        }
+        return null;
+      }
+
       // Already have a position for this pair on this exchange
       const posKey2 = `${tradeExchange}:${item.pair}`;
       if (openPositions.has(posKey2)) return null;
