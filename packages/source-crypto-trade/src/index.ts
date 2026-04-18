@@ -1128,17 +1128,23 @@ async function hydrateGeminiPositions(): Promise<void> {
 
   console.log(`[trade] found ${holdings.length} crypto holdings on gemini`);
 
+  // Fetch the entire recent trade history ONCE and filter per-asset.
+  // Per-symbol calls with master keys have been returning empty for some
+  // accounts — pulling all trades at once is the bullet-proof path.
+  let allTrades: Array<{ symbol: string; price: string; side: 'Buy' | 'Sell'; timestampms: number }> = [];
+  try {
+    allTrades = (await getGeminiTrades(undefined, 500)).sort((a, b) => b.timestampms - a.timestampms);
+    console.log(`[trade] gemini mytrades returned ${allTrades.length} total trades`);
+  } catch (e) {
+    console.log(`[trade] gemini mytrades failed: ${(e as Error).message.slice(0, 120)}`);
+  }
+
   for (const holding of holdings) {
     const pair = `${holding.asset}-USD`;
-    // Gemini's mytrades endpoint needs the lowercase symbol (e.g. 'btcusd').
-    const symbol = `${holding.asset}USD`.toLowerCase();
-    let buyTrade: { price: string; timestampms: number } | undefined;
-    try {
-      const trades = (await getGeminiTrades(symbol, 500)).sort((a, b) => b.timestampms - a.timestampms);
-      buyTrade = trades.find((t) => t.side === 'Buy');
-    } catch (e) {
-      console.log(`[trade] gemini trade history lookup failed for ${symbol}: ${(e as Error).message.slice(0, 80)}`);
-    }
+    const symbolMatch = `${holding.asset}USD`.toLowerCase();
+    const buyTrade = allTrades.find(
+      (t) => (t.symbol ?? '').toLowerCase() === symbolMatch && t.side === 'Buy',
+    );
     if (!buyTrade) {
       console.log(`[trade] holding gemini:${pair}=${holding.amount} but no buy trade found in history`);
       rememberLiquidation('gemini', pair, holding.amount, 'no buy trade found');
