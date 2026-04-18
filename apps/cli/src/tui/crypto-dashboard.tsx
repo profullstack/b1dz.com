@@ -224,7 +224,7 @@ function preferredChartExchange(pair: string, positions: TradeStatusData['positi
   const priceExchanges = new Set(prices.filter((price) => price.pair === pair).map((price) => price.exchange));
   const open = positions.find((pos) => pos.pair === pair);
   if (open && (priceExchanges.size === 0 || priceExchanges.has(open.exchange))) return open.exchange;
-  for (const exchange of ['kraken', 'coinbase', 'binance-us']) {
+  for (const exchange of ['kraken', 'coinbase', 'binance-us', 'gemini', 'uniswap-v3', 'jupiter']) {
     if (priceExchanges.has(exchange)) return exchange;
   }
   if (open) return open.exchange;
@@ -807,10 +807,10 @@ function DashboardInner() {
   ])].filter(Boolean);
   const activeChartPair = chartPairs.includes(chartPair ?? '') ? chartPair! : (chartPairs[0] ?? 'BTC-USD');
   const preferredPrimaryExchange = preferredChartExchange(activeChartPair, positions, prices, closedTrades);
-  const primaryLiveExchanges = new Set(prices.filter((price) => price.pair === activeChartPair).map((price) => price.exchange));
-  const chartExchange = chartExchangeA && (primaryLiveExchanges.size === 0 || primaryLiveExchanges.has(chartExchangeA))
-    ? chartExchangeA
-    : preferredPrimaryExchange;
+  // User's explicit click wins — always honor chartExchangeA when the
+  // user selected an exchange, even if live prices haven't landed yet.
+  // Fall back to preferredPrimaryExchange only when no selection exists.
+  const chartExchange = chartExchangeA ?? preferredPrimaryExchange;
   const chartPairIdx = chartPairs.indexOf(activeChartPair);
   const fallbackSecondary = chartPairs.length > 1
     ? chartPairs[(Math.max(chartPairIdx, 0) + 1) % chartPairs.length]
@@ -819,10 +819,7 @@ function DashboardInner() {
     ? chartPairB!
     : fallbackSecondary;
   const preferredSecondaryExchange = preferredChartExchange(secondaryChartPair, positions, prices, closedTrades);
-  const secondaryLiveExchanges = new Set(prices.filter((price) => price.pair === secondaryChartPair).map((price) => price.exchange));
-  const secondaryChartExchange = chartExchangeB && (secondaryLiveExchanges.size === 0 || secondaryLiveExchanges.has(chartExchangeB))
-    ? chartExchangeB
-    : preferredSecondaryExchange;
+  const secondaryChartExchange = chartExchangeB ?? preferredSecondaryExchange;
   const displayPricePairs = [...new Set(prices.map((price) => price.pair))].slice(0, 8);
 
   useEffect(() => {
@@ -1449,7 +1446,7 @@ function DashboardInner() {
           left={13}
           pair={pos.pair}
           exchange={pos.exchange}
-          active={pos.pair === activeChartPair}
+          active={pos.pair === activeChartPair && pos.exchange === chartExchange}
           onSelect={(nextPair, exchange) => selectChartPair(nextPair, exchange, { manual: true })}
           width={pos.pair.length + 2}
         />
