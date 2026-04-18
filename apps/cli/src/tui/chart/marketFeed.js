@@ -1,6 +1,19 @@
 // @ts-nocheck
-import { retainWsSubscription, getWsSnapshot, normalizePair } from '@b1dz/source-crypto-arb';
+import {
+  retainWsSubscription, getWsSnapshot, normalizePair,
+  JupiterFeed, UniswapBaseFeed,
+} from '@b1dz/source-crypto-arb';
 import { aggregateBars, TIMEFRAME_TO_MS } from './timeframeAggregator.js';
+
+// Singleton feed instances for venues without native WebSocket support.
+// DEXes (Uniswap V3 on Base, Jupiter on Solana) have no public ws ticker,
+// so we poll their REST snapshot() every REST_POLL_MS. Gemini has a ws
+// feed wired into the shared ws-cache — don't add it here.
+const REST_FEEDS = {
+  jupiter: new JupiterFeed(),
+  'uniswap-v3': new UniswapBaseFeed(),
+};
+const REST_POLL_MS = 2_000;
 
 const COINBASE_GRANULARITY = {
   '1m': 'ONE_MINUTE',
@@ -175,7 +188,8 @@ export async function fetchHistoricalBars({ pair, exchange, timeframe, limit = 1
 }
 
 export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250, staleAfterMs = 15_000 }) {
-  const release = retainWsSubscription([pair]);
+  const useWsCache = !REST_FEEDS[exchange];
+  const release = useWsCache ? retainWsSubscription([pair]) : () => {};
   let stopped = false;
   let lastSeen = 0;
   let lastPublishedTs = 0;
@@ -218,8 +232,30 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
 
   emitStatus('reconnecting');
 
+  // REST fallback for venues not in the ws-cache (Gemini, DEXes). Polls
+  // the underlying PriceFeed directly every REST_POLL_MS and publishes
+  // the result the same shape as a ws-cache snapshot would.
+  let restTimer = null;
+  if (REST_FEEDS[exchange]) {
+    const feed = REST_FEEDS[exchange];
+    const pollRest = async () => {
+      if (stopped) return;
+      try {
+        const snap = await feed.snapshot(pair);
+        if (publishSnapshot(snap)) return;
+      } catch {
+        // ignore — status handler below picks up staleness
+      }
+      if (!lastSeen) emitStatus('reconnecting');
+      else if (Date.now() - lastSeen > staleAfterMs) emitStatus('stale');
+    };
+    pollRest();
+    restTimer = setInterval(pollRest, REST_POLL_MS);
+  }
+
   const timer = setInterval(() => {
     if (stopped) return;
+    if (!useWsCache) return; // REST path handles its own polling
     const snap = getWsSnapshot(exchange, pair);
     if (publishSnapshot(snap)) {
       return;
@@ -236,6 +272,7 @@ export function createLiveFeed({ pair, exchange, onTick, onStatus, pollMs = 250,
   return () => {
     stopped = true;
     clearInterval(timer);
+    if (restTimer) clearInterval(restTimer);
     release();
   };
 }

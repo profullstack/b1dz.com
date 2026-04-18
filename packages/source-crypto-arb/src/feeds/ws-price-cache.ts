@@ -77,8 +77,16 @@ function setPrice(exchange: string, pair: string, bid: number, ask: number, bidS
 }
 
 function prunePairCache(pair: string) {
-  for (const exchange of ['kraken', 'coinbase', 'binance-us']) {
+  for (const exchange of ['kraken', 'coinbase', 'binance-us', 'gemini']) {
     cache.delete(cacheKey(exchange, pair));
+  }
+  // Close the per-pair Gemini socket too, so release truly releases.
+  const symbol = websocketSymbol('gemini', pair).toLowerCase();
+  const ws = geminiSockets.get(symbol);
+  if (ws) {
+    geminiSockets.delete(symbol);
+    geminiTopBook.delete(symbol);
+    try { ws.close(); } catch {}
   }
 }
 
@@ -343,6 +351,80 @@ function connectBinance(pairs: string[]) {
   });
 }
 
+// ─── Gemini WebSocket ──────────────────────────────────────────
+// Gemini uses per-symbol URLs: wss://api.gemini.com/v1/marketdata/{symbol}
+// No subscribe message — connecting to the path IS the subscription. So
+// we track one socket per pair rather than one global socket like the
+// other venues. Gemini publishes L2 book updates (events[].type='change')
+// from which we synthesize top-of-book bid/ask.
+
+const geminiSockets = new Map<string, WebSocket>();
+const geminiTopBook = new Map<string, { bid: number | null; ask: number | null }>();
+
+interface GeminiChangeEvent {
+  type: 'change';
+  side: 'bid' | 'ask';
+  price: string;
+  remaining: string;
+  reason?: string;
+}
+
+function connectGeminiPair(pair: string): void {
+  const symbol = websocketSymbol('gemini', pair).toLowerCase();
+  if (geminiSockets.has(symbol)) return;
+  const ws = new WebSocket(`wss://api.gemini.com/v1/marketdata/${symbol}`);
+  geminiSockets.set(symbol, ws);
+  geminiTopBook.set(symbol, { bid: null, ask: null });
+
+  ws.on('open', () => {
+    if (geminiSockets.get(symbol) !== ws) return;
+    wsLog(`[ws] gemini connected ${symbol}`);
+  });
+
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString()) as { events?: GeminiChangeEvent[] };
+      if (!Array.isArray(msg.events)) return;
+      const book = geminiTopBook.get(symbol);
+      if (!book) return;
+      let touched = false;
+      for (const ev of msg.events) {
+        if (ev.type !== 'change') continue;
+        const price = parseFloat(ev.price);
+        const remaining = parseFloat(ev.remaining);
+        if (!Number.isFinite(price) || price <= 0) continue;
+        if (ev.side === 'bid') {
+          if (remaining > 0 && (book.bid == null || price > book.bid)) { book.bid = price; touched = true; }
+          else if (remaining === 0 && book.bid === price) { book.bid = null; touched = true; }
+        } else {
+          if (remaining > 0 && (book.ask == null || price < book.ask)) { book.ask = price; touched = true; }
+          else if (remaining === 0 && book.ask === price) { book.ask = null; touched = true; }
+        }
+      }
+      if (touched && book.bid != null && book.ask != null) {
+        setPrice('gemini', pair, book.bid, book.ask);
+      }
+    } catch {}
+  });
+
+  ws.on('close', () => {
+    if (geminiSockets.get(symbol) !== ws) return;
+    wsLog(`[ws] ✗ gemini disconnected ${symbol}, reconnecting in 5s...`);
+    geminiSockets.delete(symbol);
+    geminiTopBook.delete(symbol);
+    // Only reconnect if still subscribed.
+    if (subscribedPairs.has(pair)) setTimeout(() => connectGeminiPair(pair), 5000);
+  });
+
+  ws.on('error', (e) => {
+    wsLog(`[ws] ✗ gemini error ${symbol}: ${e.message}`);
+  });
+}
+
+function connectGemini(pairs: string[]): void {
+  for (const p of pairs) connectGeminiPair(p);
+}
+
 // ─── Public API ────────────────────────────────────────────────
 
 /**
@@ -391,10 +473,11 @@ export function retain(pairs: string[]): () => void {
 
   const allPairs = [...subscribedPairs];
   if (!initialized) {
-    wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase + binance.us`);
+    wsLog(`[ws] subscribing to ${allPairs.length} pairs on kraken + coinbase + binance.us + gemini`);
     connectKraken(allPairs);
     connectCoinbase(allPairs);
     connectBinance(allPairs);
+    connectGemini(allPairs);
     initialized = true;
     return () => release(pairs);
   }
@@ -408,6 +491,8 @@ export function retain(pairs: string[]): () => void {
   else connectCoinbase(allPairs);
   if (binanceWs?.readyState === WebSocket.OPEN) subscribeBinancePairs(binanceWs, newPairs);
   else connectBinance(allPairs);
+  // Gemini is per-pair connection; just open the new ones.
+  connectGemini(newPairs);
   initialized = true;
   return () => release(pairs);
 }
