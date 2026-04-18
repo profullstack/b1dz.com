@@ -13,6 +13,8 @@
 
 import type { NormalizedQuote, QuoteRequest, VenueAdapter, AdapterHealth } from '@b1dz/venue-types';
 import { mintFor, SOLANA_MINTS, toBaseUnits, fromBaseUnits } from './mints.js';
+import { fetchJupiterSwap, signAndSendJupiterTx, trackSolanaTransaction } from './execute.js';
+import type { WalletProvider } from '@b1dz/wallet-provider';
 
 const BASE_URL = 'https://lite-api.jup.ag';
 
@@ -156,5 +158,79 @@ export class JupiterAdapter implements VenueAdapter {
     }
     const body = (await res.json()) as JupiterQuoteResponse;
     return body;
+  }
+
+  /**
+   * Full swap: quote → /swap/v1/swap → sign → send → confirm. Blocks
+   * until the tx is confirmed (default 60s timeout). Returns a result
+   * object with status, signature (if one was submitted) and amountOut
+   * estimate from the quote so the caller can record entryPrice.
+   */
+  async swap(args: {
+    pair: string;
+    side: 'buy' | 'sell';
+    amountIn: string;
+    walletProvider: WalletProvider;
+    userPublicKey: string;
+    rpcUrl: string;
+    slippageBps?: number;
+    timeoutMs?: number;
+  }): Promise<{
+    status: 'filled' | 'reverted' | 'aborted' | 'timeout';
+    signature?: string;
+    resolvedReason: string;
+    amountIn?: string;
+    amountOut?: string;
+  }> {
+    const quote = await this.quote({
+      pair: args.pair,
+      side: args.side,
+      amountIn: args.amountIn,
+      chain: 'solana',
+      maxSlippageBps: args.slippageBps ?? this.defaultSlippageBps,
+    });
+    if (!quote) return { status: 'aborted', resolvedReason: `no jupiter quote for ${args.pair}` };
+
+    let swapPrep: Awaited<ReturnType<typeof fetchJupiterSwap>>;
+    try {
+      swapPrep = await fetchJupiterSwap(this.baseUrl, {
+        quoteResponse: quote.raw,
+        userPublicKey: args.userPublicKey,
+        wrapAndUnwrapSol: true,
+      });
+    } catch (e) {
+      return { status: 'aborted', resolvedReason: `swap prep failed: ${(e as Error).message.slice(0, 160)}` };
+    }
+
+    let signature: string;
+    try {
+      signature = await signAndSendJupiterTx({
+        swapTransactionB64: swapPrep.swapTransaction,
+        walletProvider: args.walletProvider,
+        rpcUrl: args.rpcUrl,
+      });
+    } catch (e) {
+      return { status: 'aborted', resolvedReason: `sign/send failed: ${(e as Error).message.slice(0, 160)}` };
+    }
+
+    const outcome = await trackSolanaTransaction({
+      rpcUrl: args.rpcUrl,
+      signature,
+      commitment: 'confirmed',
+      timeoutMs: args.timeoutMs ?? 60_000,
+    });
+    if (outcome.kind === 'confirmed') {
+      return {
+        status: 'filled',
+        signature,
+        resolvedReason: `confirmed slot=${outcome.slot}`,
+        amountIn: quote.amountIn,
+        amountOut: quote.amountOut,
+      };
+    }
+    if (outcome.kind === 'reverted') {
+      return { status: 'reverted', signature, resolvedReason: outcome.err };
+    }
+    return { status: 'timeout', signature, resolvedReason: `not confirmed within ${outcome.elapsedMs}ms` };
   }
 }

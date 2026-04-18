@@ -23,10 +23,12 @@ import {
   tokenFor,
   toBaseUnits,
   fromBaseUnits,
+  NATIVE_ASSET_SENTINEL,
   isEvmChain,
   type EvmChain,
 } from './tokens.js';
 import { estimateTxCostUsd, type GasOracle } from './gas.js';
+import { encodeExactInputSingle, UNISWAP_V3_SWAP_GAS_LIMIT, minOutFromSlippage } from './uniswap-router.js';
 
 /**
  * Uniswap V3 fee tiers. 500 = 0.05% (stable-stable), 3000 = 0.3%
@@ -292,6 +294,105 @@ export class UniswapV3Adapter implements VenueAdapter {
     const cfg = CHAIN_CONFIG[chain];
     if (!cfg) return null;
     return { quoter: cfg.quoter as Hex, router: cfg.router as Hex };
+  }
+
+  /**
+   * Full swap: quote → encode exactInputSingle → sign + send via
+   * wallet-service. Returns a result object mirroring the shape of
+   * other exchange adapters so trade-daemon code can branch cleanly.
+   *
+   * Caller is responsible for ensuring the router has ERC20 allowance
+   * for `tokenIn` — see buildApprovalTx() in approvals.ts for the prep
+   * tx. Mirrors the existing UniswapV3BaseExecutor (apps/daemon) so arb
+   * and trade paths share the exact same execute behavior.
+   */
+  async swap(args: {
+    pair: string;
+    /** 'buy' = spend quote to get base; 'sell' = spend base to get quote. */
+    side: 'buy' | 'sell';
+    /** Decimal amount of the INPUT token (tokenIn). */
+    amountIn: string;
+    walletAddress: Address;
+    /** WalletService instance (from @b1dz/wallet-service). Typed as unknown
+     *  so we don't force the dep on downstream consumers that just quote. */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    walletService: { execute: (intent: any) => Promise<{ status: 'filled' | 'reverted' | 'stuck' | 'aborted'; resolvedReason: string; txHash?: string }> };
+    slippageBps?: number;
+  }): Promise<{
+    status: 'filled' | 'reverted' | 'stuck' | 'aborted';
+    resolvedReason: string;
+    txHash?: string;
+    amountIn: string;
+    amountOut?: string;
+  }> {
+    const quote = await this.quote({
+      pair: args.pair,
+      side: args.side,
+      amountIn: args.amountIn,
+      chain: this.chain,
+      maxSlippageBps: args.slippageBps,
+    });
+    if (!quote) {
+      return { status: 'aborted', resolvedReason: `no uniswap-v3 quote for ${args.pair} on ${this.chain}`, amountIn: args.amountIn };
+    }
+
+    const [baseSymbol, quoteSymbol] = args.pair.split('-');
+    const tokenIn = tokenFor(this.chain, args.side === 'buy' ? quoteSymbol : baseSymbol);
+    const tokenOut = tokenFor(this.chain, args.side === 'buy' ? baseSymbol : quoteSymbol);
+    if (!tokenIn) return { status: 'aborted', resolvedReason: `tokenIn not in ${this.chain} registry`, amountIn: args.amountIn };
+    if (!tokenOut) return { status: 'aborted', resolvedReason: `tokenOut not in ${this.chain} registry`, amountIn: args.amountIn };
+    if (tokenIn.address.toLowerCase() === NATIVE_ASSET_SENTINEL.toLowerCase()) {
+      return { status: 'aborted', resolvedReason: 'native-token input not supported by exactInputSingle in this path', amountIn: args.amountIn };
+    }
+
+    const rawFee = (quote.raw as { fee?: number } | undefined)?.fee;
+    if (!rawFee || ![100, 500, 3000, 10000].includes(rawFee)) {
+      return { status: 'aborted', resolvedReason: `quote missing valid fee tier (got ${rawFee})`, amountIn: args.amountIn };
+    }
+
+    let amountInUnits: bigint;
+    let quotedOutUnits: bigint;
+    try {
+      amountInUnits = BigInt(toBaseUnits(quote.amountIn, tokenIn.decimals));
+      quotedOutUnits = BigInt(toBaseUnits(quote.amountOut, tokenOut.decimals));
+    } catch (e) {
+      return { status: 'aborted', resolvedReason: `amount parse failed: ${(e as Error).message.slice(0, 160)}`, amountIn: args.amountIn };
+    }
+    if (amountInUnits === 0n) return { status: 'aborted', resolvedReason: 'amountIn resolved to 0 base units', amountIn: args.amountIn };
+
+    const slippage = args.slippageBps ?? quote.slippageBps ?? 100;
+    const amountOutMinimum = minOutFromSlippage(quotedOutUnits, slippage);
+
+    const call = encodeExactInputSingle({
+      router: this.config.router as Address,
+      tokenIn: tokenIn.address as Address,
+      tokenOut: tokenOut.address as Address,
+      fee: rawFee,
+      recipient: args.walletAddress,
+      amountIn: amountInUnits,
+      amountOutMinimum,
+      gasLimit: UNISWAP_V3_SWAP_GAS_LIMIT,
+    });
+
+    try {
+      const result = await args.walletService.execute({
+        chain: this.chain,
+        from: args.walletAddress,
+        to: call.to,
+        data: call.data as Hex,
+        value: call.value,
+        gasLimit: call.gasLimit,
+      });
+      return {
+        status: result.status,
+        resolvedReason: result.resolvedReason,
+        txHash: result.txHash,
+        amountIn: quote.amountIn,
+        amountOut: quote.amountOut,
+      };
+    } catch (e) {
+      return { status: 'aborted', resolvedReason: `wallet-service threw: ${(e as Error).message.slice(0, 200)}`, amountIn: args.amountIn };
+    }
   }
 
   /** Hardcoded native-token USD fallback used only when the caller

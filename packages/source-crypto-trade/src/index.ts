@@ -1120,8 +1120,10 @@ async function hydrateBinancePositions(): Promise<void> {
 }
 
 async function hydrateGeminiPositions(): Promise<void> {
+  console.log('[trade] hydrating gemini positions...');
   const balance = await getGeminiBalance();
   const holdings = findNonStableHoldings(balance);
+  console.log(`[trade] gemini balance keys=${Object.keys(balance).join(',')} nonStable=${holdings.length}`);
   if (holdings.length === 0) return;
 
   console.log(`[trade] found ${holdings.length} crypto holdings on gemini`);
