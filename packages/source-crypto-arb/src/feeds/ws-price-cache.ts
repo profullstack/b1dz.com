@@ -362,8 +362,38 @@ const geminiSockets = new Map<string, WebSocket>();
 const geminiTopBook = new Map<string, { bid: number | null; ask: number | null }>();
 /** Pairs that returned a 400 on the ws handshake — meaning Gemini doesn't
  *  list that symbol. Stop retrying them to avoid the reconnect-storm that
- *  spammed hundreds of log lines per minute. */
+ *  spammed hundreds of log lines per minute. Also used as a cache of the
+ *  negative result from the /v1/symbols pre-check. */
 const geminiDeadSymbols = new Set<string>();
+/** Cache of symbols Gemini actually lists. Fetched once lazily and
+ *  refreshed every hour — new listings are rare. */
+let geminiListedSymbols: Set<string> | null = null;
+let geminiSymbolsFetchedAt = 0;
+let geminiSymbolsFetchInFlight: Promise<void> | null = null;
+const GEMINI_SYMBOLS_TTL_MS = 60 * 60_000;
+
+async function refreshGeminiSymbols(): Promise<void> {
+  if (geminiSymbolsFetchInFlight) return geminiSymbolsFetchInFlight;
+  if (geminiListedSymbols && Date.now() - geminiSymbolsFetchedAt < GEMINI_SYMBOLS_TTL_MS) return;
+  geminiSymbolsFetchInFlight = (async () => {
+    try {
+      const res = await fetch('https://api.gemini.com/v1/symbols', { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error(`gemini /v1/symbols ${res.status}`);
+      const body = (await res.json()) as string[];
+      const next = new Set<string>(body.map((s) => s.toLowerCase()));
+      geminiListedSymbols = next;
+      geminiSymbolsFetchedAt = Date.now();
+      wsLog(`[ws] gemini symbol cache loaded (${next.size} listings)`);
+    } catch (e) {
+      // If the fetch fails we just fall through to the old behavior
+      // (open WS and rely on the close-without-open path to blacklist).
+      wsLog(`[ws] gemini symbols fetch failed: ${(e as Error).message.slice(0, 120)}`);
+    } finally {
+      geminiSymbolsFetchInFlight = null;
+    }
+  })();
+  return geminiSymbolsFetchInFlight;
+}
 
 interface GeminiChangeEvent {
   type: 'change';
@@ -377,6 +407,12 @@ function connectGeminiPair(pair: string): void {
   const symbol = websocketSymbol('gemini', pair).toLowerCase();
   if (geminiSockets.has(symbol)) return;
   if (geminiDeadSymbols.has(symbol)) return; // Gemini doesn't list this pair
+  // Pre-flight check against the /v1/symbols cache. If we know the list
+  // and the symbol isn't in it, skip the connection entirely.
+  if (geminiListedSymbols && !geminiListedSymbols.has(symbol)) {
+    geminiDeadSymbols.add(symbol);
+    return;
+  }
   const ws = new WebSocket(`wss://api.gemini.com/v1/marketdata/${symbol}`);
   geminiSockets.set(symbol, ws);
   geminiTopBook.set(symbol, { bid: null, ask: null });
@@ -439,6 +475,19 @@ function connectGeminiPair(pair: string): void {
 }
 
 function connectGemini(pairs: string[]): void {
+  // Kick off the symbols fetch (no await — connections still work via
+  // the close-handler blacklist path before the cache lands).
+  void refreshGeminiSymbols().then(() => {
+    // After the list arrives, retry any pairs that got blacklisted
+    // from a prior "no opened before close" if they're actually listed.
+    for (const p of pairs) {
+      const sym = websocketSymbol('gemini', p).toLowerCase();
+      if (geminiDeadSymbols.has(sym) && geminiListedSymbols?.has(sym)) {
+        geminiDeadSymbols.delete(sym);
+        connectGeminiPair(p);
+      }
+    }
+  });
   for (const p of pairs) connectGeminiPair(p);
 }
 
