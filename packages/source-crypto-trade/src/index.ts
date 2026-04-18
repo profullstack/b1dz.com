@@ -28,6 +28,7 @@ import {
   getCoinbaseAvailableBalance,
   getBinanceBalance,
   getGeminiBalance,
+  getGeminiTrades,
   getCoinbaseFills,
   getBinanceTrades,
   getBinanceTradingRules,
@@ -1110,16 +1111,47 @@ async function hydrateBinancePositions(): Promise<void> {
   }
 }
 
+async function hydrateGeminiPositions(): Promise<void> {
+  const balance = await getGeminiBalance();
+  const holdings = findNonStableHoldings(balance);
+  if (holdings.length === 0) return;
+
+  console.log(`[trade] found ${holdings.length} crypto holdings on gemini`);
+
+  for (const holding of holdings) {
+    const pair = `${holding.asset}-USD`;
+    // Gemini's mytrades endpoint needs the lowercase symbol (e.g. 'btcusd').
+    const symbol = `${holding.asset}USD`.toLowerCase();
+    let buyTrade: { price: string; timestampms: number } | undefined;
+    try {
+      const trades = (await getGeminiTrades(symbol, 500)).sort((a, b) => b.timestampms - a.timestampms);
+      buyTrade = trades.find((t) => t.side === 'Buy');
+    } catch (e) {
+      console.log(`[trade] gemini trade history lookup failed for ${symbol}: ${(e as Error).message.slice(0, 80)}`);
+    }
+    if (!buyTrade) {
+      console.log(`[trade] holding gemini:${pair}=${holding.amount} but no buy trade found in history`);
+      rememberLiquidation('gemini', pair, holding.amount, 'no buy trade found');
+      continue;
+    }
+    const entryPrice = parseFloat(buyTrade.price);
+    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
+    restorePosition('gemini', pair, holding.amount, entryPrice, buyTrade.timestampms, 'from trade history');
+  }
+}
+
 /**
  * Reconstruct positions from exchange data (source of truth).
  */
 async function hydrateFromExchange() {
-  if (hydratedExchanges.size === 3) return;
+  const EXPECTED_HYDRATIONS = 4;
+  if (hydratedExchanges.size === EXPECTED_HYDRATIONS) return;
 
   const steps: Array<{ exchange: string; fn: () => Promise<void> }> = [
     { exchange: 'kraken', fn: hydrateKrakenPositions },
     { exchange: 'coinbase', fn: hydrateCoinbasePositions },
     { exchange: 'binance-us', fn: hydrateBinancePositions },
+    { exchange: 'gemini', fn: hydrateGeminiPositions },
   ];
 
   for (const step of steps) {
