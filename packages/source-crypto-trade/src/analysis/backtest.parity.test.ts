@@ -56,8 +56,8 @@ describe('backtest live-parity', () => {
       ...Array.from({ length: 20 }, (_, i) => candle(i * 300_000, 100.1, 99.9, 100)),
     ];
     const entryTime = 15 * 300_000;
-    // Price walks up past the TP: entry at 100 → TP at 100 * (1 + 0.008) = 100.8
-    bars[16] = candle(16 * 300_000, 101, 100, 100.9);
+    // Price walks up past the TP: entry at 100 → TP at 100 * (1 + 0.015) = 101.5
+    bars[16] = candle(16 * 300_000, 102, 100, 101.8);
     const result = runBacktest({
       symbol: 'TEST-USD',
       exchange: 'kraken',
@@ -231,7 +231,7 @@ describe('backtest live-parity', () => {
 
   it('uses the same BREAKEVEN_TRIGGER_PCT constant the live daemon does', () => {
     expect(BREAKEVEN_TRIGGER_PCT).toBe(0.003);
-    expect(TAKE_PROFIT_PCT).toBe(0.008);
+    expect(TAKE_PROFIT_PCT).toBe(0.015);
     expect(INITIAL_STOP_PCT).toBe(0.004);
     expect(LOCK_TRIGGER_PCT).toBe(0.005);
     expect(LOCK_STOP_PCT).toBe(0.002);

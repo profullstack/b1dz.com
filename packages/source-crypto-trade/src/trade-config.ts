@@ -8,8 +8,19 @@
  * you the effect of the change on historical candles.
  */
 
-/** Fixed take-profit target as a fraction of entry price. */
-export const TAKE_PROFIT_PCT = 0.008; // +0.8%
+/** Default take-profit target as a fraction of entry price. Raised
+ *  from 0.8% → 1.5% to let real trends run instead of scalping the
+ *  first +0.8%. Env-tunable via TAKE_PROFIT_PCT.
+ *
+ *  Still exported as a const because the backtest simulator + several
+ *  test files import it directly; those pin the legacy value when they
+ *  care. Live code should prefer takeProfitPctFromEnv(). */
+export const TAKE_PROFIT_PCT = 0.015; // +1.5%
+
+export function takeProfitPctFromEnv(): number {
+  const v = Number.parseFloat(process.env.TAKE_PROFIT_PCT ?? String(TAKE_PROFIT_PCT));
+  return Number.isFinite(v) && v > 0 ? v : TAKE_PROFIT_PCT;
+}
 
 /** Fixed initial stop-loss as a fraction of entry price. */
 export const INITIAL_STOP_PCT = 0.004; // -0.4%
@@ -54,8 +65,9 @@ export function buySlippageBpsFromEnv(): number {
 /** Minimum signal strength (0-100) to accept a buy entry. Matches the
  *  analysis engine's `minScore`. Lower = more aggressive (more entries,
  *  more whipsaws); higher = pickier (fewer entries, fewer drawdowns).
- *  Tune via ENTRY_MIN_SCORE env. Default 75. */
-export const ENTRY_MIN_SCORE_DEFAULT = 75;
+ *  Raised from 75 → 85 to stop entering marginal setups that stop out
+ *  at a loss. Tune via ENTRY_MIN_SCORE env. */
+export const ENTRY_MIN_SCORE_DEFAULT = 85;
 
 export function entryMinScoreFromEnv(): number {
   const v = Number.parseFloat(process.env.ENTRY_MIN_SCORE ?? String(ENTRY_MIN_SCORE_DEFAULT));
