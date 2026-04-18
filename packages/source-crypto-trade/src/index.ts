@@ -139,7 +139,15 @@ async function refreshPerExchangeVolumesIfStale(): Promise<void> {
   }
 }
 
+/** Venues whose 24h volume isn't reported by pair-discovery (DEXes).
+ *  The thin-venue filter was built for CEXes that publish 24h tickers;
+ *  skipping DEXes entirely from the filter preserves the original intent
+ *  (block truly thin CEX books) without over-blocking DEX feeds that
+ *  have their own depth-based quote sizing. */
+const DEX_VENUES = new Set(['uniswap-v3', 'jupiter', '0x', '1inch']);
+
 function isVenueThin(exchange: string, pair: string): boolean {
+  if (DEX_VENUES.has(exchange)) return false; // DEX depth is handled at quote-time, not by 24h volume
   if (!cachedPerExchangeVolumes) return false; // no data yet — don't over-block
   const map = (cachedPerExchangeVolumes as Record<string, Map<string, number>>)[exchange];
   const vol = map?.get(pair);
