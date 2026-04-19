@@ -142,18 +142,35 @@ export class B1dzClient {
   private async refresh(): Promise<boolean> {
     if (this.refreshInFlight) return this.refreshInFlight;
     this.refreshInFlight = (async () => {
-    const res = await fetch(`${this.baseUrl}/api/auth/refresh`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ refresh_token: this.tokens.refreshToken }),
-    });
-    this.captureVersion(res);
-    if (!res.ok) return false;
-    const { session } = await res.json() as { session?: { access_token: string; refresh_token: string } };
-    if (!session) return false;
-    this.tokens = { accessToken: session.access_token, refreshToken: session.refresh_token };
-    if (this.onRefresh) await this.onRefresh(this.tokens);
-    return true;
+      // Retry transient failures with short backoff before surrendering the
+      // session. Network hiccups + Supabase rate limits caused multi-hour
+      // unexpected logouts when a single failed refresh tore down the
+      // client. 3 attempts × 500ms/2s/4s gives us resilience without
+      // stalling the calling tick too long.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await fetch(`${this.baseUrl}/api/auth/refresh`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ refresh_token: this.tokens.refreshToken }),
+          });
+          this.captureVersion(res);
+          if (res.status === 401) {
+            // Refresh token truly invalidated — no point retrying.
+            return false;
+          }
+          if (!res.ok) throw new Error(`refresh ${res.status}`);
+          const { session } = await res.json() as { session?: { access_token: string; refresh_token: string } };
+          if (!session) throw new Error('no session in refresh response');
+          this.tokens = { accessToken: session.access_token, refreshToken: session.refresh_token };
+          if (this.onRefresh) await this.onRefresh(this.tokens);
+          return true;
+        } catch {
+          if (attempt === 2) return false;
+          await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+        }
+      }
+      return false;
     })();
     try {
       return await this.refreshInFlight;

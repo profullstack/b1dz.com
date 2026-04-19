@@ -26,7 +26,17 @@ if (!key) fail('SUPABASE_SECRET_KEY missing');
 
 const runtime = new DaemonRuntime({ supabaseUrl: url, supabaseSecretKey: key });
 
+// Periodic memory snapshot — 60s cadence, stderr so it bypasses any
+// log-routing wrappers that filter "[...]" prefixed lines. Lets us
+// observe heap growth over time to locate leak sources.
+const memTimer = setInterval(() => {
+  const m = process.memoryUsage();
+  const fmt = (b: number) => `${(b / 1024 / 1024).toFixed(1)}MB`;
+  process.stderr.write(`MEM: rss=${fmt(m.rss)} heapUsed=${fmt(m.heapUsed)}/${fmt(m.heapTotal)} external=${fmt(m.external)} arrayBuffers=${fmt(m.arrayBuffers)} uptime=${Math.floor(process.uptime())}s\n`);
+}, 60_000);
+
 const shutdown = async (signal: string) => {
+  clearInterval(memTimer);
   console.log(`b1dzd: received ${signal}, shutting down…`);
   try { await runtime.stop(); } catch {}
   process.exit(0);
