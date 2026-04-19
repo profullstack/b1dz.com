@@ -906,6 +906,25 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     accountBalances.gemini = {};
     console.log(`[trade] gemini balance fetch failed: ${(e as Error).message}`);
   }
+
+  // DEX venues: populate from the injected executor (wallet USDC). With
+  // no executor wired we leave these empty — the evaluate() gate falls
+  // back to DEX_TRADE_BUDGET_USD so signals still flow into the TUI.
+  if (dexExecutor) {
+    for (const venue of ['uniswap-v3', 'jupiter'] as const) {
+      try {
+        const usdc = await dexExecutor.quoteBalanceUsd(venue);
+        if (typeof usdc === 'number' && Number.isFinite(usdc)) {
+          spendableQuoteBalances[venue] = { USDC: Math.max(0, usdc), USDT: 0, USD: 0 };
+        } else {
+          spendableQuoteBalances[venue] = {};
+        }
+      } catch (e) {
+        spendableQuoteBalances[venue] = {};
+        console.log(`[trade] ${venue} balance fetch failed: ${(e as Error).message}`);
+      }
+    }
+  }
 }
 
 function spendableQuoteFor(exchange: string, pair: string): number {
@@ -1389,6 +1408,64 @@ export function getTradingOverride(): boolean | null {
   return tradingOverride;
 }
 
+/**
+ * DEX trade executor seam — injected from the daemon layer so this
+ * package doesn't need wallet-service / adapters-evm / adapters-solana
+ * as direct deps. When set, `refreshSpendableQuoteBalances` populates
+ * real on-chain USDC balances for DEX venues and `act()` routes DEX
+ * buy/sell through this interface instead of the SKIPPED no-op. When
+ * null (the default), DEX signals still fire in `evaluate()` thanks to
+ * the DEX_TRADE_BUDGET_USD env fallback, and act() logs DEX-BUY
+ * SKIPPED so the TUI shows why nothing executed.
+ */
+export interface DexTradeExecutor {
+  /** On-chain wallet quote-asset balance denominated in USD. Returns
+   *  null when the executor doesn't manage that venue (so callers fall
+   *  back to the env budget). */
+  quoteBalanceUsd(venue: string): Promise<number | null>;
+  /** Market-buy `amountUsd` worth of the base asset. Returns the fill
+   *  price and base-token volume received, so position tracking can
+   *  record accurate entry state. */
+  buy(args: {
+    venue: string;
+    pair: string;
+    amountUsd: number;
+    slippageBps: number;
+  }): Promise<{
+    ok: boolean;
+    message: string;
+    fillPrice?: number;
+    baseVolume?: number;
+    txId?: string;
+  }>;
+  /** Market-sell `baseVolume` units of the base asset. Returns the fill
+   *  price and quote-asset USD received. */
+  sell(args: {
+    venue: string;
+    pair: string;
+    baseVolume: number;
+    slippageBps: number;
+  }): Promise<{
+    ok: boolean;
+    message: string;
+    fillPrice?: number;
+    quoteAmountUsd?: number;
+    txId?: string;
+  }>;
+}
+
+let dexExecutor: DexTradeExecutor | null = null;
+
+export function setDexExecutor(ex: DexTradeExecutor | null): void {
+  dexExecutor = ex;
+  if (ex) console.log('[trade] DEX executor armed — uniswap-v3 / jupiter buys and sells will dispatch on-chain');
+  else console.log('[trade] DEX executor cleared — DEX signals will log but skip execution');
+}
+
+export function getDexExecutor(): DexTradeExecutor | null {
+  return dexExecutor;
+}
+
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
   positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
@@ -1495,6 +1572,138 @@ async function getDefaultStrategy(): Promise<Strategy> {
     defaultStrategy = mod.compositeStrategy;
   }
   return defaultStrategy;
+}
+
+/** Slippage used for DEX buys/sells. Env-tunable; mirrors the
+ *  buySlippageBpsFromEnv ceiling used on CEX IOC orders but routed to
+ *  the adapter's quoter instead of a limit-price encoding. Default
+ *  300bps covers typical Uniswap/Jupiter price impact + MEV drift;
+ *  operators can tighten via DEX_SLIPPAGE_BPS. */
+function dexSlippageBps(): number {
+  const raw = process.env.DEX_SLIPPAGE_BPS;
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 300;
+}
+
+/** DEX buy/sell dispatcher. Called from act() when exchange is a DEX
+ *  venue. With no `dexExecutor` set, this logs a clear SKIPPED message
+ *  and returns — the signal still lives in the signals array and the
+ *  TUI still renders it, which is the current PR-friendly state. */
+async function actOnDex(args: {
+  exchange: string;
+  pair: string;
+  meta: { signal: Signal; snap: MarketSnapshot; position?: Position; strategy?: string };
+}): Promise<ActionResult> {
+  const { exchange, pair, meta } = args;
+
+  if (meta.signal.side === 'sell') {
+    const posKey = `${exchange}:${pair}`;
+    const pos = openPositions.get(posKey);
+    if (!pos) return { ok: false, message: 'no open DEX position to sell' };
+    if (!dexExecutor) {
+      console.log(`[trade] DEX-SELL SKIPPED ${exchange}:${pair} vol=${pos.volume.toFixed(8)} — DEX executor not armed`);
+      return { ok: false, message: `DEX executor not armed for ${exchange}`, permanent: true };
+    }
+    try {
+      const result = await dexExecutor.sell({
+        venue: exchange,
+        pair,
+        baseVolume: pos.volume,
+        slippageBps: dexSlippageBps(),
+      });
+      if (!result.ok) {
+        console.error(`[trade] DEX SELL FAILED ${exchange}:${pair}: ${result.message}`);
+        return { ok: false, message: result.message };
+      }
+      const exitPrice = result.fillPrice ?? meta.snap.bid;
+      const grossPnl = (exitPrice - pos.entryPrice) * pos.volume;
+      // DEX pool fees are baked into the fill price (Jupiter) or the
+      // pool tier (Uniswap) so we don't double-count venue fees here.
+      // Gas is real but small ($<0.05 on Base, <$0.005 on Solana) —
+      // tracked implicitly in the received USDC delta.
+      const netPnl = grossPnl;
+      closedTrades.push({
+        exchange,
+        pair,
+        strategyId: pos.strategyId ?? 'dex',
+        entryPrice: pos.entryPrice,
+        exitPrice,
+        volume: pos.volume,
+        entryTime: pos.entryTime,
+        exitTime: Date.now(),
+        grossPnl,
+        fee: 0,
+        netPnl,
+      });
+      while (closedTrades.length > 100) closedTrades.shift();
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      dailyPnl = closedTrades
+        .filter((t) => t.exitTime >= todayStart.getTime())
+        .reduce((sum, t) => sum + t.netPnl, 0);
+      clearTrackedPosition(posKey, exchange);
+      lastExitAt.set(`${exchange}:${pair}`, Date.now());
+      const txPart = result.txId ? ` tx=${result.txId}` : '';
+      console.log(`[trade] DEX SOLD ${exchange}:${pair}${txPart} net=$${netPnl.toFixed(4)} dayPnL=$${dailyPnl.toFixed(2)}`);
+      return { ok: true, message: `sold ${pos.volume.toFixed(8)} on ${exchange} net=$${netPnl.toFixed(4)}` };
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error(`[trade] DEX SELL FAILED ${exchange}: ${msg}`);
+      return { ok: false, message: msg };
+    }
+  }
+
+  // Buy path
+  const price = meta.snap.ask;
+  const dexBudget = Number(process.env.DEX_TRADE_BUDGET_USD ?? '20');
+  const onChain = spendableQuoteFor(exchange, pair);
+  const availableQuote = onChain > 0 ? Math.min(onChain, dexBudget) : dexBudget;
+  if (availableQuote < MIN_SPENDABLE_QUOTE_USD) {
+    return { ok: false, message: `insufficient USDC on ${exchange} ($${availableQuote.toFixed(2)})` };
+  }
+  const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * 0.98;
+  if (spendBudget < MIN_SPENDABLE_QUOTE_USD) {
+    return { ok: false, message: `spend budget too small on ${exchange} ($${spendBudget.toFixed(2)})` };
+  }
+  const estVolume = spendBudget / price;
+
+  if (!dexExecutor) {
+    console.log(`[trade] DEX-BUY SKIPPED ${exchange}:${pair} vol≈${estVolume.toFixed(8)} @ $${price.toFixed(6)} spend=$${spendBudget.toFixed(2)} — DEX executor not armed (set DEX_TRADE_EXECUTION=true + wallet env)`);
+    return { ok: false, message: `DEX executor not armed for ${exchange}`, permanent: true };
+  }
+
+  console.log(`[trade] ATTEMPT DEX BUY ${exchange}:${pair} spend=$${spendBudget.toFixed(2)} ref=$${price.toFixed(6)} slippage=${dexSlippageBps()}bps`);
+  try {
+    const result = await dexExecutor.buy({
+      venue: exchange,
+      pair,
+      amountUsd: spendBudget,
+      slippageBps: dexSlippageBps(),
+    });
+    if (!result.ok) {
+      console.error(`[trade] DEX BUY FAILED ${exchange}:${pair}: ${result.message}`);
+      return { ok: false, message: result.message };
+    }
+    const entryPrice = result.fillPrice ?? price;
+    const baseVolume = result.baseVolume ?? estVolume;
+    const posKey = `${exchange}:${pair}`;
+    openPositions.set(posKey, {
+      pair,
+      exchange,
+      entryPrice,
+      volume: baseVolume,
+      entryTime: Date.now(),
+      highWaterMark: entryPrice,
+      strategyId: meta.strategy ?? 'dex',
+    });
+    const txPart = result.txId ? ` tx=${result.txId}` : '';
+    console.log(`[trade] DEX BUY placed ${exchange}:${pair}${txPart} vol=${baseVolume.toFixed(8)} @ $${entryPrice.toFixed(6)}`);
+    return { ok: true, message: `bought ${baseVolume.toFixed(8)} on ${exchange} @ $${entryPrice.toFixed(6)}` };
+  } catch (e) {
+    const msg = (e as Error).message;
+    console.error(`[trade] DEX BUY FAILED ${exchange}: ${msg}`);
+    return { ok: false, message: msg };
+  }
 }
 
 export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
@@ -1744,8 +1953,25 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       }
 
       // Skip actionable entries when the exchange does not have enough spendable
-      // quote balance for this market.
-      const spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
+      // quote balance for this market. DEX venues historically had no
+      // entry in spendableQuoteBalances (that refresh path was CEX-only)
+      // and every DEX candidate got silently dropped here — signals
+      // never reached publishEntrySignal and nothing showed up in the
+      // TUI. Now `refreshSpendableQuoteBalances` populates wallet USDC
+      // for DEX when a DexTradeExecutor is injected; if not, we fall
+      // back to the env-tunable DEX_TRADE_BUDGET_USD so signals still
+      // flow. In both cases we cap by DEX_TRADE_BUDGET_USD as a ceiling
+      // so a full wallet doesn't auto-size into a larger DEX position
+      // than the operator intends.
+      const isDex = DEX_VENUES.has(tradeExchange);
+      let spendableQuote: number;
+      if (isDex) {
+        const dexBudget = Number(process.env.DEX_TRADE_BUDGET_USD ?? '20');
+        const onChain = spendableQuoteFor(tradeExchange, item.pair);
+        spendableQuote = onChain > 0 ? Math.min(onChain, dexBudget) : dexBudget;
+      } else {
+        spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
+      }
       if (spendableQuote < MIN_SPENDABLE_QUOTE_USD) return null;
       const spendBudget = Math.min(spendableQuote, MAX_POSITION_USD) * 0.98;
       const minExecutableUsd = minExecutableUsdByMarket.get(`${tradeExchange}:${item.pair}`) ?? 0;
@@ -1780,6 +2006,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position; strategy?: string; liquidation?: PendingLiquidation };
       const pair = meta.snap.pair;
       const exchange = meta.snap.exchange;
+
+      // DEX short-circuit — route uniswap-v3 + jupiter through the injected
+      // DexTradeExecutor. The CEX balance/auto-convert/min-notional path
+      // below doesn't apply to on-chain swaps. When no executor is wired we
+      // log DEX-BUY / DEX-SELL SKIPPED so the activity log explains why
+      // nothing happened instead of silently falling through.
+      if (DEX_VENUES.has(exchange)) {
+        return await actOnDex({ exchange, pair, meta });
+      }
 
       if (meta.signal.side === 'sell') {
         if (meta.liquidation) {
@@ -2012,19 +2247,6 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             options: ['immediate-or-cancel'],
           });
           txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
-        } else if (exchange === 'uniswap-v3' || exchange === 'jupiter') {
-          // DEX execution not yet wired into the trade-daemon. Analysis
-          // + signals fire for DEX pairs (good — they feed the Trade
-          // Signals pane), but no on-chain swap gets placed yet. This
-          // needs adapter-level buy()/sell() methods added to
-          // UniswapV3Adapter and JupiterAdapter so both the arb executor
-          // and this code path can share one implementation.
-          //
-          // For now, log explicitly + skip so it's obvious why a DEX
-          // signal didn't open a position, instead of silently falling
-          // through the if/else chain with empty txInfo.
-          console.log(`[trade] DEX-BUY SKIPPED ${exchange}:${pair} vol=${volumeAtAggressive.toFixed(8)} @ $${aggressivePrice.toFixed(6)} — DEX execution not yet implemented`);
-          return { ok: false, message: `DEX execution not implemented for ${exchange}`, permanent: true };
         }
         // Track the submitted volume as an upper bound. IOC may have
         // partial-filled, in which case actualBaseBalanceFor(exchange,

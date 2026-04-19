@@ -81,5 +81,5 @@ export {
 // adding a direct viem dependency, so the workspace stays on a single
 // resolved viem version (mixed versions produce nonsensical TS errors
 // about Chain/Client incompatibility).
-export { createPublicClient, http, type Address, type Hex, type PublicClient } from 'viem';
+export { createPublicClient, http, parseAbi, type Address, type Hex, type PublicClient } from 'viem';
 export { base, mainnet, arbitrum, optimism, polygon, avalanche } from 'viem/chains';

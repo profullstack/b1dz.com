@@ -7,10 +7,21 @@ import {
   serializeTradeState,
   setTradingOverride,
   setDailyLossLimitPct,
+  setDexExecutor,
 } from '@b1dz/source-crypto-trade';
 import { AlertBus, getAnalysisCache, getB1dzVersion, setAnalysisCache } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
+import { maybeBuildDexTradeExecutor } from '../executors/dex-trade-executor.js';
+
+// Arm the DEX executor seam once per process. Returns null unless
+// DEX_TRADE_EXECUTION=true + the wallet env is set — in which case the
+// trade source logs DEX-BUY SKIPPED (signals still flow, execution
+// doesn't). Fire-and-forget: if arming fails we keep running in the
+// skip-only state so the TUI keeps showing DEX signals.
+void maybeBuildDexTradeExecutor()
+  .then((exec) => setDexExecutor(exec))
+  .catch((e) => console.warn(`[trade] DEX executor boot failed: ${(e as Error).message}`));
 
 // Analysis-cache persistence. Candle history + indicators are multi-MB;
 // writing them into source_state.payload every 5s was blowing up Redis
