@@ -1,1 +1,21 @@
 project_id = "hnohaxemomzlpfnoidhp"
+
+[auth]
+# Access-token lifetime. Supabase caps this at 86400 (24h) on hosted
+# projects regardless of what we put here — anything longer is silently
+# clamped. The real "long session" behavior comes from refresh tokens
+# (rotating, persistent) which the SDK auto-renews on each request.
+jwt_expiry = 86400
+
+enable_signup = true
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = true
+secure_password_change = false
+max_frequency = "1m0s"
+otp_length = 8
+otp_expiry = 3600
