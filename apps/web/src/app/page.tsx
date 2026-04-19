@@ -114,6 +114,7 @@ export default function LandingPage() {
           <Image src="/logo.svg" alt="b1dz" width={256} height={80} />
         </div>
         <div className="flex items-center gap-4">
+          <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Store</Link>
           <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Sign in</Link>
           <Link href="/signup" className="text-sm bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-medium px-4 py-2 rounded-lg transition">Get started</Link>
         </div>
@@ -130,9 +131,12 @@ export default function LandingPage() {
         <p className="text-xl md:text-2xl text-zinc-400 mb-8 max-w-2xl mx-auto">
           Realtime auto-trading across multiple exchanges. Find price gaps. Execute instantly. Profit automatically.
         </p>
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex items-center justify-center gap-4 flex-wrap">
           <Link href="/signup" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-semibold px-8 py-3 rounded-lg text-lg transition">
             Start trading
+          </Link>
+          <Link href="/store" className="border border-orange-500/40 hover:border-orange-500 text-orange-400 hover:text-orange-300 px-8 py-3 rounded-lg text-lg transition">
+            Browse store →
           </Link>
           <Link href="#features" className="border border-zinc-700 hover:border-zinc-500 text-zinc-300 px-8 py-3 rounded-lg text-lg transition">
             Learn more
@@ -308,6 +312,29 @@ export default function LandingPage() {
             <div className="mb-3"><AerodromeLogo /></div>
             <div className="text-2xl font-bold text-zinc-200 mb-1">Aerodrome</div>
             <div className="text-sm">Base · Coming soon</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Plugin Store promo */}
+      <section className="max-w-6xl mx-auto px-6 py-16">
+        <div className="rounded-2xl border border-orange-500/20 bg-gradient-to-br from-zinc-900 via-zinc-900 to-orange-950/30 px-8 py-10 text-center">
+          <div className="inline-flex items-center gap-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.35em] text-orange-300 mb-4">
+            New
+          </div>
+          <h2 className="text-3xl md:text-4xl font-bold mb-3">
+            <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Plugin Store</span>
+          </h2>
+          <p className="text-zinc-400 max-w-2xl mx-auto mb-6">
+            DEX connectors and trading strategies for the b1dz terminal — signals-only, so plugin authors never touch your keys. Authoring SDK opens soon; sell your signals to the whole network.
+          </p>
+          <div className="flex items-center justify-center gap-4 flex-wrap">
+            <Link href="/store" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-semibold px-6 py-3 rounded-lg transition">
+              Browse the store
+            </Link>
+            <Link href="/signup" className="border border-zinc-700 hover:border-zinc-500 text-zinc-300 px-6 py-3 rounded-lg transition">
+              Become an author
+            </Link>
           </div>
         </div>
       </section>

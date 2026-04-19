@@ -19,6 +19,19 @@ packages/
 data/                 JSON storage root (gitignored)
 ```
 
+## Plugin Store
+
+b1dz is evolving into a plugin platform. DEX connectors and trading
+strategies ship as plugins against a stable contract
+(`packages/core/src/plugins.ts`), with a catalog rendered at
+[`/store`](apps/web/src/app/store/page.tsx) in the web app. Execution
+is **signals-only** — strategy authors emit normalized `Signal` objects
+and b1dz's engine owns signing, risk, and approvals, so third-party
+code never touches user keys.
+
+See [`docs/prd-plugins-v0.md`](docs/prd-plugins-v0.md) for the one-day
+scope and the full architectural call.
+
 ## Stack
 
 - **pnpm 10** workspaces + **Turbo**

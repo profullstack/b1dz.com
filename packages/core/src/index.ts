@@ -10,3 +10,4 @@ export * from './env.js';
 export * from './version.js';
 export * from './runtime-cache.js';
 export * from './plugins.js';
+export * from './plugin-catalog.js';
