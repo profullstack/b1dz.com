@@ -58,7 +58,7 @@ export default function StorePage() {
         </p>
         <div className="mt-8 inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 px-4 py-2 text-xs uppercase tracking-[0.3em] text-zinc-500">
           <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
-          v0 — read-only catalog. Install flow ships with the registry.
+          v0 — preview catalog. <span className="font-mono normal-case tracking-normal text-orange-400 ml-1">b1dz store install</span> lands with the registry.
         </div>
       </section>
 
@@ -143,6 +143,12 @@ function PluginCard({ entry }: { entry: CatalogEntry }) {
       </div>
       {tagline && <p className="text-sm text-zinc-300 mb-2">{tagline}</p>}
       {manifest.description && <p className="text-sm text-zinc-400 leading-relaxed mb-4">{manifest.description}</p>}
+      <div className="mb-4">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Install</div>
+        <code className="block rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs font-mono text-orange-300 overflow-x-auto">
+          b1dz store install {manifest.id}
+        </code>
+      </div>
       <div className="mt-auto flex items-center justify-between pt-3 border-t border-zinc-800">
         <div className="flex flex-wrap gap-1.5">
           {manifest.capabilities.map((c) => (
