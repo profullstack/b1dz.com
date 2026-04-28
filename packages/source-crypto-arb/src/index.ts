@@ -105,6 +105,27 @@ export {
 } from './seeder.js';
 export { placeSeedOrder, type SeedOrderRequest, type SeedOrderResult } from './seed-executor.js';
 
+// Seed-funding liquidator. Sells a small slice of an untracked holding on
+// the target exchange to fund auto-seeding when stable balance is too low.
+// See liquidator.ts for the hard guarantees (never sells tracked positions,
+// never sells the seed target, capped slice size, per-exchange cooldown).
+export {
+  decideLiquidate,
+  recordLiquidation,
+  normalizeLiquidatorState,
+  emptyLiquidatorState,
+  liqKey,
+  LIQUIDATOR_STATE_PAYLOAD_KEY,
+  LIQUIDATE_MAX_SLICE_USD,
+  LIQUIDATE_MIN_ASSET_USD,
+  LIQUIDATE_COOLDOWN_MS,
+  type LiquidatorState,
+  type Holding as LiquidatorHolding,
+  type LiquidateDecisionKind,
+  type LiquidateDecisionInput,
+} from './liquidator.js';
+export { placeLiquidateOrder, type LiquidateOrderRequest, type LiquidateOrderResult } from './liquidator-executor.js';
+
 const MAX_POSITION_USD = 100;
 const MIN_EXECUTABLE_USD = 5;
 const SUPPORTED_TRADE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase', 'gemini']);

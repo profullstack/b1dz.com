@@ -21,6 +21,16 @@ import {
   SEED_STATE_PAYLOAD_KEY,
   type SeedState,
   type SeedDecisionKind,
+  // Seed-funding liquidator
+  decideLiquidate,
+  recordLiquidation,
+  normalizeLiquidatorState,
+  liqKey,
+  placeLiquidateOrder,
+  LIQUIDATOR_STATE_PAYLOAD_KEY,
+  type LiquidatorState,
+  type LiquidateDecisionKind,
+  type LiquidatorHolding,
 } from '@b1dz/source-crypto-arb';
 import { AlertBus, getB1dzVersion } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
@@ -56,6 +66,9 @@ let wsInitialized = false;
 // ticks race or when a partial persist fails mid-flight.
 let cachedSeedState: SeedState = { entries: {}, totalSeedCostUsd: 0 };
 let cachedSeedStateLoaded = false;
+// Seed-funding liquidator state (per-exchange cooldowns).
+let cachedLiqState: LiquidatorState = { lastLiquidatedAtMs: {} };
+let cachedLiqStateLoaded = false;
 /** Realized arb profit attributed to each (exchange, pair) — used by the
  *  circuit breaker to decide if a seeded pair is actually earning. We
  *  compute this lazily from the crypto-trade closedTrades ring each tick. */
@@ -76,7 +89,7 @@ function computeRealizedProfitByKey(closedTrades: Array<{ exchange?: string; pai
 }
 
 /** Short, fixed-width label for a seed decision — rendered in the TUI
- *  Arb Spreads panel next to each profitable row. Max ~12 chars so the
+ *  Arb Spreads panel next to each profitable row. Max ~14 chars so the
  *  column stays aligned with existing PROFIT/info labels. */
 function labelForDecision(d: SeedDecisionKind): string {
   switch (d.kind) {
@@ -86,9 +99,28 @@ function labelForDecision(d: SeedDecisionKind): string {
     case 'paused': return '⊘ paused';
     case 'budget-pair-exhausted': return '⊘ pair $';
     case 'budget-global-exhausted': return '⊘ global $';
-    case 'no-stable-balance': return '⊘ no USDC';
+    case 'no-stable-balance': return '⊘ no stables';
     case 'seed-too-small': return '⊘ too small';
     case 'disabled': return 'ℹ disabled';
+  }
+}
+
+/** Liquidation decision label. Surfaced alongside the seed label so the
+ *  operator can see "about to sell 10 ADA to fund the DOGE seed". */
+function labelForLiqDecision(d: LiquidateDecisionKind): string {
+  switch (d.kind) {
+    case 'liquidate': return `→ LIQ ${d.asset} $${d.expectedUsd.toFixed(0)}`;
+    case 'disabled': return '';
+    case 'cooldown': return `liq cd ${Math.ceil(d.remainingMs / 60_000)}m`;
+    case 'already-funded': return '';
+    case 'no-candidate': {
+      // If every candidate was rejected because they're tracked, say so —
+      // it's the most common and actionable reason.
+      if (d.reasons.length > 0 && d.reasons.every((r) => r.reason === 'tracked position')) {
+        return 'liq skip (all tracked)';
+      }
+      return 'liq skip';
+    }
   }
 }
 
@@ -214,7 +246,7 @@ export const cryptoArbWorker: SourceWorker = {
       }
 
     // ── Compute arb spreads every tick ──
-      const spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedStatus?: SeedDecisionKind | null; seedLabel?: string }[] = [];
+      const spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedStatus?: SeedDecisionKind | null; seedLabel?: string; liqStatus?: LiquidateDecisionKind | null; liqLabel?: string }[] = [];
       for (const pair of pairsToFetch) {
       const pairPrices = prices.filter((p) => p.pair === pair);
       if (pairPrices.length < 2) continue;
@@ -336,9 +368,10 @@ export const cryptoArbWorker: SourceWorker = {
       // time per entry is handled inside evaluateCircuitBreakers — we pass a
       // "0" baseline and let the module itself scope by lastSeededAtMs when
       // computing elapsed windows.
+      let cryptoTradePayload: { tradeState?: { closedTrades?: Array<{ exchange?: string; pair?: string; netPnl?: number; exitTime?: number }>; positions?: Array<{ exchange?: string; pair?: string }> } } | null = null;
       try {
-        const tradePayload = await storage.get<{ tradeState?: { closedTrades?: Array<{ exchange?: string; pair?: string; netPnl?: number; exitTime?: number }> } }>('source-state', 'crypto-trade');
-        const closedTrades = tradePayload?.tradeState?.closedTrades ?? [];
+        cryptoTradePayload = await storage.get<{ tradeState?: { closedTrades?: Array<{ exchange?: string; pair?: string; netPnl?: number; exitTime?: number }>; positions?: Array<{ exchange?: string; pair?: string }> } }>('source-state', 'crypto-trade');
+        const closedTrades = cryptoTradePayload?.tradeState?.closedTrades ?? [];
         const realizedByKey = computeRealizedProfitByKey(closedTrades, 0);
         cachedSeedState = evaluateCircuitBreakers(cachedSeedState, {
           nowMs: Date.now(),
@@ -347,6 +380,49 @@ export const cryptoArbWorker: SourceWorker = {
       } catch {
         // Non-fatal: circuit breaker just doesn't advance this tick.
       }
+
+      // Lazy-load liquidator state from persisted payload (once per process).
+      if (!cachedLiqStateLoaded) {
+        cachedLiqState = normalizeLiquidatorState(ctx.payload?.[LIQUIDATOR_STATE_PAYLOAD_KEY]);
+        cachedLiqStateLoaded = true;
+      }
+
+      // Protected keys: the set of (exchange, asset) tuples the trade engine
+      // currently has open positions on. These are sacred — the liquidator
+      // must never sell them to fund a seed.
+      const protectedKeys = new Set<string>();
+      const tradedPositions = cryptoTradePayload?.tradeState?.positions ?? [];
+      for (const p of tradedPositions) {
+        if (!p || typeof p.exchange !== 'string' || typeof p.pair !== 'string') continue;
+        const asset = p.pair.split('-')[0];
+        if (asset) protectedKeys.add(liqKey(p.exchange, asset));
+      }
+
+      // Build per-exchange holdings snapshot (non-stable only, with prices
+      // from the live `prices` array so the liquidator can size slices).
+      function holdingsOn(exchange: string): LiquidatorHolding[] {
+        const bal = exchange === 'kraken' ? cachedKrakenBalance
+          : exchange === 'binance-us' ? cachedBinanceBalance
+          : exchange === 'coinbase' ? cachedCoinbaseBalance
+          : exchange === 'gemini' ? cachedGeminiBalance
+          : {};
+        const out: LiquidatorHolding[] = [];
+        for (const [rawAsset, rawAmount] of Object.entries(bal)) {
+          if (stableSet.has(rawAsset)) continue;
+          const asset = exchange === 'kraken' ? (krakenNameMap[rawAsset] ?? rawAsset) : rawAsset;
+          const amount = parseFloat(rawAmount);
+          if (!Number.isFinite(amount) || amount <= 0) continue;
+          const priceRow = prices.find((p) => p.exchange === exchange && p.pair === `${asset}-USD`);
+          const unitPriceUsd = priceRow?.bid ?? 0;
+          out.push({ asset, amount, unitPriceUsd });
+        }
+        return out;
+      }
+
+      // Track liquidations we've already kicked off this tick, so that two
+      // spreads hitting the same exchange don't both try to liquidate in
+      // the same pass (we want exactly one sell per exchange per tick).
+      const liquidatedExchangesThisTick = new Set<string>();
 
       // For each profitable spread, decide whether to seed.
       for (const s of spreads) {
@@ -367,8 +443,58 @@ export const cryptoArbWorker: SourceWorker = {
           refPriceUsd: sellPrice > 0 ? sellPrice : buyPrice,
         });
         s.seedStatus = decision;
-        // Human-readable label for the TUI (kept short).
         s.seedLabel = labelForDecision(decision);
+
+        // When the seeder can't proceed because stables are too low, try
+        // the liquidator: sell a small slice of an untracked holding on
+        // the sell-side venue to raise stables. The next tick (within 5s)
+        // will re-see the refreshed balance and the seeder will fire.
+        if (decision.kind === 'no-stable-balance' && !liquidatedExchangesThisTick.has(s.sellExchange)) {
+          // Size the funding request = seed min plus a small cushion.
+          // Intentionally modest — we only want to unblock the seeder, not
+          // convert half the bag to stables.
+          const wantUsd = 15; // SEED_MIN_USD default + ~50% cushion
+          const liq = decideLiquidate({
+            exchange: s.sellExchange,
+            holdings: holdingsOn(s.sellExchange),
+            stableBalance: stableByExchange[s.sellExchange] ?? 0,
+            seedBaseAsset: base,
+            wantUsd,
+            protectedKeys,
+            nowMs: Date.now(),
+            tradingEnabled,
+            state: cachedLiqState,
+          });
+          s.liqStatus = liq;
+          s.liqLabel = labelForLiqDecision(liq);
+
+          if (liq.kind === 'liquidate') {
+            liquidatedExchangesThisTick.add(s.sellExchange);
+            logActivity(`[arb][liq] → LIQUIDATING ${liq.sellVolume.toFixed(8)} ${liq.asset} on ${liq.exchange} for ~$${liq.expectedUsd.toFixed(2)} to fund seed`, 'crypto-arb');
+            const result = await placeLiquidateOrder({
+              exchange: liq.exchange,
+              asset: liq.asset,
+              sellVolume: liq.sellVolume,
+              limitPriceUsd: liq.limitPriceUsd,
+            });
+            if (result.ok && result.filledUsd > 0) {
+              cachedLiqState = recordLiquidation(cachedLiqState, {
+                exchange: liq.exchange,
+                nowMs: Date.now(),
+              });
+              // Bump our in-memory stable balance estimate so subsequent
+              // spreads processed in THIS tick don't try to liquidate again
+              // (real balance will refresh on next private fetch).
+              stableByExchange[liq.exchange] = (stableByExchange[liq.exchange] ?? 0) + result.filledUsd;
+              logActivity(`[arb][liq] ✓ sold ${result.filledVolume.toFixed(8)} ${liq.asset} on ${liq.exchange} for $${result.filledUsd.toFixed(2)} (ref=${result.orderRef})`, 'crypto-arb');
+            } else {
+              logActivity(`[arb][liq] ✗ failed ${liq.exchange} ${liq.asset}: ${result.error ?? 'unknown'}`, 'crypto-arb');
+            }
+          }
+        } else if (s.liqStatus === undefined) {
+          // Default: nothing to display for liquidator on this row.
+          s.liqStatus = null;
+        }
 
         if (decision.kind === 'seed') {
           logActivity(`[arb][seed] → SEEDING $${decision.sizeUsd.toFixed(2)} ${decision.exchange}:${decision.pair}`, 'crypto-arb');
@@ -409,6 +535,7 @@ export const cryptoArbWorker: SourceWorker = {
       recentTrades: cachedRecentTrades,
       openOrders: cachedOpenOrders,
       [SEED_STATE_PAYLOAD_KEY]: cachedSeedState,
+      [LIQUIDATOR_STATE_PAYLOAD_KEY]: cachedLiqState,
       activityLog: getActivityLog('crypto-arb'),
       rawLog: getRawLog('crypto-arb'),
       daemon: {

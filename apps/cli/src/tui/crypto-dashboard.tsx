@@ -56,7 +56,7 @@ async function createApiClient(): Promise<B1dzClient | null> {
 
 interface ArbState {
   prices: { exchange: string; pair: string; bid: number; ask: number }[];
-  spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedLabel?: string; seedStatus?: { kind: string; [k: string]: unknown } | null }[];
+  spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedLabel?: string; seedStatus?: { kind: string; [k: string]: unknown } | null; liqLabel?: string; liqStatus?: { kind: string; [k: string]: unknown } | null }[];
   krakenBalance: Record<string, string>;
   binanceBalance: Record<string, string>;
   coinbaseBalance: Record<string, string>;
@@ -1103,9 +1103,10 @@ function DashboardInner() {
 
   // Arb spreads — show top 5. Status column prefers the seeder label when
   // the arb daemon has attached one (e.g. "→ SEED $42", "⊘ cd 12m",
-  // "✓ READY"). This replaces the old binary "✓ PROFIT / below fees" with
-  // a richer signal: green when the engine will act on this spread,
-  // yellow when it's waiting on cooldown/budget, gray when informational.
+  // "✓ READY"). When the seeder is blocked on stables and the liquidator
+  // is about to sell something to unblock it, the liq label (→ LIQ ADA $15)
+  // takes precedence so the operator sees the *next* action, not the
+  // current blocker.
   const displaySpreads = spreads.filter((s) => s?.pair && s?.spread != null).slice(0, 5);
   const arbLines: string[] = ['{bold} Pair       Spread    Route                 Status{/bold}'];
   for (const s of displaySpreads) {
@@ -1113,7 +1114,15 @@ function DashboardInner() {
     const color = s.profitable ? '{green-fg}' : '{white-fg}';
     const route = s.buyExchange ? `${s.buyExchange}→${s.sellExchange}` : '---';
     let status: string;
-    if (s.seedLabel && s.profitable) {
+    // Liquidator label wins when present (it's the next action that will
+    // unblock the seeder).
+    if (s.liqLabel && s.profitable && s.liqStatus && s.liqStatus.kind !== 'already-funded' && s.liqStatus.kind !== 'disabled') {
+      const k = s.liqStatus.kind;
+      const tag = k === 'liquidate' ? '{green-fg}'
+        : k === 'cooldown' ? '{yellow-fg}'
+        : '{white-fg}';
+      status = `${tag}${s.liqLabel}{/}`;
+    } else if (s.seedLabel && s.profitable) {
       const k = s.seedStatus?.kind;
       const tag = k === 'seed' ? '{green-fg}' // will execute now
         : k === 'inventory-ready' ? '{green-fg}' // ready to arb
