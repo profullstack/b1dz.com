@@ -37,6 +37,7 @@ import {
   http,
   parseAbi,
   tokenFor,
+  fromBaseUnits as fromEvmBaseUnits,
   type Address,
   type PublicClient,
 } from '@b1dz/adapters-evm';
@@ -45,11 +46,16 @@ import {
   DirectEvmWalletProvider,
   DirectSolanaWalletProvider,
 } from '@b1dz/wallet-direct';
-import { JupiterAdapter, SOLANA_MINTS } from '@b1dz/adapters-solana';
+import { JupiterAdapter, SOLANA_MINTS, fromBaseUnits as fromSolanaBaseUnits } from '@b1dz/adapters-solana';
 
 const ERC20_BALANCE_ABI = parseAbi([
   'function balanceOf(address owner) view returns (uint256)',
 ]);
+
+function dexTradePairs(): string[] {
+  const raw = process.env.DCA_DEX_TRADE_PAIRS ?? process.env.ARB_DEX_PAIRS ?? 'SOL-USD,BONK-USD,WIF-USD,JUP-USD,JTO-USD';
+  return [...new Set(raw.split(',').map((s) => s.trim()).filter(Boolean))];
+}
 
 function floatEnv(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -76,6 +82,13 @@ export async function maybeBuildDexTradeExecutor(): Promise<DexTradeExecutor | n
       if (venue === 'uniswap-v3') return uniswap?.usdcBalanceUsd() ?? null;
       if (venue === 'jupiter') return jupiter?.usdcBalanceUsd() ?? null;
       return null;
+    },
+
+    async openPositions() {
+      const out: Array<{ venue: string; pair: string; volume: number; entryPrice: number; entryTime: number; reason: string }> = [];
+      if (uniswap) out.push(...await uniswap.openPositions());
+      if (jupiter) out.push(...await jupiter.openPositions());
+      return out;
     },
 
     async buy(args) {
@@ -111,6 +124,7 @@ export async function maybeBuildDexTradeExecutor(): Promise<DexTradeExecutor | n
 
 interface VenueLeg {
   usdcBalanceUsd(): Promise<number>;
+  openPositions(): Promise<Array<{ venue: string; pair: string; volume: number; entryPrice: number; entryTime: number; reason: string }>>;
   buy(args: {
     pair: string;
     amountUsd: number;
@@ -160,6 +174,42 @@ async function maybeBuildUniswapLeg(): Promise<VenueLeg | null> {
         args: [walletAddress],
       })) as bigint;
       return Number(raw) / 10 ** usdc.decimals;
+    },
+
+    async openPositions() {
+      const out: Array<{ venue: string; pair: string; volume: number; entryPrice: number; entryTime: number; reason: string }> = [];
+      for (const pair of dexTradePairs()) {
+        const baseSymbol = pair.split('-')[0]?.toUpperCase();
+        if (!baseSymbol || baseSymbol === 'USDC' || baseSymbol === 'USDT' || baseSymbol === 'USD') continue;
+        const token = tokenFor('base', baseSymbol);
+        if (!token || token.address.toLowerCase() === usdc.address.toLowerCase()) continue;
+        try {
+          const raw = (await client.readContract({
+            address: token.address as Address,
+            abi: ERC20_BALANCE_ABI,
+            functionName: 'balanceOf',
+            args: [walletAddress],
+          })) as bigint;
+          if (raw <= 0n) continue;
+          const volume = Number.parseFloat(fromEvmBaseUnits(raw.toString(), token.decimals));
+          if (!Number.isFinite(volume) || volume <= 0) continue;
+          const quote = await adapter.quote({ pair, side: 'sell', amountIn: volume.toString(), chain: 'base' }).catch(() => null);
+          const quoteUsd = quote ? Number.parseFloat(quote.amountOut) : NaN;
+          const entryPrice = Number.isFinite(quoteUsd) && quoteUsd > 0 ? quoteUsd / volume : 0;
+          if (!(entryPrice > 0)) continue;
+          out.push({
+            venue: 'uniswap-v3',
+            pair,
+            volume,
+            entryPrice,
+            entryTime: Date.now(),
+            reason: 'wallet balance current-price restore',
+          });
+        } catch (e) {
+          console.warn(`[trade] uniswap-v3 holding lookup failed for ${pair}: ${(e as Error).message.slice(0, 120)}`);
+        }
+      }
+      return out;
     },
 
     async buy(args) {
@@ -269,6 +319,60 @@ function maybeBuildJupiterLeg(): VenueLeg | null {
         if (typeof amt === 'number' && Number.isFinite(amt)) total += amt;
       }
       return total;
+    },
+
+    async openPositions() {
+      const pubkey = await userPublicKey();
+      const pairs = dexTradePairs();
+      const out: Array<{ venue: string; pair: string; volume: number; entryPrice: number; entryTime: number; reason: string }> = [];
+      for (const pair of pairs) {
+        const baseSymbol = pair.split('-')[0]?.toUpperCase();
+        if (!baseSymbol || baseSymbol === 'USDC' || baseSymbol === 'USDT' || baseSymbol === 'USD') continue;
+        const mint = SOLANA_MINTS[baseSymbol];
+        if (!mint) continue;
+        try {
+          const res = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getTokenAccountsByOwner',
+              params: [pubkey, { mint: mint.mint }, { encoding: 'jsonParsed' }],
+            }),
+          });
+          if (!res.ok) throw new Error(`solana rpc ${res.status}`);
+          const body = (await res.json()) as {
+            result?: { value?: Array<{ account: { data: { parsed: { info: { tokenAmount: { amount?: string; uiAmount?: number } } } } } }> };
+            error?: { message: string };
+          };
+          if (body.error) throw new Error(body.error.message);
+          let volume = 0;
+          for (const acct of body.result?.value ?? []) {
+            const tokenAmount = acct.account?.data?.parsed?.info?.tokenAmount;
+            const uiAmount = typeof tokenAmount?.uiAmount === 'number'
+              ? tokenAmount.uiAmount
+              : Number.parseFloat(fromSolanaBaseUnits(tokenAmount?.amount ?? '0', mint.decimals));
+            if (Number.isFinite(uiAmount)) volume += uiAmount;
+          }
+          if (!(volume > 0)) continue;
+          const quote = await adapter.quote({ pair, side: 'sell', amountIn: volume.toString(), chain: 'solana' }).catch(() => null);
+          const quoteUsd = quote ? Number.parseFloat(quote.amountOut) : NaN;
+          const entryPrice = Number.isFinite(quoteUsd) && quoteUsd > 0 ? quoteUsd / volume : 0;
+          if (!(entryPrice > 0)) continue;
+          out.push({
+            venue: 'jupiter',
+            pair,
+            volume,
+            entryPrice,
+            entryTime: Date.now(),
+            reason: 'wallet balance current-price restore',
+          });
+        } catch (e) {
+          console.warn(`[trade] jupiter holding lookup failed for ${pair}: ${(e as Error).message.slice(0, 120)}`);
+        }
+      }
+      return out;
     },
 
     async buy(args) {

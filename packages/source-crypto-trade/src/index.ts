@@ -295,6 +295,54 @@ const KRAKEN_BASE_ALIASES: Record<string, string[]> = {
   SOL: ['XSOL', 'SOL'],
 };
 
+interface NormalizedFill {
+  side: 'buy' | 'sell';
+  pair: string;
+  price: number;
+  volume: number;
+  time: number;
+}
+
+interface ReconstructedEntry {
+  entryPrice: number;
+  entryTime: number;
+  matchedVolume: number;
+}
+
+function reconstructEntryFromFills(holding: { amount: number }, fills: NormalizedFill[]): ReconstructedEntry | null {
+  const sorted = fills
+    .filter((fill) => Number.isFinite(fill.price) && fill.price > 0 && Number.isFinite(fill.volume) && fill.volume > 0)
+    .sort((a, b) => b.time - a.time);
+  let remaining = holding.amount;
+  let matchedVolume = 0;
+  let matchedCost = 0;
+  let entryTime = 0;
+
+  for (const fill of sorted) {
+    if (remaining <= 1e-12) break;
+    if (fill.side !== 'buy') continue;
+    const matched = Math.min(remaining, fill.volume);
+    remaining -= matched;
+    matchedVolume += matched;
+    matchedCost += matched * fill.price;
+    entryTime = entryTime === 0 ? fill.time : Math.min(entryTime, fill.time);
+  }
+
+  if (!(matchedVolume > 0) || !(matchedCost > 0)) return null;
+  return {
+    entryPrice: matchedCost / matchedVolume,
+    entryTime: entryTime || Date.now(),
+    matchedVolume,
+  };
+}
+
+export function __reconstructEntryFromFillsForTests(
+  holding: { amount: number },
+  fills: NormalizedFill[],
+): ReconstructedEntry | null {
+  return reconstructEntryFromFills(holding, fills);
+}
+
 function restorePosition(
   exchange: string,
   pair: string,
@@ -340,6 +388,13 @@ function krakenPairForAsset(asset: string): string {
   return KRAKEN_ASSET_TO_PAIR[asset] ?? `${asset}-USD`;
 }
 
+function krakenTradeMatchesAsset(tradePair: string, base: string, holdingAsset: string): boolean {
+  const normalizedTradePair = tradePair.toUpperCase();
+  const aliases = new Set([base.toUpperCase(), holdingAsset.toUpperCase(), ...(KRAKEN_BASE_ALIASES[base] ?? []).map((alias) => alias.toUpperCase())]);
+  const hasBase = [...aliases].some((alias) => normalizedTradePair.includes(alias));
+  return hasBase && (normalizedTradePair.includes('USD') || normalizedTradePair.includes('ZUSD'));
+}
+
 function quoteAssetForPair(pair: string): string {
   return pair.split('-')[1]?.toUpperCase() ?? 'USD';
 }
@@ -371,6 +426,14 @@ function currentLiquidationOnExchange(exchange: string): PendingLiquidation | nu
   return null;
 }
 
+function isMinimumOrderSizeError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('below minqty')
+    || normalized.includes('min_notional')
+    || normalized.includes('min notional')
+    || normalized.includes('below minimum');
+}
+
 function normalizeKrakenAsset(asset: string): string {
   if (asset === 'ZUSD') return 'USD';
   if (asset === 'XXBT' || asset === 'XBT') return 'BTC';
@@ -394,6 +457,50 @@ function usdPriceForAsset(exchange: string, asset: string): number {
   const normalized = normalizeAssetSymbol(exchange, asset);
   if (STABLES.has(asset) || STABLES.has(normalized)) return 1;
   return latestUsdBidForPair(`${normalized}-USD`, exchange);
+}
+
+async function currentBidFallback(exchange: string, pair: string): Promise<number> {
+  const cached = latestUsdBidForPair(pair, exchange);
+  if (cached > 0) return cached;
+  const feed = TRADE_FEEDS.find((item) => item.exchange === exchange)?.feed;
+  if (!feed) return 0;
+  const snapshot = await feed.snapshot(pair).catch(() => null);
+  const bid = snapshot?.bid ?? 0;
+  return Number.isFinite(bid) && bid > 0 ? bid : 0;
+}
+
+async function restoreOrMarkUntrackedHolding(args: {
+  exchange: string;
+  pair: string;
+  volume: number;
+  entry: ReconstructedEntry | null;
+  missingReason: string;
+}): Promise<void> {
+  const existing = openPositions.get(`${args.exchange}:${args.pair}`);
+  if (existing) return;
+
+  if (args.entry) {
+    const coverage = args.entry.matchedVolume / args.volume;
+    restorePosition(
+      args.exchange,
+      args.pair,
+      args.volume,
+      args.entry.entryPrice,
+      args.entry.entryTime,
+      coverage >= 0.98 ? 'weighted purchase history' : `partial weighted purchase history ${(coverage * 100).toFixed(0)}%`,
+    );
+    return;
+  }
+
+  const markPrice = await currentBidFallback(args.exchange, args.pair);
+  if (markPrice > 0) {
+    console.log(`[trade] holding ${args.exchange}:${args.pair}=${args.volume} — ${args.missingReason}; restoring at current bid $${markPrice.toFixed(6)} as entry (PnL resets)`);
+    restorePosition(args.exchange, args.pair, args.volume, markPrice, Date.now(), `current price fallback — ${args.missingReason}`);
+    return;
+  }
+
+  console.log(`[trade] holding ${args.exchange}:${args.pair}=${args.volume} — ${args.missingReason}; queued for liquidation`);
+  rememberLiquidation(args.exchange, args.pair, args.volume, args.missingReason);
 }
 
 function estimateTotalEquityUsd(): number {
@@ -1073,19 +1180,31 @@ async function hydrateKrakenPositions(): Promise<void> {
   for (const holding of holdings) {
     const pair = krakenPairForAsset(holding.asset);
     const base = pair.replace('-USD', '');
-    const buyTrade = trades.find((trade) => {
-      if (trade.type !== 'buy') return false;
-      const tradePair = trade.pair.toUpperCase();
-      return tradePair.includes(base.toUpperCase()) && tradePair.includes('USD');
+    const fills = trades
+      .filter((trade) => {
+        return krakenTradeMatchesAsset(trade.pair, base, holding.asset);
+      })
+      .map((trade): NormalizedFill | null => {
+        if (!krakenTradeMatchesAsset(trade.pair, base, holding.asset)) return null;
+        const price = parseFloat(trade.price);
+        const volume = parseFloat(trade.vol);
+        if (!Number.isFinite(price) || !Number.isFinite(volume)) return null;
+        return {
+          side: trade.type === 'buy' ? 'buy' : 'sell',
+          pair,
+          price,
+          volume,
+          time: trade.time * 1000,
+        };
+      })
+      .filter((fill): fill is NormalizedFill => !!fill);
+    await restoreOrMarkUntrackedHolding({
+      exchange: 'kraken',
+      pair,
+      volume: holding.amount,
+      entry: reconstructEntryFromFills(holding, fills),
+      missingReason: 'no buy trade found',
     });
-    if (!buyTrade) {
-      console.log(`[trade] holding kraken:${pair}=${holding.amount} but no buy trade found in history`);
-      rememberLiquidation('kraken', pair, holding.amount, 'no buy trade found');
-      continue;
-    }
-    const entryPrice = parseFloat(buyTrade.price);
-    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
-    restorePosition('kraken', pair, holding.amount, entryPrice, buyTrade.time * 1000, 'from trade history');
   }
 
   if (trades.length > 0) {
@@ -1103,15 +1222,29 @@ async function hydrateCoinbasePositions(): Promise<void> {
 
   for (const holding of holdings) {
     const pair = `${holding.asset}-USD`;
-    const buyFill = fills.find((fill) => fill.side.toUpperCase() === 'BUY' && fill.product_id === pair);
-    if (!buyFill) {
-      console.log(`[trade] holding coinbase:${pair}=${holding.amount} but no buy fill found in history`);
-      rememberLiquidation('coinbase', pair, holding.amount, 'no buy fill found');
-      continue;
-    }
-    const entryPrice = parseFloat(buyFill.price);
-    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
-    restorePosition('coinbase', pair, holding.amount, entryPrice, Date.parse(buyFill.trade_time), 'from fill history');
+    const coinbaseFills = fills
+      .filter((fill) => fill.product_id === pair)
+      .map((fill): NormalizedFill | null => {
+        const price = parseFloat(fill.price);
+        const volume = parseFloat(fill.size);
+        const time = Date.parse(fill.trade_time);
+        if (!Number.isFinite(price) || !Number.isFinite(volume) || !Number.isFinite(time)) return null;
+        return {
+          side: fill.side.toUpperCase() === 'BUY' ? 'buy' : 'sell',
+          pair,
+          price,
+          volume,
+          time,
+        };
+      })
+      .filter((fill): fill is NormalizedFill => !!fill);
+    await restoreOrMarkUntrackedHolding({
+      exchange: 'coinbase',
+      pair,
+      volume: holding.amount,
+      entry: reconstructEntryFromFills(holding, coinbaseFills),
+      missingReason: 'no buy fill found',
+    });
   }
 }
 
@@ -1126,15 +1259,27 @@ async function hydrateBinancePositions(): Promise<void> {
     const pair = `${holding.asset}-USD`;
     const symbol = pair.replace('-', '');
     const trades = (await getBinanceTrades(symbol, 1000)).sort((a, b) => b.time - a.time);
-    const buyTrade = trades.find((trade) => trade.isBuyer);
-    if (!buyTrade) {
-      console.log(`[trade] holding binance-us:${pair}=${holding.amount} but no buy trade found in history`);
-      rememberLiquidation('binance-us', pair, holding.amount, 'no buy trade found');
-      continue;
-    }
-    const entryPrice = parseFloat(buyTrade.price);
-    if (!isFinite(entryPrice) || entryPrice <= 0) continue;
-    restorePosition('binance-us', pair, holding.amount, entryPrice, buyTrade.time, 'from trade history');
+    const fills = trades
+      .map((trade): NormalizedFill | null => {
+        const price = parseFloat(trade.price);
+        const volume = parseFloat(trade.qty);
+        if (!Number.isFinite(price) || !Number.isFinite(volume)) return null;
+        return {
+          side: trade.isBuyer ? 'buy' : 'sell',
+          pair,
+          price,
+          volume,
+          time: trade.time,
+        };
+      })
+      .filter((fill): fill is NormalizedFill => !!fill);
+    await restoreOrMarkUntrackedHolding({
+      exchange: 'binance-us',
+      pair,
+      volume: holding.amount,
+      entry: reconstructEntryFromFills(holding, fills),
+      missingReason: 'no buy trade found',
+    });
   }
 }
 
@@ -1180,14 +1325,25 @@ async function hydrateGeminiPositions(): Promise<void> {
   for (const holding of holdings) {
     const pair = `${holding.asset}-USD`;
     const symbolMatch = `${holding.asset}USD`.toLowerCase();
-    const buyTrade = allTrades.find(
-      (t) => (t.symbol ?? '').toLowerCase() === symbolMatch && t.side === 'Buy',
-    );
-    if (buyTrade) {
-      const entryPrice = parseFloat(buyTrade.price);
-      if (!isFinite(entryPrice) || entryPrice <= 0) continue;
-      log(`restoring ${pair}=${holding.amount} @ $${entryPrice} (mytrades)`);
-      restorePosition('gemini', pair, holding.amount, entryPrice, buyTrade.timestampms, 'from trade history');
+    const fills = allTrades
+      .filter((trade) => (trade.symbol ?? '').toLowerCase() === symbolMatch)
+      .map((trade): NormalizedFill | null => {
+        const price = parseFloat(trade.price);
+        const volume = parseFloat((trade as { amount?: string }).amount ?? '0');
+        if (!Number.isFinite(price) || !Number.isFinite(volume)) return null;
+        return {
+          side: trade.side === 'Buy' ? 'buy' : 'sell',
+          pair,
+          price,
+          volume,
+          time: trade.timestampms,
+        };
+      })
+      .filter((fill): fill is NormalizedFill => !!fill);
+    const entry = reconstructEntryFromFills(holding, fills);
+    if (entry) {
+      log(`restoring ${pair}=${holding.amount} @ $${entry.entryPrice} (mytrades)`);
+      restorePosition('gemini', pair, holding.amount, entry.entryPrice, entry.entryTime, 'weighted purchase history');
       continue;
     }
 
@@ -1197,34 +1353,45 @@ async function hydrateGeminiPositions(): Promise<void> {
     // tracked and the normal exit rules apply. PnL starts at 0 — we
     // lose the historical cost basis, but the alternative is leaving
     // the holding untracked forever.
-    const snapshot = await geminiFeed.snapshot(pair).catch(() => null);
-    const markPrice = snapshot?.bid;
-    if (!markPrice || !(markPrice > 0)) {
-      log(`${pair}=${holding.amount} — no buy trade, no bid — queued for liquidation`);
-      console.log(`[trade] holding gemini:${pair}=${holding.amount} — no buy trade AND no current bid; queued for liquidation`);
-      rememberLiquidation('gemini', pair, holding.amount, 'no buy trade, no bid');
-      continue;
-    }
-    log(`restoring ${pair}=${holding.amount} @ current bid $${markPrice.toFixed(2)} (fallback)`);
-    console.log(`[trade] holding gemini:${pair}=${holding.amount} — no buy trade in mytrades; restoring at current bid $${markPrice.toFixed(2)} as entry (PnL resets)`);
-    restorePosition('gemini', pair, holding.amount, markPrice, Date.now(), 'current price fallback — no mytrades entry');
+    log(`${pair}=${holding.amount} — no buy trade; using shared fallback`);
+    await restoreOrMarkUntrackedHolding({
+      exchange: 'gemini',
+      pair,
+      volume: holding.amount,
+      entry: null,
+      missingReason: 'no buy trade in mytrades',
+    });
   }
   log(`done — openPositions now has ${openPositions.size} entries`);
+}
+
+async function hydrateDexPositions(): Promise<void> {
+  if (!dexExecutor?.openPositions) return;
+  const positions = await dexExecutor.openPositions();
+  if (positions.length === 0) return;
+  console.log(`[trade] found ${positions.length} DEX wallet holdings`);
+  for (const pos of positions) {
+    if (!(pos.volume > 0) || !(pos.entryPrice > 0)) continue;
+    if (openPositions.has(`${pos.venue}:${pos.pair}`)) continue;
+    restorePosition(pos.venue, pos.pair, pos.volume, pos.entryPrice, pos.entryTime, pos.reason);
+  }
 }
 
 /**
  * Reconstruct positions from exchange data (source of truth).
  */
 async function hydrateFromExchange() {
-  const EXPECTED_HYDRATIONS = 4;
-  if (hydratedExchanges.size === EXPECTED_HYDRATIONS) return;
-
   const steps: Array<{ exchange: string; fn: () => Promise<void> }> = [
     { exchange: 'kraken', fn: hydrateKrakenPositions },
     { exchange: 'coinbase', fn: hydrateCoinbasePositions },
     { exchange: 'binance-us', fn: hydrateBinancePositions },
     { exchange: 'gemini', fn: hydrateGeminiPositions },
   ];
+  if (dexExecutor?.openPositions) {
+    steps.push({ exchange: 'dex', fn: hydrateDexPositions });
+  }
+
+  if (steps.every((step) => hydratedExchanges.has(step.exchange))) return;
 
   for (const step of steps) {
     if (hydratedExchanges.has(step.exchange)) continue;
@@ -1423,6 +1590,19 @@ export interface DexTradeExecutor {
    *  null when the executor doesn't manage that venue (so callers fall
    *  back to the env budget). */
   quoteBalanceUsd(venue: string): Promise<number | null>;
+  /** Reconstruct open wallet positions for a DEX venue after daemon restart.
+   *  Implementations should return wallet balances with a best-available
+   *  purchase price when the chain or aggregator exposes enough history.
+   *  Returning current mark as entry is acceptable as a last resort; it
+   *  prevents unmanaged inventory from sitting outside exit rules. */
+  openPositions?(): Promise<Array<{
+    venue: string;
+    pair: string;
+    volume: number;
+    entryPrice: number;
+    entryTime: number;
+    reason: string;
+  }>>;
   /** Market-buy `amountUsd` worth of the base asset. Returns the fill
    *  price and base-token volume received, so position tracking can
    *  record accurate entry state. */
@@ -1481,6 +1661,8 @@ export interface TradeStatus {
   exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
   tradingOverride: boolean | null;
+  dexExecutionEnabled: boolean;
+  dexExecutorArmed: boolean;
 }
 
 export function getTradeStatus(): TradeStatus {
@@ -1550,6 +1732,8 @@ export function getTradeStatus(): TradeStatus {
     exchangeStates,
     lastSignal: null,
     tradingOverride,
+    dexExecutionEnabled: (process.env.DEX_TRADE_EXECUTION ?? '').toLowerCase() === 'true',
+    dexExecutorArmed: dexExecutor !== null,
   };
 }
 
@@ -1857,6 +2041,13 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // ── Liquidate untracked holdings before opening a fresh position ──
       const liquidation = pendingLiquidations.get(posKey);
       if (liquidation && !currentPositionOnExchange(item.exchange)) {
+        const notional = item.snap.bid * liquidation.volume;
+        const minExecutableUsd = minExecutableUsdByMarket.get(`${item.exchange}:${item.pair}`) ?? 0;
+        if (notional < DUST_USD_THRESHOLD || (minExecutableUsd > 0 && notional < minExecutableUsd)) {
+          pendingLiquidations.delete(posKey);
+          console.log(`[trade] CLEAR DUST LIQUIDATION ${item.exchange}:${item.pair} value=$${notional.toFixed(2)} min=$${minExecutableUsd.toFixed(2)}`);
+          return null;
+        }
         attemptedExchangeActions.add(item.exchange);
         console.log(`[trade] LIQUIDATE ${item.exchange}:${item.pair} untracked volume=${liquidation.volume.toFixed(8)}`);
         return publishLiquidationSignal({
@@ -2048,7 +2239,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             return { ok: true, message: `liquidated ${sellVolume.toFixed(8)} on ${exchange}` };
           } catch (e) {
             const msg = (e as Error).message;
-            if (msg.includes('below minQty') || msg.includes('MIN_NOTIONAL')) {
+            if (isMinimumOrderSizeError(msg)) {
               pendingLiquidations.delete(liquidationKey);
             }
             console.error(`[trade] LIQUIDATION FAILED ${exchange}: ${msg}`);
@@ -2111,7 +2302,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           return { ok: true, message: `sold ${sellVolume.toFixed(8)} on ${exchange} net=$${netPnl.toFixed(4)}` };
         } catch (e) {
           const msg = (e as Error).message;
-          if (msg.includes('below minQty') || msg.includes('MIN_NOTIONAL')) {
+          if (isMinimumOrderSizeError(msg)) {
             clearTrackedPosition(posKey, exchange);
           }
           console.error(`[trade] SELL FAILED ${exchange}: ${msg}`);

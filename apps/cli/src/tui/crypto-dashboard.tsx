@@ -112,6 +112,8 @@ interface TradeStatusData {
   ticksPerPair: Record<string, number>;
   exchangeStates: { exchange: string; readyPairs: number; warmingPairs: number; openPositions: number; blockedReason: string | null }[];
   lastSignal: string | null;
+  dexExecutionEnabled?: boolean;
+  dexExecutorArmed?: boolean;
 }
 
 interface TradeState {
@@ -1126,6 +1128,12 @@ function DashboardInner() {
   } else {
     sigLines.push(` Strategies: {cyan-fg}composite{/} (scalp + multi-signal)`);
     sigLines.push(` Pairs: {white-fg}${eligiblePairs}{/} eligible  {white-fg}${observedPairs}{/} observed`);
+    const dexState = typeof ts.dexExecutionEnabled === 'boolean'
+      ? (ts.dexExecutionEnabled
+          ? (ts.dexExecutorArmed ? '{green-fg}armed{/}' : '{red-fg}not armed{/}')
+          : '{yellow-fg}disabled{/}')
+      : '{yellow-fg}unknown{/}';
+    sigLines.push(` DEX: ${dexState}`);
     const pairEntries = Object.entries(ts.ticksPerPair).sort((a, b) => b[1] - a[1]).slice(0, 3);
     if (pairEntries.length > 0) {
       const warmupSummary = pairEntries
