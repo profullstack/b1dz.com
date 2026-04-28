@@ -24,12 +24,25 @@ export interface StatusFreshnessInput {
   realizedPnlPct: number;
   /** Total fees today (USD). Ignored when dataLoading. */
   totalFees: number;
+  /** Sum of live PnL across all open positions (USD). Optional — when
+   *  absent or exactly 0 (no open positions), the "open:" badge is omitted
+   *  so the top bar stays clean. */
+  unrealizedPnl?: number;
+  /** Unrealized PnL as % of the open-position notional. Optional. */
+  unrealizedPnlPct?: number;
+  /** Whether at least one position is currently open. If false, the
+   *  "open:" chunk is suppressed regardless of unrealizedPnl value. */
+  hasOpenPositions?: boolean;
 }
 
 export interface StatusFreshnessOutput {
   pnlStr: string;
   pnlPctStr: string;
   feesStr: string;
+  /** Unrealized PnL chunk ("  open:+$4.20 (+0.8%)") or '' when no
+   *  positions / no data. Pre-formatted with its own leading spaces so the
+   *  caller can concat directly. */
+  unrealizedStr: string;
   /** Leading double-space is baked in so the caller can concat with "". */
   freshnessStr: string;
   /** Integer seconds since lastTickMs, clamped to 0. 0 when loading/unknown. */
@@ -61,11 +74,29 @@ export function computeStatusFreshness(input: StatusFreshnessInput): StatusFresh
 
   const feesStr = dataLoading ? '—' : `$${totalFees.toFixed(2)}`;
 
+  // Unrealized PnL chunk: only rendered when the daemon reports at least one
+  // open position. Marks-to-market every tick so losing positions tick red
+  // and winning positions tick green in realtime without waiting for a close.
+  const unrealizedPnl = typeof input.unrealizedPnl === 'number' && Number.isFinite(input.unrealizedPnl) ? input.unrealizedPnl : 0;
+  const unrealizedPnlPct = typeof input.unrealizedPnlPct === 'number' && Number.isFinite(input.unrealizedPnlPct) ? input.unrealizedPnlPct : 0;
+  const showUnrealized = !dataLoading && (input.hasOpenPositions === true);
+  const unrealizedStr = showUnrealized
+    ? (() => {
+        const color = unrealizedPnl >= 0 ? '{green-fg}' : '{red-fg}';
+        const sign = unrealizedPnl >= 0 ? '+' : '';
+        const pctSign = unrealizedPnlPct >= 0 ? '+' : '';
+        const pctPart = Number.isFinite(unrealizedPnlPct) && Math.abs(unrealizedPnlPct) > 0.005
+          ? ` ${color}(${pctSign}${unrealizedPnlPct.toFixed(2)}%){/}`
+          : '';
+        return `  open:${color}${sign}$${unrealizedPnl.toFixed(2)}{/}${pctPart}`;
+      })()
+    : '';
+
   const freshnessStr = dataLoading
     ? `  {black-fg}{white-bg} loading… {/}`
     : isStale
       ? `  {black-fg}{yellow-bg} stale ${staleSec}s {/}`
       : '';
 
-  return { pnlStr, pnlPctStr, feesStr, freshnessStr, staleSec, isStale };
+  return { pnlStr, pnlPctStr, feesStr, unrealizedStr, freshnessStr, staleSec, isStale };
 }

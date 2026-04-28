@@ -1,6 +1,6 @@
 {
   "name": "b1dz",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.0.0",

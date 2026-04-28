@@ -772,13 +772,37 @@ function DashboardInner() {
     ? new Date(tradeState.daemon.lastTickAt).getTime()
     : null;
   const tradeDataLoading = tradeState == null || ts == null;
-  const { pnlStr, pnlPctStr, feesStr, freshnessStr } = computeStatusFreshness({
+
+  // Unrealized PnL: sum pnlUsd across all daemon-tracked open positions.
+  // The daemon recomputes pnlUsd every tick (5s cadence) by marking each
+  // position to the latest bid — so the top bar moves in near-realtime
+  // without waiting for trades to close. Only positions with a real entry
+  // price (entryPrice > 0) contribute; phantom rows with 0 entry — if any
+  // ever slip through — are excluded to avoid garbage in the total.
+  let unrealizedPnlSum = 0;
+  let unrealizedNotional = 0;
+  let unrealizedCount = 0;
+  for (const pos of positions) {
+    const entry = typeof pos.entryPrice === 'number' && Number.isFinite(pos.entryPrice) ? pos.entryPrice : 0;
+    const pnl = typeof pos.pnlUsd === 'number' && Number.isFinite(pos.pnlUsd) ? pos.pnlUsd : 0;
+    const vol = typeof pos.volume === 'number' && Number.isFinite(pos.volume) ? pos.volume : 0;
+    if (entry <= 0 || vol <= 0) continue;
+    unrealizedPnlSum += pnl;
+    unrealizedNotional += entry * vol;
+    unrealizedCount += 1;
+  }
+  const unrealizedPnlPct = unrealizedNotional > 0 ? (unrealizedPnlSum / unrealizedNotional) * 100 : 0;
+
+  const { pnlStr, pnlPctStr, feesStr, unrealizedStr, freshnessStr } = computeStatusFreshness({
     dataLoading: tradeDataLoading,
     lastTickMs: tradeLastTickMs,
     nowMs,
     realizedPnl,
     realizedPnlPct,
     totalFees,
+    unrealizedPnl: unrealizedPnlSum,
+    unrealizedPnlPct,
+    hasOpenPositions: unrealizedCount > 0,
   });
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   // Show the daemon-authoritative value in the badge (that's what's actually
@@ -808,7 +832,7 @@ function DashboardInner() {
     });
   };
 
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}${pnlPctStr}${haltStr}${tradingStr}  fees:${feesStr}${freshnessStr}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}${pnlPctStr}${unrealizedStr}${haltStr}${tradingStr}  fees:${feesStr}${freshnessStr}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
     ...visiblePositions.map((pos) => pos.pair),

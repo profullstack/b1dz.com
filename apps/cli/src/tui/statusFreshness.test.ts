@@ -77,6 +77,121 @@ describe('computeStatusFreshness — fresh payload', () => {
   });
 });
 
+describe('computeStatusFreshness — unrealized PnL', () => {
+  const now = 1_700_000_000_000;
+  const freshBase = {
+    dataLoading: false,
+    lastTickMs: now - 1000,
+    nowMs: now,
+    realizedPnl: 0,
+    realizedPnlPct: 0,
+    totalFees: 0,
+  };
+
+  it('omits the "open:" chunk when no positions are open', () => {
+    const out = computeStatusFreshness({
+      ...freshBase,
+      unrealizedPnl: 0,
+      unrealizedPnlPct: 0,
+      hasOpenPositions: false,
+    });
+    expect(out.unrealizedStr).toBe('');
+  });
+
+  it('omits the "open:" chunk when hasOpenPositions is undefined', () => {
+    // Defensive: callers that haven't migrated to the new API yet must
+    // not accidentally render a bogus "open:$0.00" label.
+    const out = computeStatusFreshness({
+      ...freshBase,
+      unrealizedPnl: 5, // non-zero but missing the flag
+    });
+    expect(out.unrealizedStr).toBe('');
+  });
+
+  it('omits the chunk while data is loading, even with open positions', () => {
+    const out = computeStatusFreshness({
+      ...freshBase,
+      dataLoading: true,
+      unrealizedPnl: 10,
+      unrealizedPnlPct: 2,
+      hasOpenPositions: true,
+    });
+    expect(out.unrealizedStr).toBe('');
+  });
+
+  it('renders positive unrealized PnL in green with a leading +', () => {
+    const out = computeStatusFreshness({
+      ...freshBase,
+      unrealizedPnl: 4.20,
+      unrealizedPnlPct: 0.8,
+      hasOpenPositions: true,
+    });
+    expect(out.unrealizedStr).toContain('open:');
+    expect(out.unrealizedStr).toContain('+$4.20');
+    expect(out.unrealizedStr).toContain('{green-fg}');
+    expect(out.unrealizedStr).toContain('+0.80%');
+  });
+
+  it('renders negative unrealized PnL in red with no "+" prefix', () => {
+    const out = computeStatusFreshness({
+      ...freshBase,
+      unrealizedPnl: -2.75,
+      unrealizedPnlPct: -1.1,
+      hasOpenPositions: true,
+    });
+    expect(out.unrealizedStr).toContain('{red-fg}');
+    expect(out.unrealizedStr).toContain('-2.75');
+    expect(out.unrealizedStr).toContain('-1.10%');
+    expect(out.unrealizedStr).not.toContain('+$');
+  });
+
+  it('suppresses the % badge when the percentage is essentially zero', () => {
+    // Position open but mark-price barely moved — showing "(+0.00%)" is
+    // noise; $ delta alone is clearer.
+    const out = computeStatusFreshness({
+      ...freshBase,
+      unrealizedPnl: 0.01,
+      unrealizedPnlPct: 0.001,
+      hasOpenPositions: true,
+    });
+    expect(out.unrealizedStr).toContain('$0.01');
+    expect(out.unrealizedStr).not.toContain('%');
+  });
+
+  it('treats a NaN unrealizedPnl as 0 (defensive against garbage input)', () => {
+    const out = computeStatusFreshness({
+      ...freshBase,
+      unrealizedPnl: Number.NaN,
+      unrealizedPnlPct: Number.NaN,
+      hasOpenPositions: true,
+    });
+    // Chunk still renders (positions ARE open) but with $0.00 rather than NaN.
+    expect(out.unrealizedStr).toContain('open:');
+    expect(out.unrealizedStr).toContain('$0.00');
+    expect(out.unrealizedStr).not.toContain('NaN');
+  });
+
+  it('keeps the unrealized chunk even when realized PnL is also rendered', () => {
+    const out = computeStatusFreshness({
+      dataLoading: false,
+      lastTickMs: now - 500,
+      nowMs: now,
+      realizedPnl: 10,
+      realizedPnlPct: 2,
+      totalFees: 0.5,
+      unrealizedPnl: -3,
+      unrealizedPnlPct: -0.5,
+      hasOpenPositions: true,
+    });
+    expect(out.pnlStr).toContain('+$10.00');
+    expect(out.unrealizedStr).toContain('open:');
+    expect(out.unrealizedStr).toContain('-3.00');
+    // Two independent colorings — realized stays green, unrealized goes red.
+    expect(out.pnlStr).toContain('{green-fg}');
+    expect(out.unrealizedStr).toContain('{red-fg}');
+  });
+});
+
 describe('computeStatusFreshness — stale payload', () => {
   it('does not badge stale at exactly the threshold (strictly greater than)', () => {
     const now = 1_700_000_000_000;
