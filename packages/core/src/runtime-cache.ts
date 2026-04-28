@@ -9,11 +9,14 @@ const REDIS_PREFIX = process.env.B1DZ_RUNTIME_CACHE_PREFIX || 'b1dz:runtime-cach
 const ANALYSIS_CACHE_PREFIX = process.env.B1DZ_ANALYSIS_CACHE_PREFIX || 'b1dz:analysis-cache';
 const SOURCE_STATE_TTL_MS = 2 * 60_000;
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60_000;
+// Persisted source_state fallback should still carry the tiny status-bar
+// fields (`daemon`, `tradeStatus`). If the runtime cache is unavailable in a
+// separate process/container, the TUI can still show last flushed PnL/freshness
+// instead of sitting on `loading…` forever. Strip only the fat/noisy live fields.
 const LIVE_SOURCE_STATE_FIELDS = new Set([
   'activityLog',
   'binanceBalance',
   'coinbaseBalance',
-  'daemon',
   'openOrders',
   'opportunities',
   'prices',
@@ -22,7 +25,6 @@ const LIVE_SOURCE_STATE_FIELDS = new Set([
   'signals',
   'spreads',
   'tradeState',
-  'tradeStatus',
   'krakenBalance',
 ]);
 
