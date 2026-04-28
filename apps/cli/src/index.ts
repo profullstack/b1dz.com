@@ -15,6 +15,7 @@
  */
 
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadRootEnv, Runner, AlertBus, type Source, type Storage, getB1dzVersion } from '@b1dz/core';
 loadRootEnv();
@@ -89,6 +90,7 @@ At a glance:
   Spread/edge audit:  b1dz audit-arb
   Live quotes:        b1dz observe        (CEX + DEX multi-venue)
   Arb daemon:         b1dz arb-daemon     (observer + paper/live)
+  Daemon control:     b1dz status | restart
   Discovery:          b1dz pumpfun discover
   Headless sources:   b1dz crypto-arb run | crypto-trade run | all
   Alert stream:       b1dz alerts
@@ -102,6 +104,10 @@ Auth:
 Dashboard:
   b1dz tui                 live crypto dashboard (production API)
   b1dz tui --dev           live crypto dashboard (local API)
+
+Daemon:
+  b1dz status              show b1dzd status (user systemd, then system-wide)
+  b1dz restart             restart b1dzd via systemd
 
 Backtest:
   b1dz backtest <tf>                       backtest on all active pairs
@@ -164,9 +170,102 @@ Sources:
   Available sources: crypto-arb, crypto-trade, all
 
 Other:
+  b1dz status           show daemon status
+  b1dz restart          restart daemon
   b1dz alerts           tail the alert bus
   b1dz help             this message
 `);
+}
+
+type DaemonManager = {
+  label: string;
+  prefix: string[];
+  needsSudoForRestart: boolean;
+};
+
+function systemctl(args: string[]) {
+  return spawnSync('systemctl', args, { encoding: 'utf8' });
+}
+
+function commandExists(command: string): boolean {
+  const result = spawnSync(command, ['--version'], { encoding: 'utf8' });
+  return result.error == null && result.status === 0;
+}
+
+function findDaemonManager(): DaemonManager | null {
+  const candidates: DaemonManager[] = [
+    { label: 'user systemd', prefix: ['--user'], needsSudoForRestart: false },
+    { label: 'system systemd', prefix: [], needsSudoForRestart: typeof process.getuid === 'function' && process.getuid() !== 0 },
+  ];
+
+  for (const candidate of candidates) {
+    const load = systemctl([...candidate.prefix, 'show', 'b1dzd', '--property=LoadState', '--value']);
+    if (load.status === 0 && load.stdout.trim() === 'loaded') return candidate;
+  }
+  return null;
+}
+
+function printDaemonFallback(): void {
+  console.error('b1dzd is not installed as a systemd unit on this machine.');
+  console.error('Run it in a terminal with:');
+  console.error('  pnpm --filter @b1dz/daemon dev');
+  console.error('Or install the user service from apps/daemon/README.md:');
+  console.error('  mkdir -p ~/.config/systemd/user');
+  console.error('  sed "s/%i/$USER/g" apps/daemon/systemd/b1dzd.service > ~/.config/systemd/user/b1dzd.service');
+  console.error('  systemctl --user daemon-reload');
+  console.error('  systemctl --user enable --now b1dzd');
+}
+
+function runDaemonStatus(): never {
+  if (!commandExists('systemctl')) {
+    console.error('systemctl is not available on this machine.');
+    printDaemonFallback();
+    process.exit(1);
+  }
+
+  const manager = findDaemonManager();
+  if (!manager) {
+    const pgrep = spawnSync('pgrep', ['-af', 'b1dzd|apps/daemon/src/index|@b1dz/daemon'], { encoding: 'utf8' });
+    if (pgrep.status === 0 && pgrep.stdout.trim()) {
+      console.log('b1dzd appears to be running outside systemd:');
+      console.log(pgrep.stdout.trim());
+      process.exit(0);
+    }
+    printDaemonFallback();
+    process.exit(1);
+  }
+
+  console.log(`b1dzd manager: ${manager.label}`);
+  const status = spawnSync('systemctl', [...manager.prefix, 'status', 'b1dzd', '--no-pager'], { stdio: 'inherit' });
+  process.exit(status.status ?? 1);
+}
+
+function runDaemonRestart(): never {
+  if (!commandExists('systemctl')) {
+    console.error('systemctl is not available on this machine.');
+    printDaemonFallback();
+    process.exit(1);
+  }
+
+  const manager = findDaemonManager();
+  if (!manager) {
+    printDaemonFallback();
+    process.exit(1);
+  }
+
+  const command = manager.needsSudoForRestart ? 'sudo' : 'systemctl';
+  const args = manager.needsSudoForRestart
+    ? ['systemctl', ...manager.prefix, 'restart', 'b1dzd']
+    : [...manager.prefix, 'restart', 'b1dzd'];
+
+  console.log(`Restarting b1dzd via ${manager.label}...`);
+  const restart = spawnSync(command, args, { stdio: 'inherit' });
+  if ((restart.status ?? 1) !== 0) process.exit(restart.status ?? 1);
+
+  const statusCommand = manager.needsSudoForRestart ? 'systemctl' : command;
+  const statusArgs = [...manager.prefix, 'status', 'b1dzd', '--no-pager'];
+  const status = spawnSync(statusCommand, statusArgs, { stdio: 'inherit' });
+  process.exit(status.status ?? 0);
 }
 
 function requireAuth() {
@@ -212,6 +311,8 @@ if (source === 'signup') { await signup(); process.exit(0); }
 if (source === 'login') { await login(); process.exit(0); }
 if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
+if (source === 'status') runDaemonStatus();
+if (source === 'restart') runDaemonRestart();
 
 // Everything else requires a signed-in user
 requireAuth();
