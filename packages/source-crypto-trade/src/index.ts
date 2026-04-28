@@ -1826,7 +1826,7 @@ export function getTradeStatus(): TradeStatus {
     exchangeStates,
     lastSignal: null,
     tradingOverride,
-    dexExecutionEnabled: (process.env.DEX_TRADE_EXECUTION ?? '').toLowerCase() === 'true',
+    dexExecutionEnabled: (process.env.DEX_TRADE_EXECUTION ?? '').toLowerCase() !== 'false',
     dexExecutorArmed: dexExecutor !== null,
   };
 }

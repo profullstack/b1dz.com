@@ -4,15 +4,15 @@
  * the executor isn't armed, so the pipeline just stays in its current
  * mode without wallet gymnastics at boot.
  *
- * Arming requires ALL of:
- *   - V2_MODE=live                       daemon will actually dispatch
- *   - V2_EXECUTOR_UNISWAP_BASE=true      explicit opt-in
- *   - EVM_PRIVATE_KEY                    hot wallet private key
- *   - BASE_RPC_URL                       viem http transport
+ * Arming requires:
+ *   - ARB_MODE/V2_MODE=live              daemon will actually dispatch
+ *   - no explicit *_EXECUTOR_*=false      operator opt-out
+ *   - wallet/RPC env for DEX executors    hot wallet + transport
  *
- * If any are missing we return null. The TradeDaemon then aborts live
- * opportunities with "live mode enabled but no Executor wired" — the
- * intended safe default.
+ * CEX↔CEX is auto-armed in live mode because it has no extra wallet deps
+ * and still enforces maxTradeUsd + per-leg balance checks. DEX executors
+ * auto-arm only when their credentials are present. Operators can opt out
+ * with ARB_EXECUTOR_CEX_CEX=false or ARB_EXECUTOR_UNISWAP_BASE=false.
  */
 
 import type { Executor } from '@b1dz/trade-daemon';
@@ -35,22 +35,38 @@ function floatEnv(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function envFlagDisabled(...keys: string[]): boolean {
+  for (const key of keys) {
+    const raw = process.env[key];
+    if (raw != null && raw.trim().toLowerCase() === 'false') return true;
+  }
+  return false;
+}
+
+function envFlagExplicitlyEnabled(...keys: string[]): boolean {
+  for (const key of keys) {
+    const raw = process.env[key];
+    if (raw != null && raw.trim().toLowerCase() === 'true') return true;
+  }
+  return false;
+}
+
 export async function maybeBuildUniswapV3BaseExecutor(): Promise<Executor | null> {
-  const executorEnabled = process.env.ARB_EXECUTOR_UNISWAP_BASE ?? process.env.V2_EXECUTOR_UNISWAP_BASE;
-  if (executorEnabled !== 'true') return null;
+  const explicit = envFlagExplicitlyEnabled('ARB_EXECUTOR_UNISWAP_BASE', 'V2_EXECUTOR_UNISWAP_BASE');
+  if (envFlagDisabled('ARB_EXECUTOR_UNISWAP_BASE', 'V2_EXECUTOR_UNISWAP_BASE')) return null;
   const mode = (process.env.ARB_MODE ?? process.env.V2_MODE ?? '').toLowerCase();
   if (mode !== 'live') {
-    console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but ARB_MODE!=live — skipping executor registration');
+    if (explicit) console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but ARB_MODE!=live — skipping executor registration');
     return null;
   }
   const privateKey = process.env.EVM_PRIVATE_KEY;
   if (!privateKey) {
-    console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but EVM_PRIVATE_KEY missing — skipping');
+    if (explicit) console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but EVM_PRIVATE_KEY missing — skipping');
     return null;
   }
   const rpcUrl = process.env.BASE_RPC_URL;
   if (!rpcUrl) {
-    console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but BASE_RPC_URL missing — skipping');
+    if (explicit) console.warn('[arb] ARB_EXECUTOR_UNISWAP_BASE=true but BASE_RPC_URL missing — skipping');
     return null;
   }
 
@@ -87,16 +103,18 @@ export async function maybeBuildUniswapV3BaseExecutor(): Promise<Executor | null
 }
 
 /**
- * CEX↔CEX executor — always buildable (no wallet / RPC deps). Still
- * gated on ARB_MODE=live + ARB_EXECUTOR_CEX_CEX=true so the operator has
- * to explicitly opt in.
+ * CEX↔CEX executor — auto-armed in live mode (no wallet / RPC deps).
+ * Operators can opt out with ARB_EXECUTOR_CEX_CEX=false. Legacy
+ * ARB_EXECUTOR_CEX_CEX=true / V2_EXECUTOR_CEX_CEX=true still work, but
+ * are no longer required.
  */
 export function maybeBuildCexCexExecutor(): Executor | null {
-  const enabled = process.env.ARB_EXECUTOR_CEX_CEX ?? process.env.V2_EXECUTOR_CEX_CEX;
-  if (enabled !== 'true') return null;
+  if (envFlagDisabled('ARB_EXECUTOR_CEX_CEX', 'V2_EXECUTOR_CEX_CEX')) return null;
   const mode = (process.env.ARB_MODE ?? process.env.V2_MODE ?? '').toLowerCase();
   if (mode !== 'live') {
-    console.warn('[arb] ARB_EXECUTOR_CEX_CEX=true but ARB_MODE!=live — skipping');
+    if (envFlagExplicitlyEnabled('ARB_EXECUTOR_CEX_CEX', 'V2_EXECUTOR_CEX_CEX')) {
+      console.warn('[arb] ARB_EXECUTOR_CEX_CEX=true but ARB_MODE!=live — skipping');
+    }
     return null;
   }
   const maxTradeUsd = floatEnv('ARB_MAX_TRADE_USD', floatEnv('V2_MAX_TRADE_USD', 5));

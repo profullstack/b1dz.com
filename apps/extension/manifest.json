@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "b1dz Sync",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "Sync your DealDash session to b1dz.com so the daemon can bid on your behalf.",
   "permissions": [
     "cookies",

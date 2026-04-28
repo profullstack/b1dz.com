@@ -11,9 +11,11 @@
  * adapters intentionally don't know about wallets — they're quote +
  * swap primitives.
  *
- * Arming: `maybeBuildDexTradeExecutor()` returns null unless
- * `DEX_TRADE_EXECUTION=true`. Each venue is built independently so
- * operators can arm only the chain they have funds on.
+ * Arming: `maybeBuildDexTradeExecutor()` auto-arms any venue whose wallet
+ * credentials are present. Set `DEX_TRADE_EXECUTION=false` to opt out.
+ * `DEX_TRADE_EXECUTION=true` is still accepted as a legacy explicit arm
+ * and makes missing-env warnings loud. Each venue is built independently
+ * so operators can arm only the chain they have funds on.
  *
  * Required env (per venue):
  *   Uniswap V3 on Base:
@@ -64,14 +66,22 @@ function floatEnv(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export async function maybeBuildDexTradeExecutor(): Promise<DexTradeExecutor | null> {
-  const enabled = (process.env.DEX_TRADE_EXECUTION ?? '').toLowerCase();
-  if (enabled !== 'true') return null;
+function isDexTradeExplicitlyEnabled(): boolean {
+  return (process.env.DEX_TRADE_EXECUTION ?? '').trim().toLowerCase() === 'true';
+}
 
-  const uniswap = await maybeBuildUniswapLeg();
-  const jupiter = maybeBuildJupiterLeg();
+function isDexTradeDisabled(): boolean {
+  return (process.env.DEX_TRADE_EXECUTION ?? '').trim().toLowerCase() === 'false';
+}
+
+export async function maybeBuildDexTradeExecutor(): Promise<DexTradeExecutor | null> {
+  if (isDexTradeDisabled()) return null;
+  const explicit = isDexTradeExplicitlyEnabled();
+
+  const uniswap = await maybeBuildUniswapLeg(explicit);
+  const jupiter = maybeBuildJupiterLeg(explicit);
   if (!uniswap && !jupiter) {
-    console.warn('[trade] DEX_TRADE_EXECUTION=true but neither Uniswap nor Jupiter could arm (missing env) — DEX execution skipped');
+    if (explicit) console.warn('[trade] DEX_TRADE_EXECUTION=true but neither Uniswap nor Jupiter could arm (missing env) — DEX execution skipped');
     return null;
   }
 
@@ -137,15 +147,15 @@ interface VenueLeg {
   }): Promise<{ ok: boolean; message: string; fillPrice?: number; quoteAmountUsd?: number; txId?: string }>;
 }
 
-async function maybeBuildUniswapLeg(): Promise<VenueLeg | null> {
+async function maybeBuildUniswapLeg(warnOnMissingEnv = false): Promise<VenueLeg | null> {
   const privateKey = process.env.EVM_PRIVATE_KEY;
   const rpcUrl = process.env.BASE_RPC_URL;
   if (!privateKey) {
-    console.warn('[trade] DEX_TRADE_EXECUTION=true but EVM_PRIVATE_KEY missing — uniswap-v3 leg skipped');
+    if (warnOnMissingEnv) console.warn('[trade] DEX_TRADE_EXECUTION=true but EVM_PRIVATE_KEY missing — uniswap-v3 leg skipped');
     return null;
   }
   if (!rpcUrl) {
-    console.warn('[trade] DEX_TRADE_EXECUTION=true but BASE_RPC_URL missing — uniswap-v3 leg skipped');
+    if (warnOnMissingEnv) console.warn('[trade] DEX_TRADE_EXECUTION=true but BASE_RPC_URL missing — uniswap-v3 leg skipped');
     return null;
   }
 
@@ -269,15 +279,15 @@ async function maybeBuildUniswapLeg(): Promise<VenueLeg | null> {
 
 // ─── Jupiter on Solana ────────────────────────────────────────────
 
-function maybeBuildJupiterLeg(): VenueLeg | null {
+function maybeBuildJupiterLeg(warnOnMissingEnv = false): VenueLeg | null {
   const secret = process.env.SOLANA_PRIVATE_KEY;
   const rpcUrl = process.env.SOLANA_RPC_URL;
   if (!secret) {
-    console.warn('[trade] DEX_TRADE_EXECUTION=true but SOLANA_PRIVATE_KEY missing — jupiter leg skipped');
+    if (warnOnMissingEnv) console.warn('[trade] DEX_TRADE_EXECUTION=true but SOLANA_PRIVATE_KEY missing — jupiter leg skipped');
     return null;
   }
   if (!rpcUrl) {
-    console.warn('[trade] DEX_TRADE_EXECUTION=true but SOLANA_RPC_URL missing — jupiter leg skipped');
+    if (warnOnMissingEnv) console.warn('[trade] DEX_TRADE_EXECUTION=true but SOLANA_RPC_URL missing — jupiter leg skipped');
     return null;
   }
 

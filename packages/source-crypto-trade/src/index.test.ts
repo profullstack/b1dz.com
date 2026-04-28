@@ -13,7 +13,10 @@ const snap = (bid: number, ts = 0): MarketSnapshot => ({
   exchange: 'gemini', pair: 'BTC-USD', bid, ask: bid + 0.5, bidSize: 1, askSize: 1, ts,
 });
 
+const OLD_ENV = { ...process.env };
+
 afterEach(() => {
+  process.env = { ...OLD_ENV };
   __resetTradeStateForTests();
 });
 
@@ -53,6 +56,18 @@ describe('reconstructEntryFromFills', () => {
       { amount: 1 },
       [{ side: 'sell', pair: 'ETH-USD', price: 100, volume: 1, time: 1 }],
     )).toBeNull();
+  });
+});
+
+describe('DEX execution status default', () => {
+  it('is enabled by default unless explicitly opted out', () => {
+    delete process.env.DEX_TRADE_EXECUTION;
+    expect(getTradeStatus().dexExecutionEnabled).toBe(true);
+  });
+
+  it('honors explicit DEX execution opt-out', () => {
+    process.env.DEX_TRADE_EXECUTION = 'false';
+    expect(getTradeStatus().dexExecutionEnabled).toBe(false);
   });
 });
 
