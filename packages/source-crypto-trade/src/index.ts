@@ -267,6 +267,17 @@ const lastWeakSignalLogAt = new Map<string, number>();
 
 /** Whether we've hydrated from exchange APIs yet. */
 const hydratedExchanges = new Set<string>();
+/** Per-exchange last successful hydration timestamp (ms). Used to drive a
+ *  slow re-hydration cadence so externally-made buys (e.g. a user clicking
+ *  "buy" on the Kraken web UI after the daemon started) get reconciled into
+ *  tracked positions with real entry prices reconstructed from fill history,
+ *  instead of lingering as raw balances the operator can't see PnL on.
+ *  A zero here means "never hydrated". */
+const lastHydratedAtMs = new Map<string, number>();
+/** Re-hydrate at most this often per exchange. 5 minutes is a good balance:
+ *  fast enough to pick up manual buys within a coffee break, slow enough to
+ *  stay well under exchange API rate limits (Kraken especially is picky). */
+const REHYDRATE_INTERVAL_MS = 5 * 60_000;
 let krakenHydrationBlockedUntil = 0;
 const KRAKEN_HYDRATION_LOCKOUT_MS = 15 * 60_000;
 const QUOTE_BALANCE_REFRESH_MS = 60_000;
@@ -1393,6 +1404,19 @@ async function hydrateDexPositions(): Promise<void> {
 
 /**
  * Reconstruct positions from exchange data (source of truth).
+ *
+ * Runs on every tick but gated per-exchange:
+ *   - Never hydrated yet     → run (cold-start reconciliation).
+ *   - Hydrated ≥ REHYDRATE_INTERVAL_MS ago → run again. This is what picks
+ *     up new external buys (web UI, mobile app, TradingView integration,
+ *     etc.) and reconciles them with real entry prices from fill history.
+ *     `restoreOrMarkUntrackedHolding` short-circuits when an entry already
+ *     exists, so this is idempotent and won't clobber the daemon's own
+ *     in-memory state from trades it executed.
+ *   - Otherwise → skip (keeps us well under exchange rate limits).
+ *
+ * Exposed on `hydrateFromExchangeForTests` below so tests can advance the
+ * clock and assert the gate behaves correctly.
  */
 async function hydrateFromExchange() {
   const steps: Array<{ exchange: string; fn: () => Promise<void> }> = [
@@ -1405,22 +1429,65 @@ async function hydrateFromExchange() {
     steps.push({ exchange: 'dex', fn: hydrateDexPositions });
   }
 
-  if (steps.every((step) => hydratedExchanges.has(step.exchange))) return;
+  const now = Date.now();
+  const due = steps.filter((step) => {
+    const last = lastHydratedAtMs.get(step.exchange) ?? 0;
+    return last === 0 || (now - last) >= REHYDRATE_INTERVAL_MS;
+  });
+  if (due.length === 0) return;
 
-  for (const step of steps) {
-    if (hydratedExchanges.has(step.exchange)) continue;
+  const wasFirstRun = hydratedExchanges.size < steps.length;
+
+  for (const step of due) {
     try {
       await step.fn();
       hydratedExchanges.add(step.exchange);
+      lastHydratedAtMs.set(step.exchange, Date.now());
     } catch (e) {
       console.error(`[trade] ${step.exchange} hydration failed: ${(e as Error).message}`);
+      // Intentionally DON'T stamp lastHydratedAtMs on failure — we want to
+      // retry next tick rather than wait out REHYDRATE_INTERVAL_MS.
     }
   }
 
-  if (hydratedExchanges.size === steps.length && openPositions.size === 0) {
+  if (wasFirstRun && hydratedExchanges.size === steps.length && openPositions.size === 0) {
     console.log('[trade] no crypto holdings found — starting clean');
   }
 }
+
+/** Test hook: reset the hydration gate so tests can simulate cold-start
+ *  and re-hydration cycles without reloading the module. */
+export function __resetHydrationStateForTests(): void {
+  hydratedExchanges.clear();
+  lastHydratedAtMs.clear();
+}
+
+/** Test hook: hydrate-now bypass for asserting gate behavior. */
+export async function __hydrateFromExchangeForTests(): Promise<void> {
+  await hydrateFromExchange();
+}
+
+/** Test hook: inspect the per-exchange last hydration timestamp. */
+export function __lastHydratedAtForTests(exchange: string): number {
+  return lastHydratedAtMs.get(exchange) ?? 0;
+}
+
+/** Test hook: directly stamp a hydration timestamp (simulates a prior run). */
+export function __setLastHydratedAtForTests(exchange: string, tsMs: number): void {
+  lastHydratedAtMs.set(exchange, tsMs);
+  if (tsMs > 0) hydratedExchanges.add(exchange);
+}
+
+/** Test hook: pure predicate — "should we re-run hydration for this exchange
+ *  right now?". Mirrors the gate inside hydrateFromExchange so the logic can
+ *  be unit-tested without invoking real exchange adapters. */
+export function __shouldRehydrateForTests(exchange: string, nowMs: number): boolean {
+  const last = lastHydratedAtMs.get(exchange) ?? 0;
+  return last === 0 || (nowMs - last) >= REHYDRATE_INTERVAL_MS;
+}
+
+/** Test hook: re-hydration interval, for assertions and fast-clock tests. */
+export const __REHYDRATE_INTERVAL_MS_FOR_TESTS = REHYDRATE_INTERVAL_MS;
 
 export function restorePersistedTradeState(state: Record<string, unknown> | undefined) {
   if (restoredTradeState) return;
@@ -1926,7 +1993,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
     async poll(ctx) {
       restorePersistedTradeState(ctx.state);
-      // Restore positions from exchange APIs on first tick (source of truth)
+      // Reconcile tracked positions with exchange state. On cold start this
+      // restores positions from fill history; thereafter it runs on a slow
+      // cadence (REHYDRATE_INTERVAL_MS) to pick up externally-made buys.
       await hydrateFromExchange();
       await refreshSpendableQuoteBalances();
       pendingBuyExchange = null;

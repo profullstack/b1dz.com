@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { tuiEvents } from './events.js';
+import { computeStatusFreshness } from './statusFreshness.js';
 import { loadCredentials } from '../auth.js';
 import { B1dzClient } from '@b1dz/sdk';
 import { getB1dzVersion } from '@b1dz/core';
@@ -345,6 +346,9 @@ function DashboardInner() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [autoTrade, setAutoTrade] = useState(true);
   const [tickCount, setTickCount] = useState(0);
+  // Wallclock tick for UI-only elements (stale indicators, age seconds) so
+  // they advance between API polls and make silent daemon stalls visible.
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'arb'>('arb');
@@ -569,6 +573,14 @@ function DashboardInner() {
     return () => clearTimeout(handle);
   }, [apiClient, settingsHydrated, tradingEnabled, dailyLossLimitOverridePct, chartPair, chartPairB, chartExchangeA, chartExchangeB, chartTimeframe, chartTarget]);
 
+  // 1Hz wallclock ticker — drives stale/age indicators independently of the
+  // API poll cadence. If the API stalls this keeps ticking so the top bar
+  // visibly ages out ("stale 42s") instead of silently freezing.
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // Poll API for daemon state
   useEffect(() => {
     let active = true;
@@ -736,33 +748,12 @@ function DashboardInner() {
     ? ts.dailyFees
     : closedTradeFees;
 
+  // Positions table is driven by daemon-tracked positions only (source of
+  // truth — entry price reconstructed from fill history). Raw exchange
+  // balances still render in the Holdings panel below, so nothing is hidden
+  // from the operator. If a holding isn't tracked yet, the daemon's periodic
+  // re-hydration (see hydrateFromExchange) will pick it up within a few min.
   const displayedPositions = [...positions];
-  const seenTracked = new Set(positions.map((pos) => `${pos.exchange}:${pos.pair}`));
-  for (const [exchange, holdings] of [
-    ['kraken', krakenHoldings],
-    ['coinbase', coinbaseHoldings],
-    ['binance-us', binanceHoldings],
-    ['gemini', geminiHoldings],
-  ] as const) {
-    for (const holding of holdings) {
-      if (holding.isStable || holding.usdValue < DUST_USD_THRESHOLD) continue;
-      const pair = `${holding.asset}-USD`;
-      const key = `${exchange}:${pair}`;
-      if (seenTracked.has(key)) continue;
-      displayedPositions.push({
-        exchange,
-        pair,
-        entryPrice: 0,
-        currentPrice: holding.unitPrice,
-        volume: holding.amount,
-        pnlPct: 0,
-        pnlUsd: 0,
-        stopPrice: 0,
-        elapsed: 'holding',
-      });
-      seenTracked.add(key);
-    }
-  }
   const visiblePositions = displayedPositions.filter((pos) => ((pos.currentPrice ?? 0) * (pos.volume ?? 0)) >= DUST_USD_THRESHOLD);
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
@@ -771,8 +762,24 @@ function DashboardInner() {
     : visiblePositions.length === 1
       ? `{cyan-fg}${visiblePositions[0].exchange}:${visiblePositions[0].pair}{/}`
       : `{cyan-fg}${visiblePositions.length} positions{/}`;
-  const pnlStr = realizedPnl >= 0 ? `{green-fg}+$${realizedPnl.toFixed(2)}{/}` : `{red-fg}$${realizedPnl.toFixed(2)}{/}`;
-  const pnlPctStr = realizedPnlPct >= 0 ? `{green-fg}(+${realizedPnlPct.toFixed(2)}%){/}` : `{red-fg}(${realizedPnlPct.toFixed(2)}%){/}`;
+  // Freshness of the daemon payload — see statusFreshness.ts for the
+  // pure derivation (unit-tested). `tradeState` is null until the first
+  // successful poll lands → show an explicit "loading…" badge instead
+  // of implying zeros ($0.00 today / $0.00 fees) are authoritative.
+  // After it lands, if lastTickAt is older than TRADE_STALE_AFTER_MS we
+  // badge it as stale so silent daemon stalls are visible to the operator.
+  const tradeLastTickMs = tradeState?.daemon?.lastTickAt
+    ? new Date(tradeState.daemon.lastTickAt).getTime()
+    : null;
+  const tradeDataLoading = tradeState == null || ts == null;
+  const { pnlStr, pnlPctStr, feesStr, freshnessStr } = computeStatusFreshness({
+    dataLoading: tradeDataLoading,
+    lastTickMs: tradeLastTickMs,
+    nowMs,
+    realizedPnl,
+    realizedPnlPct,
+    totalFees,
+  });
   const daemonVer = arbState?.daemon?.version ?? tradeState?.daemon?.version ?? '?';
   // Show the daemon-authoritative value in the badge (that's what's actually
   // enforced). If the user's local override differs, surface it as "pending"
@@ -801,7 +808,7 @@ function DashboardInner() {
     });
   };
 
-  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr} ${pnlPctStr}${haltStr}${tradingStr}  fees:$${totalFees.toFixed(2)}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
+  const statusText = ` b1dz v${getB1dzVersion()} daemon:v${daemonVer} ${daemonStatus}  ${posStr}  today:${pnlStr}${pnlPctStr}${haltStr}${tradingStr}  fees:${feesStr}${freshnessStr}  [d]isable/enable [t]rade [a]ctivity [l]ogs [q]uit`;
 
   const chartPairs = [...new Set([
     ...visiblePositions.map((pos) => pos.pair),
@@ -929,6 +936,13 @@ function DashboardInner() {
     const volumeCell = padLeft(volume.toFixed(6), 11);
     const valueCell = padLeft(`$${currentValue.toFixed(2)}`, 11);
     const lastCell = padLeft(`$${formatUsdPrice(currentPrice)}`, 11);
+    // daemon-tracked positions always have entryPrice > 0 (reconstructed
+    // from fill history or set by the trade executor at buy time). The
+    // legacy `else` branch rendered a synthetic "untracked holding" row
+    // that the TUI used to inject from raw balances; that synth is gone
+    // (Holdings panel covers the same data), so this branch is unreachable
+    // in practice. Fall back to a `-` PnL cell defensively rather than
+    // showing a misleading "untracked" label.
     if (entryPrice > 0) {
       const entryCell = padLeft(`$${formatUsdPrice(entryPrice)}`, 11);
       const pnlText = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`;
@@ -937,8 +951,8 @@ function DashboardInner() {
       const ageCell = padLeft(pos.elapsed ?? '-', 8);
       posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}`);
     } else {
-      const statusCell = padRight('untracked holding', 18);
-      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${statusCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
+      const pnlCell = padLeft('-', 18);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${pnlCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
     }
   }
   if (visiblePositions.length === 0) {
