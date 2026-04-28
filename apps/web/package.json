@@ -17,8 +17,9 @@
     "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/storage-json": "workspace:*",
     "@b1dz/storage-supabase": "workspace:*",
-    "@supabase/supabase-js": "latest",
     "@supabase/ssr": "latest",
+    "@supabase/supabase-js": "latest",
+    "lightweight-charts": "^5.2.0",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"

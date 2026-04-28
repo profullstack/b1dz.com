@@ -2,6 +2,7 @@ import { createServerSupabase } from '@/lib/supabase';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
+import { TradingChart } from './trading-chart';
 
 export default async function DashboardPage() {
   const supabase = await createServerSupabase();
@@ -25,9 +26,11 @@ export default async function DashboardPage() {
 
       <div className="max-w-6xl mx-auto px-6 py-8">
         <h1 className="text-2xl font-bold mb-2">Dashboard</h1>
-        <p className="text-zinc-400 mb-8">Web dashboard coming soon. Use the TUI for real-time trading:</p>
+        <p className="text-zinc-400 mb-8">Monitor live exchange prices, spreads, and daemon status from the web UI.</p>
 
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 max-w-lg">
+        <TradingChart />
+
+        <div className="mt-8 bg-zinc-900 border border-zinc-800 rounded-xl p-6 max-w-lg">
           <h2 className="text-lg font-semibold mb-3">Quick start</h2>
           <div className="space-y-3 text-sm">
             <div className="bg-zinc-950 rounded-lg p-3 font-mono text-zinc-300">
