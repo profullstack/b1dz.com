@@ -224,6 +224,18 @@ export interface ClosedTrade {
 const closedTrades: ClosedTrade[] = [];
 let restoredTradeState = false;
 
+function feeRateForExchange(exchange: string): number {
+  if (exchange === 'kraken') return KRAKEN_TAKER_FEE;
+  if (exchange === 'coinbase') return COINBASE_TAKER_FEE;
+  if (exchange === 'gemini') return GEMINI_TAKER_FEE;
+  return BINANCE_TAKER_FEE;
+}
+
+function recordDailyFee(usd: number): void {
+  resetDailyStateIfNeeded();
+  if (Number.isFinite(usd) && usd > 0) dailyFees += usd;
+}
+
 /** One position per exchange — check if THIS exchange already has a position. */
 function hasPositionOnExchange(exchange: string): boolean {
   for (const pos of openPositions.values()) {
@@ -239,8 +251,9 @@ const attemptedExchangeActions = new Set<string>();
 /** Timestamp of last trade close per pair. */
 const lastExitAt = new Map<string, number>();
 
-/** Cumulative realized P/L for today. */
+/** Cumulative realized P/L and estimated fees for today. */
 let dailyPnl = 0;
+let dailyFees = 0;
 let dailyPnlDate = new Date().toDateString();
 let dailyEquityBaselineUsd = 0;
 let tradePollCount = 0;
@@ -710,6 +723,7 @@ export function __resetTradeStateForTests(): void {
   analysisStates.clear();
   restoredTradeState = false;
   dailyPnl = 0;
+  dailyFees = 0;
   dailyPnlDate = new Date().toDateString();
   dailyEquityBaselineUsd = 0;
 }
@@ -903,7 +917,7 @@ function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): 
   if (elapsedMs < rotateMinHoldMs && pnlPct > rotateAdversePct) return null;
   if (pnlPct >= TAKE_PROFIT_PCT * 0.25) return null;
 
-  const feeRate = item.exchange === 'kraken' ? KRAKEN_TAKER_FEE : item.exchange === 'coinbase' ? COINBASE_TAKER_FEE : item.exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
+  const feeRate = feeRateForExchange(item.exchange);
   const fee = currentSnap.bid * current.volume * feeRate;
   const grossPnl = (currentSnap.bid - current.entryPrice) * current.volume;
   const netPnl = grossPnl - fee;
@@ -1470,7 +1484,16 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
   } else {
     dailyPnl = recomputedFromClosed;
   }
-  console.log(`[trade] RESTORED trade state: positions=${openPositions.size} closedTrades=${closedTrades.length} dailyPnl=$${dailyPnl.toFixed(2)} dailyPnlDate=${dailyPnlDate} baseline=$${dailyEquityBaselineUsd.toFixed(2)}`);
+  const recomputedFeesFromClosed = closedTrades
+    .filter((trade) => trade.exitTime >= todayStart.getTime())
+    .reduce((sum, trade) => sum + (Number.isFinite(trade.fee) ? trade.fee : 0), 0);
+  const savedDailyFees = Number(tradeState.dailyFees);
+  if (savedDateIsToday && Number.isFinite(savedDailyFees)) {
+    dailyFees = Math.max(0, savedDailyFees);
+  } else {
+    dailyFees = recomputedFeesFromClosed;
+  }
+  console.log(`[trade] RESTORED trade state: positions=${openPositions.size} closedTrades=${closedTrades.length} dailyPnl=$${dailyPnl.toFixed(2)} dailyFees=$${dailyFees.toFixed(2)} dailyPnlDate=${dailyPnlDate} baseline=$${dailyEquityBaselineUsd.toFixed(2)}`);
 }
 
 /**
@@ -1487,6 +1510,7 @@ export function serializeTradeState(): Record<string, unknown> {
     positions: [...openPositions.values()],
     exits: [...lastExitAt.entries()].map(([pair, at]) => ({ pair, at })),
     dailyPnl,
+    dailyFees,
     dailyPnlDate,
     dailyEquityBaselineUsd,
     closedTrades,
@@ -1509,6 +1533,7 @@ function resetDailyStateIfNeeded() {
   const today = new Date().toDateString();
   if (today !== dailyPnlDate) {
     dailyPnl = 0;
+    dailyFees = 0;
     dailyPnlDate = today;
     dailyEquityBaselineUsd = 0;
   }
@@ -1652,6 +1677,7 @@ export interface TradeStatus {
   position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyPnlPct: number;
+  dailyFees: number;
   dailyLossLimitHit: boolean;
   dailyLossLimitPct: number;
   cooldowns: { pair: string; remainingSec: number }[];
@@ -1723,6 +1749,7 @@ export function getTradeStatus(): TradeStatus {
     position: pos,
     dailyPnl: trackedDailyPnl,
     dailyPnlPct: dailyEquityBaselineUsd > 0 ? (trackedDailyPnl / dailyEquityBaselineUsd) * 100 : 0,
+    dailyFees,
     dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -dailyLossLimitPctRuntime : false,
     dailyLossLimitPct: dailyLossLimitPctRuntime,
     cooldowns,
@@ -2273,10 +2300,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             const result = await placeGeminiMarketSell(symbol, sellVolume.toFixed(8));
             txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
           }
-          const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
+          const feeRate = feeRateForExchange(exchange);
           const fee = meta.snap.bid * sellVolume * feeRate;
           const grossPnl = (meta.snap.bid - pos.entryPrice) * sellVolume;
           const netPnl = grossPnl - fee;
+          recordDailyFee(fee);
           closedTrades.push({
             exchange,
             pair,
@@ -2352,7 +2380,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (availableQuote < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
-      const feeRate = exchange === 'kraken' ? KRAKEN_TAKER_FEE : exchange === 'coinbase' ? COINBASE_TAKER_FEE : exchange === 'gemini' ? GEMINI_TAKER_FEE : BINANCE_TAKER_FEE;
+      const feeRate = feeRateForExchange(exchange);
       const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * Math.max(0.9, 1 - feeRate - 0.02);
       if (spendBudget < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
@@ -2454,6 +2482,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           highWaterMark: aggressivePrice,
           strategyId: meta.strategy ?? 'composite',
         });
+        recordDailyFee(aggressivePrice * volumeAtAggressive * feeRate);
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
         return { ok: true, message: `bought up to ${volumeAtAggressive.toFixed(8)} on ${exchange} @ ≤$${aggressivePrice.toFixed(6)}` };
       } catch (e) {

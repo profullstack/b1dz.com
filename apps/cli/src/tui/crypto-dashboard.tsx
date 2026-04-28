@@ -103,6 +103,7 @@ interface TradeStatusData {
   position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
   dailyPnl: number;
   dailyPnlPct: number;
+  dailyFees?: number;
   dailyLossLimitHit: boolean;
   dailyLossLimitPct: number;
   cooldowns: { pair: string; remainingSec: number }[];
@@ -724,15 +725,16 @@ function DashboardInner() {
   const realizedPnl = ts?.dailyPnl ?? 0;
   const realizedPnlPct = ts?.dailyPnlPct ?? 0;
 
-  // Fees shown in the header are based on today's closed strategy trades.
+  // Prefer the daemon-authoritative daily fee total. The closed-trade
+  // fallback keeps older daemon payloads rendering correctly.
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayTsMs = todayStart.getTime();
   const todayClosedTrades = closedTrades.filter((t) => t.exitTime >= todayTsMs);
-  let totalFees = 0;
-  for (const t of todayClosedTrades) {
-    totalFees += t.fee;
-  }
+  const closedTradeFees = todayClosedTrades.reduce((sum, t) => sum + (Number.isFinite(t.fee) ? t.fee : 0), 0);
+  const totalFees = typeof ts?.dailyFees === 'number' && Number.isFinite(ts.dailyFees)
+    ? ts.dailyFees
+    : closedTradeFees;
 
   const displayedPositions = [...positions];
   const seenTracked = new Set(positions.map((pos) => `${pos.exchange}:${pos.pair}`));
