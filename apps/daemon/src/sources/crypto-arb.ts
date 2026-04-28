@@ -10,6 +10,17 @@ import {
   getActivePairs,
   subscribeWs, wsCacheSize, setWsLogger,
   type BinanceAssetBalance,
+  // Auto-seeder
+  decideSeed,
+  recordSeed,
+  evaluateCircuitBreakers,
+  normalizeSeedState,
+  stableBalanceOf,
+  seedKey,
+  placeSeedOrder,
+  SEED_STATE_PAYLOAD_KEY,
+  type SeedState,
+  type SeedDecisionKind,
 } from '@b1dz/source-crypto-arb';
 import { AlertBus, getB1dzVersion } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
@@ -38,6 +49,48 @@ const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
 let tickCount = 0;
 let wsInitialized = false;
+
+// ── Auto-seeder state ─────────────────────────────────────────────────
+// The seed ledger is persisted per-user via ctx.payload, but we also keep
+// a module-level shadow so we don't clobber the ledger when concurrent
+// ticks race or when a partial persist fails mid-flight.
+let cachedSeedState: SeedState = { entries: {}, totalSeedCostUsd: 0 };
+let cachedSeedStateLoaded = false;
+/** Realized arb profit attributed to each (exchange, pair) — used by the
+ *  circuit breaker to decide if a seeded pair is actually earning. We
+ *  compute this lazily from the crypto-trade closedTrades ring each tick. */
+function computeRealizedProfitByKey(closedTrades: Array<{ exchange?: string; pair?: string; netPnl?: number; exitTime?: number }>, sinceMs: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of closedTrades) {
+    if (!t || typeof t.pair !== 'string') continue;
+    // Attribute the trade to the venue where it closed (sell-side inventory
+    // spend → sell-side closes are what "paid back" the seed).
+    const ex = typeof t.exchange === 'string' ? t.exchange : '';
+    if (!ex) continue;
+    if (typeof t.exitTime === 'number' && t.exitTime < sinceMs) continue;
+    const key = seedKey(ex, t.pair);
+    const net = typeof t.netPnl === 'number' && Number.isFinite(t.netPnl) ? t.netPnl : 0;
+    out[key] = (out[key] ?? 0) + net;
+  }
+  return out;
+}
+
+/** Short, fixed-width label for a seed decision — rendered in the TUI
+ *  Arb Spreads panel next to each profitable row. Max ~12 chars so the
+ *  column stays aligned with existing PROFIT/info labels. */
+function labelForDecision(d: SeedDecisionKind): string {
+  switch (d.kind) {
+    case 'seed': return `→ SEED $${d.sizeUsd.toFixed(0)}`;
+    case 'inventory-ready': return '✓ READY';
+    case 'cooldown': return `⊘ cd ${Math.ceil(d.remainingMs / 60_000)}m`;
+    case 'paused': return '⊘ paused';
+    case 'budget-pair-exhausted': return '⊘ pair $';
+    case 'budget-global-exhausted': return '⊘ global $';
+    case 'no-stable-balance': return '⊘ no USDC';
+    case 'seed-too-small': return '⊘ too small';
+    case 'disabled': return 'ℹ disabled';
+  }
+}
 
 export const cryptoArbWorker: SourceWorker = {
   id: 'crypto-arb',
@@ -161,7 +214,7 @@ export const cryptoArbWorker: SourceWorker = {
       }
 
     // ── Compute arb spreads every tick ──
-      const spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean }[] = [];
+      const spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedStatus?: SeedDecisionKind | null; seedLabel?: string }[] = [];
       for (const pair of pairsToFetch) {
       const pairPrices = prices.filter((p) => p.pair === pair);
       if (pairPrices.length < 2) continue;
@@ -226,6 +279,119 @@ export const cryptoArbWorker: SourceWorker = {
       }
       while (opps.length > 100) opps.shift();
 
+      // ── Auto-seed inventory for profitable spread opps that lack inventory ──
+      // See packages/source-crypto-arb/src/seeder.ts for the full rationale
+      // and the guarantees it enforces (per-pair/global budget, cooldown,
+      // circuit breaker, stables-only, trading toggle).
+      if (!cachedSeedStateLoaded) {
+        cachedSeedState = normalizeSeedState(ctx.payload?.[SEED_STATE_PAYLOAD_KEY]);
+        cachedSeedStateLoaded = true;
+      }
+
+      // Resolve trading toggle (same priority as crypto-trade worker):
+      // UI setting → TRADING_ENABLED env → default true.
+      let tradingEnabled = true;
+      try {
+        const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
+        const uiOverride = uiSettings?.tradingEnabled;
+        if (uiOverride === false || uiOverride === true) {
+          tradingEnabled = uiOverride;
+        } else {
+          const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+          if (envRaw === 'false') tradingEnabled = false;
+        }
+      } catch {
+        // Fall through — conservative default is "enabled", same as crypto-trade.
+      }
+
+      // Stable balance per exchange (USDC → USDT → USD priority).
+      const stableByExchange: Record<string, number> = {
+        kraken: stableBalanceOf(cachedKrakenBalance),
+        'binance-us': stableBalanceOf(cachedBinanceBalance),
+        coinbase: stableBalanceOf(cachedCoinbaseBalance),
+        gemini: stableBalanceOf(cachedGeminiBalance),
+      };
+
+      // Base inventory lookup: how many base-asset units we hold on a venue.
+      function baseInventoryOn(exchange: string, baseAsset: string): number {
+        const bal = exchange === 'kraken' ? cachedKrakenBalance
+          : exchange === 'binance-us' ? cachedBinanceBalance
+          : exchange === 'coinbase' ? cachedCoinbaseBalance
+          : exchange === 'gemini' ? cachedGeminiBalance
+          : {};
+        // Kraken uses aliases (XXDG vs DOGE). Check both.
+        if (exchange === 'kraken') {
+          for (const alias of [`X${baseAsset}`, `XX${baseAsset}`, baseAsset]) {
+            const amt = parseFloat(bal[alias] ?? '0');
+            if (Number.isFinite(amt) && amt > 0) return amt;
+          }
+          return 0;
+        }
+        const amt = parseFloat(bal[baseAsset] ?? '0');
+        return Number.isFinite(amt) && amt > 0 ? amt : 0;
+      }
+
+      // Circuit-breaker eval: read closed trades from crypto-trade payload so
+      // we can judge whether seeded pairs are earning. `sinceMs` = last seed
+      // time per entry is handled inside evaluateCircuitBreakers — we pass a
+      // "0" baseline and let the module itself scope by lastSeededAtMs when
+      // computing elapsed windows.
+      try {
+        const tradePayload = await storage.get<{ tradeState?: { closedTrades?: Array<{ exchange?: string; pair?: string; netPnl?: number; exitTime?: number }> } }>('source-state', 'crypto-trade');
+        const closedTrades = tradePayload?.tradeState?.closedTrades ?? [];
+        const realizedByKey = computeRealizedProfitByKey(closedTrades, 0);
+        cachedSeedState = evaluateCircuitBreakers(cachedSeedState, {
+          nowMs: Date.now(),
+          realizedProfitByKey: realizedByKey,
+        });
+      } catch {
+        // Non-fatal: circuit breaker just doesn't advance this tick.
+      }
+
+      // For each profitable spread, decide whether to seed.
+      for (const s of spreads) {
+        if (!s.profitable) { s.seedStatus = null; continue; }
+        const base = s.pair.split('-')[0] ?? '';
+        if (!base) { s.seedStatus = null; continue; }
+        const sellPrice = prices.find((p) => p.exchange === s.sellExchange && p.pair === s.pair)?.bid ?? 0;
+        const buyPrice = prices.find((p) => p.exchange === s.buyExchange && p.pair === s.pair)?.ask ?? 0;
+        const decision = decideSeed({
+          key: seedKey(s.sellExchange, s.pair),
+          exchange: s.sellExchange,
+          pair: s.pair,
+          currentBaseInventory: baseInventoryOn(s.sellExchange, base),
+          stableBalanceOnExchange: stableByExchange[s.sellExchange] ?? 0,
+          nowMs: Date.now(),
+          tradingEnabled,
+          state: cachedSeedState,
+          refPriceUsd: sellPrice > 0 ? sellPrice : buyPrice,
+        });
+        s.seedStatus = decision;
+        // Human-readable label for the TUI (kept short).
+        s.seedLabel = labelForDecision(decision);
+
+        if (decision.kind === 'seed') {
+          logActivity(`[arb][seed] → SEEDING $${decision.sizeUsd.toFixed(2)} ${decision.exchange}:${decision.pair}`, 'crypto-arb');
+          const ask = prices.find((p) => p.exchange === s.sellExchange && p.pair === s.pair)?.ask ?? 0;
+          const result = await placeSeedOrder({
+            exchange: decision.exchange,
+            pair: decision.pair,
+            sizeUsd: decision.sizeUsd,
+            askPriceUsd: ask,
+          });
+          if (result.ok && result.filledCostUsd > 0) {
+            cachedSeedState = recordSeed(cachedSeedState, {
+              key: seedKey(decision.exchange, decision.pair),
+              costUsd: result.filledCostUsd,
+              nowMs: Date.now(),
+            });
+            logActivity(`[arb][seed] ✓ seeded ${result.filledVolume.toFixed(8)} ${base} on ${decision.exchange} for $${result.filledCostUsd.toFixed(2)} (ref=${result.orderRef})`, 'crypto-arb');
+          } else {
+            logActivity(`[arb][seed] ✗ failed ${decision.exchange}:${decision.pair}: ${result.error ?? 'unknown'}`, 'crypto-arb');
+          }
+        }
+      }
+
     // ── Save everything every tick ──
     // Always overwrite private fields so stale balances/orders/trades do not
     // survive a failed fetch or a partially-updated worker.
@@ -242,6 +408,7 @@ export const cryptoArbWorker: SourceWorker = {
       binanceOpenOrders: cachedBinanceOpenOrders,
       recentTrades: cachedRecentTrades,
       openOrders: cachedOpenOrders,
+      [SEED_STATE_PAYLOAD_KEY]: cachedSeedState,
       activityLog: getActivityLog('crypto-arb'),
       rawLog: getRawLog('crypto-arb'),
       daemon: {

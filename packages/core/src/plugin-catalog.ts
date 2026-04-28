@@ -42,7 +42,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     manifest: {
       id: 'uniswap-v3-base',
       kind: 'connector',
-      version: '0.3.6',
+      version: '0.3.7',
       name: 'Uniswap V3 — Base',
       author: 'b1dz',
       description: 'Single-venue connector for Uniswap V3 on Base. Wraps SwapRouter02. Gated by DEX_TRADE_EXECUTION and DEX_TRADE_MAX_USD.',
@@ -56,7 +56,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     manifest: {
       id: 'jupiter',
       kind: 'connector',
-      version: '0.3.6',
+      version: '0.3.7',
       name: 'Jupiter — Solana',
       author: 'b1dz',
       description: 'Single-venue connector for the Jupiter aggregator on Solana. Gated by DEX_TRADE_EXECUTION and DEX_TRADE_MAX_USD.',

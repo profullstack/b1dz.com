@@ -80,6 +80,31 @@ import { getActivePairs } from './pair-discovery.js';
 export { getActivePairs, getPerExchangeVolumes } from './pair-discovery.js';
 export { normalizePair } from './feeds/pairs.js';
 
+// Auto-seeder for inventory-arb. See seeder.ts for design rationale.
+export {
+  decideSeed,
+  recordSeed,
+  evaluateCircuitBreakers,
+  normalizeSeedState,
+  emptySeedState,
+  stableBalanceOf,
+  pickStableToSpend,
+  seedKey,
+  SEED_STATE_PAYLOAD_KEY,
+  SEED_PER_PAIR_USD,
+  SEED_GLOBAL_USD,
+  SEED_COOLDOWN_MS,
+  SEED_MIN_USD,
+  SEED_EVAL_WINDOW_MS,
+  SEED_PAUSE_MS,
+  SEED_PROFIT_RATIO,
+  type SeedState,
+  type SeedLedgerEntry,
+  type SeedDecisionKind,
+  type SeedDecisionInput,
+} from './seeder.js';
+export { placeSeedOrder, type SeedOrderRequest, type SeedOrderResult } from './seed-executor.js';
+
 const MAX_POSITION_USD = 100;
 const MIN_EXECUTABLE_USD = 5;
 const SUPPORTED_TRADE_EXCHANGES = new Set(['kraken', 'binance-us', 'coinbase', 'gemini']);

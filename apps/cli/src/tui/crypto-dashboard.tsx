@@ -56,7 +56,7 @@ async function createApiClient(): Promise<B1dzClient | null> {
 
 interface ArbState {
   prices: { exchange: string; pair: string; bid: number; ask: number }[];
-  spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean }[];
+  spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedLabel?: string; seedStatus?: { kind: string; [k: string]: unknown } | null }[];
   krakenBalance: Record<string, string>;
   binanceBalance: Record<string, string>;
   coinbaseBalance: Record<string, string>;
@@ -1101,14 +1101,29 @@ function DashboardInner() {
     });
   };
 
-  // Arb spreads — show top 5
+  // Arb spreads — show top 5. Status column prefers the seeder label when
+  // the arb daemon has attached one (e.g. "→ SEED $42", "⊘ cd 12m",
+  // "✓ READY"). This replaces the old binary "✓ PROFIT / below fees" with
+  // a richer signal: green when the engine will act on this spread,
+  // yellow when it's waiting on cooldown/budget, gray when informational.
   const displaySpreads = spreads.filter((s) => s?.pair && s?.spread != null).slice(0, 5);
   const arbLines: string[] = ['{bold} Pair       Spread    Route                 Status{/bold}'];
   for (const s of displaySpreads) {
     const spread = s.spread ?? 0;
     const color = s.profitable ? '{green-fg}' : '{white-fg}';
-    const status = s.profitable ? '{green-fg}✓ PROFIT{/green-fg}' : '{white-fg}below fees{/white-fg}';
     const route = s.buyExchange ? `${s.buyExchange}→${s.sellExchange}` : '---';
+    let status: string;
+    if (s.seedLabel && s.profitable) {
+      const k = s.seedStatus?.kind;
+      const tag = k === 'seed' ? '{green-fg}' // will execute now
+        : k === 'inventory-ready' ? '{green-fg}' // ready to arb
+        : k === 'cooldown' || k === 'paused' ? '{yellow-fg}'
+        : k === 'budget-pair-exhausted' || k === 'budget-global-exhausted' ? '{yellow-fg}'
+        : '{white-fg}';
+      status = `${tag}${s.seedLabel}{/}`;
+    } else {
+      status = s.profitable ? '{green-fg}✓ PROFIT{/green-fg}' : '{white-fg}below fees{/white-fg}';
+    }
     arbLines.push(` ${(s.pair ?? '').padEnd(10)} ${color}${spread.toFixed(4)}%{/}  ${route.padEnd(22)} ${status}`);
   }
 
