@@ -13,8 +13,11 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const nextParam = new URLSearchParams(window.location.search).get('next');
-    if (nextParam) setNext(nextParam);
+    const params = new URLSearchParams(window.location.search);
+    const nextParam = params.get('next');
+    if (nextParam?.startsWith('/') && !nextParam.startsWith('//')) setNext(nextParam);
+    const errorParam = params.get('error');
+    if (errorParam) setError(errorParam);
   }, []);
 
   async function onSubmit(e: React.FormEvent) {
@@ -51,7 +54,10 @@ export default function LoginPage() {
               type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
           </div>
           <div>
-            <label className="block text-sm text-zinc-400 mb-1">Password</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm text-zinc-400">Password</label>
+              <Link className="text-xs text-orange-400 hover:text-orange-300" href="/forgot-password">Forgot?</Link>
+            </div>
             <input className="w-full bg-zinc-900 border border-zinc-700 focus:border-orange-500 rounded-lg px-4 py-2.5 outline-none transition"
               type="password" placeholder="Enter your password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>

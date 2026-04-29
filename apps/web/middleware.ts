@@ -8,7 +8,7 @@ import { createServerClient } from '@supabase/ssr';
 
 // API routes self-authenticate via Bearer header or cookie, so the
 // middleware doesn't gate them. /login + /signup are always public.
-const PUBLIC_PATHS = ['/login', '/signup', '/auth', '/api', '/manifest.webmanifest', '/sw.js'];
+const PUBLIC_PATHS = ['/login', '/signup', '/forgot-password', '/reset-password', '/auth', '/api', '/manifest.webmanifest', '/sw.js'];
 let loggedVersion = false;
 
 export async function middleware(request: NextRequest) {
