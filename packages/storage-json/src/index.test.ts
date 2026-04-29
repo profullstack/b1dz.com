@@ -1,4 +1,4 @@
-import { runStorageContractTests } from '@b1dz/core';
+import { runStorageContractTests } from '@b1dz/core/storage-contract';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

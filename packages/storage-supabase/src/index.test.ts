@@ -4,7 +4,7 @@
  * project; local dev opts in via `pnpm test:integration`.
  */
 import { describe, it } from 'vitest';
-import { runStorageContractTests } from '@b1dz/core';
+import { runStorageContractTests } from '@b1dz/core/storage-contract';
 import { SupabaseStorage } from './index.js';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

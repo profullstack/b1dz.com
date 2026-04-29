@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { runStorageContractTests } from '@b1dz/core';
+import { runStorageContractTests } from '@b1dz/core/storage-contract';
 import { B1dzApiStorage } from './index.js';
 
 function makeJwt(expOffsetSec: number) {
