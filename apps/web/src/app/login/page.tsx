@@ -1,11 +1,9 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 
 export default function LoginPage() {
-  const router = useRouter();
   const [next, setNext] = useState('/dashboard');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -31,7 +29,7 @@ export default function LoginPage() {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Login failed'); setBusy(false); return; }
-      router.replace(next);
+      window.location.assign(next);
     } catch {
       setError('Network error'); setBusy(false);
     }
