@@ -39,8 +39,10 @@ COPY packages/profitability/package.json packages/profitability/
 COPY packages/event-channel/package.json packages/event-channel/
 COPY packages/observe-engine/package.json packages/observe-engine/
 COPY packages/trade-daemon/package.json packages/trade-daemon/
+COPY packages/triangular-engine/package.json packages/triangular-engine/
 COPY packages/adapters-cex/package.json packages/adapters-cex/
 COPY packages/adapters-evm/package.json packages/adapters-evm/
+COPY packages/adapters-pumpfun/package.json packages/adapters-pumpfun/
 COPY packages/adapters-solana/package.json packages/adapters-solana/
 COPY packages/wallet-service/package.json packages/wallet-service/
 COPY packages/wallet-provider/package.json packages/wallet-provider/
@@ -63,6 +65,8 @@ RUN pnpm --filter @b1dz/core build && \
     pnpm --filter @b1dz/storage-b1dz-api build && \
     pnpm --filter @b1dz/source-crypto-arb build && \
     pnpm --filter @b1dz/source-crypto-trade build && \
+    pnpm --filter @b1dz/adapters-pumpfun build && \
+    pnpm --filter @b1dz/triangular-engine build && \
     pnpm --filter @b1dz/daemon build
 ARG NEXT_PUBLIC_SUPABASE_URL=https://hnohaxemomzlpfnoidhp.supabase.co
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhub2hheGVtb216bHBmbm9pZGhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NTE1NDEsImV4cCI6MjA5MTIyNzU0MX0.AWBlZtFytM5vNzUH7NyWgBLFzpNWN7UhsBIjwyC44KI
