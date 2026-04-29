@@ -9,6 +9,7 @@ import { createServerClient } from '@supabase/ssr';
 // API routes self-authenticate via Bearer header or cookie, so the proxy
 // doesn't gate them. /login + /signup are always public.
 const PUBLIC_PATHS = ['/login', '/signup', '/forgot-password', '/reset-password', '/auth', '/api', '/manifest.webmanifest', '/sw.js'];
+const PUBLIC_EXACT = new Set(['/']);
 let loggedVersion = false;
 
 export async function proxy(request: NextRequest) {
@@ -42,7 +43,7 @@ export async function proxy(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublic = PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + '/'));
+  const isPublic = PUBLIC_EXACT.has(path) || PUBLIC_PATHS.some((p) => path === p || path.startsWith(p + '/'));
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();

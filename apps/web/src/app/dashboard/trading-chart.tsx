@@ -237,8 +237,7 @@ export function TradingChart() {
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-2xl shadow-black/20">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-orange-400">TradingView lightweight-charts</p>
-          <h2 className="mt-1 text-xl font-semibold text-zinc-100">Live market chart</h2>
+          <h2 className="text-xl font-semibold text-zinc-100">Live market chart</h2>
           <p className="mt-1 text-sm text-zinc-400">
             Candles render from daemon source-state when available, with a demo fallback when the trading daemon is offline.
           </p>
