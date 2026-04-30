@@ -1039,8 +1039,9 @@ function DashboardInner() {
     .sort(byUsdDesc);
   for (const b of binanceDetailedRows) {
     const freeStr = `${fmtAmount(b.free)}${b.isStable ? '' : ` ($${b.usdValue.toFixed(2)})`}`;
-    const lockedStr = b.locked > 0 ? `${fmtAmount(b.locked)}${b.isStable ? '' : ` ($${b.lockedUsd.toFixed(2)})`}` : '-';
-    const text = ` ${exchCell('binance', 'yellow')} ${padRight(b.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight(lockedStr, LOCKED_W)}`;
+    const lockedStr = b.locked > 0 ? `${fmtAmount(b.locked)}${b.isStable ? '' : ` ($${b.lockedUsd.toFixed(2)})`}` : null;
+    const statusStr = lockedStr ? `locked=${padRight(lockedStr, LOCKED_W)}` : 'available for trading';
+    const text = ` ${exchCell('binance', 'yellow')} ${padRight(b.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} ${statusStr}`;
     const canClose = !b.isStable && b.free > 0 && b.unit > 0 && b.usdValue >= DUST;
     holdingRows.push({
       text,
@@ -1051,14 +1052,14 @@ function DashboardInner() {
   for (const h of krakenHoldings.filter(shouldShowHolding).sort(byUsdDesc)) {
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     holdingRows.push({
-      text: ` ${exchCell('kraken', 'cyan')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+      text: ` ${exchCell('kraken', 'cyan')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} available for trading`,
     });
   }
 
   for (const h of coinbaseHoldings.filter(shouldShowHolding).sort(byUsdDesc)) {
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     holdingRows.push({
-      text: ` ${exchCell('coinbase', 'magenta')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+      text: ` ${exchCell('coinbase', 'magenta')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} available for trading`,
     });
   }
 
@@ -1066,7 +1067,7 @@ function DashboardInner() {
     const freeStr = `${fmtAmount(h.amount)}${h.isStable ? '' : ` ($${h.usdValue.toFixed(2)})`}`;
     const canClose = !h.isStable && h.amount > 0 && h.unitPrice > 0 && h.usdValue >= DUST;
     holdingRows.push({
-      text: ` ${exchCell('gemini', 'blue')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} locked=${padRight('-', LOCKED_W)}`,
+      text: ` ${exchCell('gemini', 'blue')} ${padRight(h.asset, ASSET_W)} free=${padRight(freeStr, FREE_W)} available for trading`,
       action: canClose ? { kind: 'close-gemini', asset: h.asset } : undefined,
     });
   }
