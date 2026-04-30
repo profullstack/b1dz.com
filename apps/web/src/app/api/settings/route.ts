@@ -1,21 +1,22 @@
 /**
- * GET    /api/settings           → plain + masked secret status (set/unset + length)
- * PUT    /api/settings           → merge { plain?, secret? }; null deletes a key
+ * GET    /api/settings  → { plain, cipher: { ciphertext, iv, tag } | null,
+ *                          lastUpdatedAt, cryptoConfigured }
+ * PUT    /api/settings  → { plain?, cipher? }
  *
- * Secrets are NEVER returned in plaintext over the wire. The web UI shows
- * masked indicators only. The TUI and daemon decrypt locally using the
- * shared SETTINGS_ENCRYPTION_KEY (env-supplied to those processes).
+ * Server stores ciphertext only. The browser (and CLI) fetch the AES-256-GCM
+ * key from /api/settings/crypto-key and encrypt/decrypt the secret blob
+ * client-side. The server never holds plaintext secrets — it just passes
+ * the cipher blob through to user_settings.
+ *
+ * For PUT:
+ *   - If `cipher` is omitted, existing cipher columns are left untouched.
+ *   - If `cipher` is null, cipher columns are cleared.
+ *   - If `cipher` is { ciphertext, iv, tag }, those values overwrite.
+ *   - `plain` is server-side merged (non-secret fields).
  */
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
-import { decryptSecret, encryptSecret, secretCryptoConfigured } from '@/lib/secret-crypto';
-import {
-  maskSecrets,
-  sanitizePlain,
-  sanitizeSecret,
-  type PlainPayload,
-  type SecretPayload,
-} from '@/lib/settings-fields';
+import { sanitizePlain, type PlainPayload } from '@/lib/settings-fields';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +27,16 @@ interface SettingsRow {
   payload_secret_iv: string | null;
   payload_secret_tag: string | null;
   updated_at: string;
+}
+
+interface CipherBlob {
+  ciphertext: string;
+  iv: string;
+  tag: string;
+}
+
+function secretCryptoConfigured(): boolean {
+  return !!process.env.SETTINGS_ENCRYPTION_KEY;
 }
 
 async function loadSettingsRow(client: ReturnType<typeof Object>, userId: string): Promise<SettingsRow | null> {
@@ -41,28 +52,29 @@ async function loadSettingsRow(client: ReturnType<typeof Object>, userId: string
   return data;
 }
 
-function decryptOrEmpty(row: SettingsRow | null): SecretPayload {
-  if (!row?.payload_secret_ciphertext || !row.payload_secret_iv || !row.payload_secret_tag) return {};
-  try {
-    const json = decryptSecret({
-      ciphertext: row.payload_secret_ciphertext,
-      iv: row.payload_secret_iv,
-      tag: row.payload_secret_tag,
-    });
-    const parsed = JSON.parse(json) as unknown;
-    return sanitizeSecret(parsed);
-  } catch {
-    // If the key was rotated or the row is corrupt, surface as "no secrets set"
-    // rather than 500. The owner can re-enter values from the UI.
-    return {};
-  }
+function rowToCipher(row: SettingsRow | null): CipherBlob | null {
+  if (!row?.payload_secret_ciphertext || !row.payload_secret_iv || !row.payload_secret_tag) return null;
+  return {
+    ciphertext: row.payload_secret_ciphertext,
+    iv: row.payload_secret_iv,
+    tag: row.payload_secret_tag,
+  };
+}
+
+function isValidCipher(value: unknown): value is CipherBlob {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.ciphertext === 'string'
+    && typeof v.iv === 'string'
+    && typeof v.tag === 'string'
+    && v.ciphertext.length > 0
+    && v.iv.length > 0
+    && v.tag.length > 0;
 }
 
 export async function GET(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
-
-  const cryptoOk = secretCryptoConfigured();
 
   let row: SettingsRow | null;
   try {
@@ -71,15 +83,11 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  const plain = sanitizePlain(row?.payload_plain ?? {});
-  // Decrypt only to mask — plaintext never leaves this function.
-  const secret: SecretPayload = cryptoOk ? decryptOrEmpty(row) : {};
-
   return Response.json({
-    plain,
-    secret: maskSecrets(secret),
+    plain: sanitizePlain(row?.payload_plain ?? {}),
+    cipher: rowToCipher(row),
     lastUpdatedAt: row?.updated_at ?? null,
-    cryptoConfigured: cryptoOk,
+    cryptoConfigured: secretCryptoConfigured(),
   });
 }
 
@@ -87,19 +95,20 @@ export async function PUT(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const raw = await req.json().catch(() => null) as { plain?: unknown; secret?: unknown } | null;
+  const raw = await req.json().catch(() => null) as { plain?: unknown; cipher?: unknown } | null;
   if (raw == null || typeof raw !== 'object') {
     return Response.json({ error: 'body required' }, { status: 400 });
   }
 
   const incomingPlain = sanitizePlain(raw.plain);
-  const incomingSecret = sanitizeSecret(raw.secret);
-  const willTouchSecret = Object.keys(incomingSecret).length > 0;
+  const cipherProvided = 'cipher' in raw;
+  const cipherIsNull = cipherProvided && raw.cipher === null;
+  const cipherIsBlob = cipherProvided && raw.cipher !== null && isValidCipher(raw.cipher);
 
-  if (willTouchSecret && !secretCryptoConfigured()) {
+  if (cipherProvided && !cipherIsNull && !cipherIsBlob) {
     return Response.json(
-      { error: 'SETTINGS_ENCRYPTION_KEY not configured on server; cannot save secrets' },
-      { status: 503 },
+      { error: 'cipher must be { ciphertext, iv, tag } (all base64 strings) or null' },
+      { status: 400 },
     );
   }
 
@@ -110,18 +119,10 @@ export async function PUT(req: NextRequest) {
     return Response.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  // Merge plain
+  // Merge plain (server-side merge of non-secret fields).
   const mergedPlain: PlainPayload = { ...(existing?.payload_plain ?? {}), ...incomingPlain };
-  // Drop nulled-out plain keys so the JSON stays tidy
   for (const [k, v] of Object.entries(mergedPlain)) {
     if (v === null) delete (mergedPlain as Record<string, unknown>)[k];
-  }
-
-  // Merge secret
-  let mergedSecret: SecretPayload = secretCryptoConfigured() ? decryptOrEmpty(existing) : {};
-  for (const [k, v] of Object.entries(incomingSecret)) {
-    if (v === null) delete (mergedSecret as Record<string, string>)[k];
-    else (mergedSecret as Record<string, string>)[k] = v;
   }
 
   const row: Record<string, unknown> = {
@@ -130,18 +131,20 @@ export async function PUT(req: NextRequest) {
     updated_at: new Date().toISOString(),
   };
 
-  if (Object.keys(mergedSecret).length > 0 && secretCryptoConfigured()) {
-    const blob = encryptSecret(JSON.stringify(mergedSecret));
+  if (cipherIsBlob) {
+    const blob = raw.cipher as CipherBlob;
     row.payload_secret_ciphertext = blob.ciphertext;
     row.payload_secret_iv = blob.iv;
     row.payload_secret_tag = blob.tag;
-  } else {
-    // Either user cleared all secrets, or crypto is unavailable and we have
-    // none to begin with. Either way, null out the cipher columns.
+  } else if (cipherIsNull) {
     row.payload_secret_ciphertext = null;
     row.payload_secret_iv = null;
     row.payload_secret_tag = null;
-    mergedSecret = {};
+  } else {
+    // cipher omitted → keep existing values
+    row.payload_secret_ciphertext = existing?.payload_secret_ciphertext ?? null;
+    row.payload_secret_iv = existing?.payload_secret_iv ?? null;
+    row.payload_secret_tag = existing?.payload_secret_tag ?? null;
   }
 
   const upsert = (auth.client as unknown as {
@@ -152,11 +155,15 @@ export async function PUT(req: NextRequest) {
   const { error } = await upsert;
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
-  console.log(`[api] settings updated user=${auth.userId.slice(0, 8)} plainKeys=${Object.keys(incomingPlain).length} secretTouched=${Object.keys(incomingSecret).length}`);
+  console.log(`[api] settings updated user=${auth.userId.slice(0, 8)} plainKeys=${Object.keys(incomingPlain).length} cipher=${cipherIsBlob ? 'set' : cipherIsNull ? 'cleared' : 'unchanged'}`);
 
   return Response.json({
     plain: mergedPlain,
-    secret: maskSecrets(mergedSecret),
+    cipher: cipherIsBlob
+      ? raw.cipher as CipherBlob
+      : cipherIsNull
+        ? null
+        : rowToCipher(existing),
     lastUpdatedAt: row.updated_at,
     cryptoConfigured: secretCryptoConfigured(),
   });

@@ -3,7 +3,15 @@
 import { useState } from 'react';
 import { PlainTextRow, SectionShell, readPlainString, saveSettings, type SettingsResponse } from '../shared';
 
-export function RpcSection({ data, onSaved }: { data: SettingsResponse; onSaved: (next: SettingsResponse) => void }) {
+export function RpcSection({
+  data,
+  cryptoKey,
+  onSaved,
+}: {
+  data: SettingsResponse;
+  cryptoKey: CryptoKey | null;
+  onSaved: (next: SettingsResponse) => void;
+}) {
   const [base, setBase] = useState(readPlainString(data, 'BASE_RPC_URL'));
   const [sol, setSol] = useState(readPlainString(data, 'SOLANA_RPC_URL'));
 
@@ -13,7 +21,7 @@ export function RpcSection({ data, onSaved }: { data: SettingsResponse; onSaved:
         BASE_RPC_URL: base.trim() || null,
         SOLANA_RPC_URL: sol.trim() || null,
       },
-    });
+    }, { cryptoKey });
     onSaved(next);
   };
 

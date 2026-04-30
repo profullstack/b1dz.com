@@ -1,17 +1,17 @@
 /**
  * `b1dz settings` — read-only print of /api/settings.
  *
- * Phase A: print non-secret fields and secret-set status. Editing happens at
- * https://b1dz.com/settings (linked at the bottom of the output). Phase B
- * will add interactive CLI editing once the daemon reads from user_settings.
+ * Fetches the encryption key from /api/settings/crypto-key and decrypts the
+ * cipher blob locally to determine which secrets are set (without printing
+ * any values). Editing happens at https://b1dz.com/settings or via
+ * `b1dz setup`.
  */
 import { loadCredentials } from './auth.js';
-
-interface MaskedSecret { set: boolean; length?: number }
+import { fetchCryptoKey, decryptJson, type CipherBlob } from './crypto-key.js';
 
 interface SettingsResponse {
   plain: Record<string, string | number | boolean | null | undefined>;
-  secret: Record<string, MaskedSecret>;
+  cipher: CipherBlob | null;
   lastUpdatedAt: string | null;
   cryptoConfigured: boolean;
 }
@@ -66,9 +66,9 @@ function fmtPlain(v: unknown): string {
   return String(v);
 }
 
-function fmtSecret(s: MaskedSecret | undefined): string {
-  if (!s?.set) return '\x1b[2munset\x1b[0m';
-  return `\x1b[32mset\x1b[0m (\x1b[2m${s.length ?? '?'} chars\x1b[0m)`;
+function fmtSecret(plaintext: string | undefined): string {
+  if (!plaintext) return '\x1b[2munset\x1b[0m';
+  return `\x1b[32mset\x1b[0m (\x1b[2m${plaintext.length} chars\x1b[0m)`;
 }
 
 export async function settings() {
@@ -87,6 +87,18 @@ export async function settings() {
   }
   const data = await res.json() as SettingsResponse;
 
+  // Decrypt the cipher locally to know which secrets are set (without
+  // printing values).
+  let decrypted: Record<string, string> = {};
+  if (data.cipher && data.cryptoConfigured) {
+    try {
+      const keyB64 = await fetchCryptoKey(baseUrl, c.accessToken);
+      decrypted = decryptJson<Record<string, string>>(keyB64, data.cipher);
+    } catch (e) {
+      console.log(`\x1b[33m⚠ could not decrypt secrets: ${(e as Error).message}\x1b[0m`);
+    }
+  }
+
   console.log(`\n\x1b[1msigned in as\x1b[0m ${c.email}`);
   console.log(`\x1b[2muser_id: ${c.userId}\x1b[0m`);
   console.log(`\x1b[2mlast updated: ${data.lastUpdatedAt ?? 'never'}\x1b[0m`);
@@ -104,7 +116,7 @@ export async function settings() {
   for (const [groupName, fields] of SECRET_FIELDS) {
     console.log(`\n\x1b[1m${groupName} secrets\x1b[0m`);
     for (const f of fields) {
-      console.log(`  ${f.padEnd(34)} ${fmtSecret(data.secret[f])}`);
+      console.log(`  ${f.padEnd(34)} ${fmtSecret(decrypted[f])}`);
     }
   }
 

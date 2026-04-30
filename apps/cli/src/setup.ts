@@ -1,8 +1,8 @@
 /**
  * `b1dz setup [section]` — guided interactive walkthrough that prompts for
- * keys/values and PUTs them to /api/settings. Plaintext entered here travels
- * over HTTPS to the server, which encrypts before storing. The server never
- * stores plaintext at rest and never returns plaintext on read.
+ * keys/values, encrypts secrets locally with the AES-256-GCM key fetched
+ * from /api/settings/crypto-key, and PUTs the encrypted blob to
+ * /api/settings. The server only ever sees ciphertext.
  *
  * Run with no arg for the full guided tour. Run with a section name
  * (`coinbase`, `kraken`, `binance`, `gemini`, `oneinch`, `evm`, `solana`,
@@ -10,6 +10,7 @@
  */
 import { createInterface } from 'node:readline/promises';
 import { loadCredentials, promptPassword } from './auth.js';
+import { fetchCryptoKey, encryptJson, decryptJson, type CipherBlob } from './crypto-key.js';
 
 function apiBaseUrl(): string {
   const url = process.env.B1DZ_API_URL;
@@ -26,10 +27,9 @@ const C = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
-interface MaskedSecret { set: boolean; length?: number }
 interface SettingsResponse {
   plain: Record<string, string | number | boolean | null | undefined>;
-  secret: Record<string, MaskedSecret>;
+  cipher: CipherBlob | null;
   lastUpdatedAt: string | null;
   cryptoConfigured: boolean;
 }
@@ -37,6 +37,9 @@ interface SettingsResponse {
 interface ApiCtx {
   accessToken: string;
   baseUrl: string;
+  /** Base64 AES-256-GCM key, fetched once on entry. May be null if server
+   *  reports SETTINGS_ENCRYPTION_KEY missing. */
+  keyB64: string | null;
 }
 
 async function fetchSettings(ctx: ApiCtx): Promise<SettingsResponse> {
@@ -47,7 +50,10 @@ async function fetchSettings(ctx: ApiCtx): Promise<SettingsResponse> {
   return (await res.json()) as SettingsResponse;
 }
 
-async function saveSettings(ctx: ApiCtx, body: { plain?: Record<string, string | null>; secret?: Record<string, string | null> }): Promise<SettingsResponse> {
+async function saveSettings(
+  ctx: ApiCtx,
+  body: { plain?: Record<string, string | null>; cipher?: CipherBlob | null },
+): Promise<SettingsResponse> {
   const res = await fetch(`${ctx.baseUrl}/api/settings`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${ctx.accessToken}`, 'content-type': 'application/json' },
@@ -68,9 +74,9 @@ async function ask(label: string): Promise<string> {
 }
 
 /** Prompt for a value. Empty = skip (keep current). 'clear' = set to null. */
-async function promptField(label: string, current: string, secret: boolean): Promise<string | null | 'skip'> {
-  const hint = current
-    ? C.dim(`  current: ${secret ? `set (${current})` : current}  ${C.dim('(enter to skip, "clear" to remove)')}`)
+async function promptField(label: string, currentSummary: string, secret: boolean): Promise<string | null | 'skip'> {
+  const hint = currentSummary
+    ? C.dim(`  current: ${currentSummary}  ${C.dim('(enter to skip, "clear" to remove)')}`)
     : C.dim(`  unset  ${C.dim('(enter to skip)')}`);
   console.log(hint);
   const value = secret
@@ -81,14 +87,14 @@ async function promptField(label: string, current: string, secret: boolean): Pro
   return value;
 }
 
-function maskedSummary(masked: MaskedSecret | undefined): string {
-  if (!masked?.set) return 'unset';
-  return `set (${masked.length ?? '?'} chars)`;
+function plainSummary(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '';
+  return String(v);
 }
 
-function plainSummary(v: unknown): string {
-  if (v === null || v === undefined || v === '') return 'unset';
-  return String(v);
+function secretSummary(decrypted: Record<string, string>, key: string): string {
+  const v = decrypted[key];
+  return v ? `set (${v.length} chars)` : '';
 }
 
 interface SecretFieldSpec {
@@ -203,19 +209,24 @@ const SECTIONS: Section[] = [
   },
 ];
 
-async function runSection(ctx: ApiCtx, current: SettingsResponse, section: Section): Promise<SettingsResponse> {
+async function runSection(
+  ctx: ApiCtx,
+  current: SettingsResponse,
+  decrypted: Record<string, string>,
+  section: Section,
+): Promise<{ next: SettingsResponse; decrypted: Record<string, string> }> {
   console.log(`\n${C.bold(section.title)}`);
   console.log(`  ${section.intro}`);
   if (section.url) console.log(`  ${C.cyan(section.url)}`);
   console.log();
 
   const plainBody: Record<string, string | null> = {};
-  const secretBody: Record<string, string | null> = {};
+  const secretChanges: Record<string, string | null> = {};
 
   for (const spec of section.plain ?? []) {
     const cur = plainSummary(current.plain[spec.key]);
     if (spec.hint) console.log(C.dim(`  ${spec.hint}`));
-    const value = await promptField(`${spec.label} ${C.dim(`[${spec.key}]`)}`, cur === 'unset' ? '' : cur, false);
+    const value = await promptField(`${spec.label} ${C.dim(`[${spec.key}]`)}`, cur, false);
     if (value === 'skip') continue;
     if (value === null) plainBody[spec.key] = null;
     else if (spec.type === 'bool') {
@@ -229,37 +240,58 @@ async function runSection(ctx: ApiCtx, current: SettingsResponse, section: Secti
   }
 
   for (const spec of section.secret ?? []) {
-    const cur = maskedSummary(current.secret[spec.key]);
-    const value = await promptField(`${spec.label} ${C.dim(`[${spec.key}]`)}`, cur === 'unset' ? '' : cur, true);
+    const cur = secretSummary(decrypted, spec.key);
+    const value = await promptField(`${spec.label} ${C.dim(`[${spec.key}]`)}`, cur, true);
     if (value === 'skip') continue;
-    secretBody[spec.key] = value;
+    secretChanges[spec.key] = value;
   }
 
-  if (Object.keys(plainBody).length === 0 && Object.keys(secretBody).length === 0) {
+  if (Object.keys(plainBody).length === 0 && Object.keys(secretChanges).length === 0) {
     console.log(C.dim('  (no changes)'));
-    return current;
+    return { next: current, decrypted };
   }
 
   console.log();
   const summary = [
     ...Object.entries(plainBody).map(([k, v]) => `  ${k} = ${v === null ? C.red('clear') : v}`),
-    ...Object.entries(secretBody).map(([k, v]) => `  ${k} = ${v === null ? C.red('clear') : C.green(`${(v as string).length} chars`)}`),
+    ...Object.entries(secretChanges).map(([k, v]) => `  ${k} = ${v === null ? C.red('clear') : C.green(`${(v as string).length} chars`)}`),
   ].join('\n');
   console.log(C.bold('Pending changes:'));
   console.log(summary);
   const confirm = (await ask(`\nSave ${section.title}? [Y/n] `)).toLowerCase();
   if (confirm === 'n' || confirm === 'no') {
     console.log(C.dim('  skipped — nothing saved'));
-    return current;
+    return { next: current, decrypted };
+  }
+
+  // Apply secret changes to the full decrypted blob, then re-encrypt.
+  const willTouchSecret = Object.keys(secretChanges).length > 0;
+  if (willTouchSecret && !ctx.keyB64) {
+    console.log(C.red('  ✗ encryption key unavailable; cannot save secrets'));
+    return { next: current, decrypted };
+  }
+
+  const merged: Record<string, string> = { ...decrypted };
+  for (const [k, v] of Object.entries(secretChanges)) {
+    if (v === null) delete merged[k];
+    else merged[k] = v;
+  }
+
+  const body: { plain?: Record<string, string | null>; cipher?: CipherBlob | null } = {};
+  if (Object.keys(plainBody).length > 0) body.plain = plainBody;
+  if (willTouchSecret) {
+    body.cipher = Object.keys(merged).length > 0
+      ? encryptJson(ctx.keyB64!, merged)
+      : null;
   }
 
   try {
-    const next = await saveSettings(ctx, { plain: plainBody, secret: secretBody });
-    console.log(C.green(`  ✓ saved ${Object.keys(plainBody).length} plain + ${Object.keys(secretBody).length} secret fields`));
-    return next;
+    const next = await saveSettings(ctx, body);
+    console.log(C.green(`  ✓ saved ${Object.keys(plainBody).length} plain + ${Object.keys(secretChanges).length} secret fields`));
+    return { next, decrypted: merged };
   } catch (e) {
     console.log(C.red(`  ✗ ${(e as Error).message}`));
-    return current;
+    return { next: current, decrypted };
   }
 }
 
@@ -269,7 +301,22 @@ export async function setup(args: string[]) {
     console.error(C.red('not signed in — run `b1dz login` first'));
     process.exit(1);
   }
-  const ctx: ApiCtx = { accessToken: c.accessToken, baseUrl: apiBaseUrl() };
+
+  const baseUrl = apiBaseUrl();
+  let keyB64: string | null = null;
+  try {
+    keyB64 = await fetchCryptoKey(baseUrl, c.accessToken);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes('not configured')) {
+      console.log(C.yellow(`⚠ ${msg} — secret saves will be blocked.`));
+    } else {
+      console.error(C.red(`could not fetch crypto key: ${msg}`));
+      process.exit(1);
+    }
+  }
+
+  const ctx: ApiCtx = { accessToken: c.accessToken, baseUrl, keyB64 };
 
   let current: SettingsResponse;
   try {
@@ -279,8 +326,14 @@ export async function setup(args: string[]) {
     process.exit(1);
   }
 
-  if (!current.cryptoConfigured) {
-    console.log(C.yellow('⚠ server-side SETTINGS_ENCRYPTION_KEY is not configured — secret saves will be blocked.\n  Ask the operator to set it on Railway, then retry.'));
+  // Decrypt the cipher locally so we can show "current" summaries and merge.
+  let decrypted: Record<string, string> = {};
+  if (current.cipher && keyB64) {
+    try {
+      decrypted = decryptJson<Record<string, string>>(keyB64, current.cipher);
+    } catch (e) {
+      console.log(C.yellow(`⚠ could not decrypt existing secrets: ${(e as Error).message}`));
+    }
   }
 
   const wanted = args[0]?.toLowerCase();
@@ -294,10 +347,12 @@ export async function setup(args: string[]) {
   }
 
   console.log(`\n${C.bold('b1dz setup')}  ${C.dim(`signed in as ${c.email}`)}`);
-  console.log(C.dim('Plaintext you enter is sent to the server over HTTPS, encrypted with AES-256-GCM at rest, and never returned to the browser. Press enter to skip a field. Type "clear" to remove an existing value.'));
+  console.log(C.dim('Plaintext you enter is encrypted locally with AES-256-GCM and the encrypted blob is sent to the server. Press enter to skip a field. Type "clear" to remove an existing value.'));
 
   for (const s of sections) {
-    current = await runSection(ctx, current, s);
+    const { next, decrypted: nextDecrypted } = await runSection(ctx, current, decrypted, s);
+    current = next;
+    decrypted = nextDecrypted;
   }
 
   console.log(`\n${C.green('Setup complete.')}  Verify anytime with ${C.cyan('b1dz settings')}.\n`);

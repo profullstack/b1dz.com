@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   SecretRow,
   SectionShell,
-  readMasked,
+  decryptSecretBlob,
   saveSettings,
   type SettingsResponse,
 } from '../shared';
@@ -12,45 +12,93 @@ import {
 const SECRET_FIELDS = ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY'] as const;
 type SecretField = typeof SECRET_FIELDS[number];
 
-export function DexSection({ data, onSaved }: { data: SettingsResponse; onSaved: (next: SettingsResponse) => void }) {
+export function DexSection({
+  data,
+  cryptoKey,
+  cryptoUnavailable,
+  onSaved,
+}: {
+  data: SettingsResponse;
+  cryptoKey: CryptoKey | null;
+  cryptoUnavailable: boolean;
+  onSaved: (next: SettingsResponse) => void;
+}) {
   const [drafts, setDrafts] = useState<Partial<Record<SecretField, string>>>({});
   const [pendingClear, setPendingClear] = useState<Partial<Record<SecretField, true>>>({});
+  const [decrypted, setDecrypted] = useState<Record<string, string> | null>(null);
+  const [revealed, setRevealed] = useState<Partial<Record<SecretField, true>>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const plain = await decryptSecretBlob(cryptoKey, data.cipher);
+        if (!cancelled) setDecrypted(plain);
+      } catch {
+        if (!cancelled) setDecrypted({});
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [cryptoKey, data.cipher]);
 
   const setDraft = (k: SecretField) => (v: string) => setDrafts((d) => ({ ...d, [k]: v }));
   const clearField = (k: SecretField) => () => {
     setPendingClear((p) => ({ ...p, [k]: true }));
     setDrafts((d) => ({ ...d, [k]: '' }));
+    setRevealed((r) => { const n = { ...r }; delete n[k]; return n; });
+  };
+  const revealField = (k: SecretField) => async () => {
+    if (!cryptoKey) throw new Error('encryption key not loaded');
+    if (!decrypted) {
+      const plain = await decryptSecretBlob(cryptoKey, data.cipher);
+      setDecrypted(plain);
+    }
+    setRevealed((r) => ({ ...r, [k]: true }));
   };
 
   const onSave = async () => {
-    const secret: Record<string, string | null> = {};
+    const merged: Record<string, string> = { ...(decrypted ?? {}) };
     for (const f of SECRET_FIELDS) {
-      if (pendingClear[f]) secret[f] = null;
-      else if ((drafts[f] ?? '').trim() !== '') secret[f] = drafts[f]!;
+      if (pendingClear[f]) delete merged[f];
+      else if ((drafts[f] ?? '').trim() !== '') merged[f] = drafts[f]!;
     }
-    const next = await saveSettings({ secret });
+    const next = await saveSettings(
+      { secret: Object.keys(merged).length > 0 ? merged : null },
+      { cryptoKey },
+    );
     onSaved(next);
     setDrafts({});
     setPendingClear({});
+    setRevealed({});
+    setDecrypted(merged);
   };
 
-  const secretRow = (field: SecretField, label: string, hint?: string) => (
-    <SecretRow
-      key={field}
-      field={field}
-      label={label}
-      masked={readMasked(data, field)}
-      draft={drafts[field] ?? ''}
-      onDraft={setDraft(field)}
-      onClear={clearField(field)}
-      hint={hint}
-    />
-  );
+  const secretRow = (field: SecretField, label: string, hint?: string) => {
+    const stored = decrypted?.[field];
+    const isSet = !!stored;
+    const isRevealed = !!revealed[field];
+    return (
+      <SecretRow
+        key={field}
+        field={field}
+        label={label}
+        isSet={isSet}
+        length={isSet ? stored?.length : undefined}
+        revealed={isRevealed ? stored : undefined}
+        draft={drafts[field] ?? ''}
+        onDraft={setDraft(field)}
+        onClear={clearField(field)}
+        onReveal={revealField(field)}
+        hint={hint}
+        disabled={cryptoUnavailable}
+      />
+    );
+  };
 
   return (
     <SectionShell
       title="DEX keys"
-      description="1inch API key and hot-wallet private keys for on-chain DEX execution. Hot keys sign Uniswap-V3 / Jupiter swaps directly."
+      description="1inch API key and hot-wallet private keys for on-chain DEX execution. Encrypted client-side before transmit. Hot keys sign Uniswap-V3 / Jupiter swaps directly."
       onSave={onSave}
     >
       {secretRow('ONEINCH_API_KEY', '1inch API key', 'Required for 1inch quote/swap router')}

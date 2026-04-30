@@ -3,7 +3,15 @@
 import { useState } from 'react';
 import { PlainTextRow, SectionShell, readPlainString, saveSettings, type SettingsResponse } from '../shared';
 
-export function WalletsSection({ data, onSaved }: { data: SettingsResponse; onSaved: (next: SettingsResponse) => void }) {
+export function WalletsSection({
+  data,
+  cryptoKey,
+  onSaved,
+}: {
+  data: SettingsResponse;
+  cryptoKey: CryptoKey | null;
+  onSaved: (next: SettingsResponse) => void;
+}) {
   const [evm, setEvm] = useState(readPlainString(data, 'EVM_WALLET_ADDRESS'));
   const [sol, setSol] = useState(readPlainString(data, 'SOLANA_WALLET_ADDRESS'));
 
@@ -13,7 +21,7 @@ export function WalletsSection({ data, onSaved }: { data: SettingsResponse; onSa
         EVM_WALLET_ADDRESS: evm.trim() || null,
         SOLANA_WALLET_ADDRESS: sol.trim() || null,
       },
-    });
+    }, { cryptoKey });
     onSaved(next);
   };
 

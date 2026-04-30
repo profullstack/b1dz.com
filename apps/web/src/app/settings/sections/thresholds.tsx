@@ -57,7 +57,15 @@ const MISC: NumField[] = [
 
 const ALL = [...RISK, ...SLIPPAGE, ...AUTO_SEED, ...LIQ, ...TRI, ...MISC];
 
-export function ThresholdsSection({ data, onSaved }: { data: SettingsResponse; onSaved: (next: SettingsResponse) => void }) {
+export function ThresholdsSection({
+  data,
+  cryptoKey,
+  onSaved,
+}: {
+  data: SettingsResponse;
+  cryptoKey: CryptoKey | null;
+  onSaved: (next: SettingsResponse) => void;
+}) {
   const initial = Object.fromEntries(ALL.map((f) => [f.field, readPlainNumber(data, f.field)]));
   const [vals, setVals] = useState<Record<string, string>>(initial);
   const [triAnchor, setTriAnchor] = useState(readPlainString(data, 'ARB_TRIANGULAR_ANCHOR'));
@@ -78,7 +86,7 @@ export function ThresholdsSection({ data, onSaved }: { data: SettingsResponse; o
   };
 
   const onSaveSection = (fields: NumField[], extra: Record<string, string | null> = {}) => async () => {
-    const next = await saveSettings({ plain: { ...buildPlain(fields), ...extra } });
+    const next = await saveSettings({ plain: { ...buildPlain(fields), ...extra } }, { cryptoKey });
     onSaved(next);
   };
 

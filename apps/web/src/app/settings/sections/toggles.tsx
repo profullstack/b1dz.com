@@ -11,7 +11,15 @@ const TOGGLES = [
   { field: 'ENABLE_PROXY', label: 'Enable HTTP proxy' },
 ] as const;
 
-export function TogglesSection({ data, onSaved }: { data: SettingsResponse; onSaved: (next: SettingsResponse) => void }) {
+export function TogglesSection({
+  data,
+  cryptoKey,
+  onSaved,
+}: {
+  data: SettingsResponse;
+  cryptoKey: CryptoKey | null;
+  onSaved: (next: SettingsResponse) => void;
+}) {
   const initial = Object.fromEntries(TOGGLES.map((t) => [t.field, readPlainBool(data, t.field)]));
   const [vals, setVals] = useState<Record<string, boolean>>(initial);
 
@@ -20,7 +28,7 @@ export function TogglesSection({ data, onSaved }: { data: SettingsResponse; onSa
   const onSave = async () => {
     const plain: Record<string, boolean> = {};
     for (const t of TOGGLES) plain[t.field] = !!vals[t.field];
-    const next = await saveSettings({ plain });
+    const next = await saveSettings({ plain }, { cryptoKey });
     onSaved(next);
   };
 

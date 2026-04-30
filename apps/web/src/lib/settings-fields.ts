@@ -1,9 +1,8 @@
 /**
  * Settings field catalog.
  *
- * Phase A only stores values; Phase B will wire the daemon to read these
- * keys from user_settings instead of process.env. The names here MUST match
- * the existing env-var names so Phase B is a mechanical swap.
+ * The web layer encrypts/decrypts secrets client-side using the key fetched
+ * from /api/settings/crypto-key. The server only stores ciphertext.
  */
 
 export const SECRET_FIELDS = [
@@ -111,8 +110,6 @@ export type PlainPayload = Partial<
   & Record<PlainBoolField, boolean | null>
 >;
 
-export type SecretPayload = Partial<Record<SecretField, string | null>>;
-
 /**
  * Validate and coerce an incoming `plain` payload. Drops unknown keys.
  * Returns the cleaned object; never throws — invalid values are skipped.
@@ -132,30 +129,4 @@ export function sanitizePlain(input: unknown): PlainPayload {
     }
   }
   return out as PlainPayload;
-}
-
-/**
- * Validate an incoming `secret` payload. Each value must be a string OR null
- * (null means "delete this field"). Drops unknown keys silently.
- */
-export function sanitizeSecret(input: unknown): SecretPayload {
-  if (!input || typeof input !== 'object') return {};
-  const out: Record<string, string | null> = {};
-  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-    if (!SECRET_SET.has(k)) continue;
-    if (v === null) out[k] = null;
-    else if (typeof v === 'string') out[k] = v;
-  }
-  return out as SecretPayload;
-}
-
-export type MaskedSecret = { set: false } | { set: true; length: number };
-
-export function maskSecrets(secret: SecretPayload): Record<string, MaskedSecret> {
-  const out: Record<string, MaskedSecret> = {};
-  for (const f of SECRET_FIELDS) {
-    const v = secret[f];
-    out[f] = typeof v === 'string' && v.length > 0 ? { set: true, length: v.length } : { set: false };
-  }
-  return out;
 }
