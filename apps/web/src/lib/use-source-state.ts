@@ -13,8 +13,9 @@ export interface SourceStateBundle {
   error: string | null;
 }
 
-const POLL_MS = 5000;
+const POLL_MS = 3000;
 const FETCH_TIMEOUT_MS = 8000;
+const LS_KEY = 'b1dz:source-state';
 
 async function fetchJson<T>(path: string): Promise<T | null> {
   const controller = new AbortController();
@@ -29,53 +30,89 @@ async function fetchJson<T>(path: string): Promise<T | null> {
   }
 }
 
-export function useSourceState(): SourceStateBundle {
-  const [bundle, setBundle] = useState<SourceStateBundle>({
-    arb: null,
-    trade: null,
-    settings: null,
-    pipeline: null,
-    loading: true,
-    lastFetched: null,
+type LsData = {
+  arb: ArbState | null;
+  trade: TradeState | null;
+  settings: UiSettings | null;
+  pipeline: ArbPipelineState | null;
+  savedAt: number;
+};
+
+function readLs(): LsData | null {
+  try {
+    const raw = window.localStorage.getItem(LS_KEY);
+    return raw ? (JSON.parse(raw) as LsData) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLs(d: Omit<LsData, 'savedAt'>) {
+  try {
+    window.localStorage.setItem(LS_KEY, JSON.stringify({ ...d, savedAt: Date.now() }));
+  } catch { /* quota / private mode */ }
+}
+
+function fromLs(): SourceStateBundle {
+  if (typeof window === 'undefined') {
+    return { arb: null, trade: null, settings: null, pipeline: null, loading: true, lastFetched: null, error: null };
+  }
+  const c = readLs();
+  return {
+    arb: c?.arb ?? null,
+    trade: c?.trade ?? null,
+    settings: c?.settings ?? null,
+    pipeline: c?.pipeline ?? null,
+    loading: c === null, // already have data → skip loading spinner
+    lastFetched: c?.savedAt ?? null,
     error: null,
-  });
+  };
+}
+
+export function useSourceState(): SourceStateBundle {
+  const [bundle, setBundle] = useState<SourceStateBundle>(fromLs);
   const cancelled = useRef(false);
-  // Preserve last-known-good values — a null/failed fetch should not blank the UI.
-  const lastGood = useRef<Pick<SourceStateBundle, 'arb' | 'trade' | 'settings' | 'pipeline'>>({
-    arb: null, trade: null, settings: null, pipeline: null,
-  });
+  const lastGood = useRef<Omit<LsData, 'savedAt'>>({ arb: null, trade: null, settings: null, pipeline: null });
 
   useEffect(() => {
     cancelled.current = false;
 
-    const load = async () => {
-      // Fetch independently — one slow/failed endpoint doesn't block the rest.
-      const [arb, trade, settings, pipeline] = await Promise.all([
-        fetchJson<ArbState>('/api/storage/source-state/crypto-arb').catch(() => null),
-        fetchJson<TradeState>('/api/storage/source-state/crypto-trade').catch(() => null),
-        fetchJson<UiSettings>('/api/storage/source-state/crypto-ui-settings').catch(() => null),
-        fetchJson<ArbPipelineState>('/api/storage/source-state/arb-pipeline').catch(() => null),
-      ]);
+    // Seed lastGood from cache so partial-failure saves don't wipe keys we haven't re-fetched yet
+    const seed = typeof window !== 'undefined' ? readLs() : null;
+    lastGood.current = {
+      arb: seed?.arb ?? null,
+      trade: seed?.trade ?? null,
+      settings: seed?.settings ?? null,
+      pipeline: seed?.pipeline ?? null,
+    };
 
+    // Called as each individual fetch resolves — updates state immediately, not waiting for siblings
+    const patch = <K extends keyof typeof lastGood.current>(
+      key: K,
+      val: (typeof lastGood.current)[K] | null,
+    ) => {
       if (cancelled.current) return;
-
-      // Only overwrite last-good when the endpoint actually returned data.
-      if (arb !== null) lastGood.current.arb = arb;
-      if (trade !== null) lastGood.current.trade = trade;
-      if (settings !== null) lastGood.current.settings = settings;
-      if (pipeline !== null) lastGood.current.pipeline = pipeline;
-
-      const anyFresh = arb !== null || trade !== null;
-
+      if (val !== null) lastGood.current[key] = val;
       setBundle((prev) => ({
-        arb: lastGood.current.arb,
-        trade: lastGood.current.trade,
-        settings: lastGood.current.settings,
-        pipeline: lastGood.current.pipeline,
+        ...prev,
+        [key]: val !== null ? val : prev[key],
         loading: false,
-        lastFetched: anyFresh ? Date.now() : prev.lastFetched,
-        error: null,
+        ...(val !== null && { lastFetched: Date.now() }),
       }));
+    };
+
+    const load = async () => {
+      await Promise.all([
+        fetchJson<ArbState>('/api/storage/source-state/crypto-arb')
+          .then((v) => patch('arb', v)).catch(() => patch('arb', null)),
+        fetchJson<TradeState>('/api/storage/source-state/crypto-trade')
+          .then((v) => patch('trade', v)).catch(() => patch('trade', null)),
+        fetchJson<UiSettings>('/api/storage/source-state/crypto-ui-settings')
+          .then((v) => patch('settings', v)).catch(() => patch('settings', null)),
+        fetchJson<ArbPipelineState>('/api/storage/source-state/arb-pipeline')
+          .then((v) => patch('pipeline', v)).catch(() => patch('pipeline', null)),
+      ]);
+      writeLs(lastGood.current);
     };
 
     void load();

@@ -20,7 +20,8 @@ const LIVE_SOURCE_STATE_FIELDS = new Set([
   'rawLog',
   'recentTrades',
   'signals',
-  'tradeState',
+  // tradeState intentionally NOT stripped — closedTrades inside it is persistent
+  // history that the UI needs even when Redis is expired and we fall back to the DB row.
 ]);
 
 interface CacheEnvelope<T> {

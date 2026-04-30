@@ -339,7 +339,7 @@ export function ProjectionsClient() {
     <div className="space-y-6">
 
       {/* ── Shared inputs ─────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5">
+      <div className="flex flex-wrap items-start gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5">
         <div className="flex flex-col gap-1">
           <span className="text-xs text-zinc-400">Starting bankroll ($)</span>
           <input type="number" min={0} step={1} value={startingBankroll}
