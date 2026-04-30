@@ -12,10 +12,12 @@ import { cryptoArbWorker } from './sources/crypto-arb.js';
 import { cryptoTradeWorker } from './sources/crypto-trade.js';
 import { cryptoDcaWorker } from './sources/crypto-dca.js';
 import { v2PipelineWorker } from './sources/v2-pipeline.js';
+import { pumpfunTradeWorker } from './sources/pumpfun-trade.js';
 
 export const SOURCES: SourceWorker[] = [
   cryptoArbWorker,
   cryptoTradeWorker,
   cryptoDcaWorker,
   v2PipelineWorker,
+  pumpfunTradeWorker,
 ];

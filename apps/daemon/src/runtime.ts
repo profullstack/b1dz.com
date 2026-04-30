@@ -87,6 +87,24 @@ export class DaemonRuntime {
     console.log(`b1dzd: auto-enabled crypto-dca for user ${userId.slice(0, 8)}…`);
   }
 
+  /** Auto-enable pumpfun-trade for any user who has crypto-trade enabled.
+   *  Execution is guarded at runtime by PUMPFUN_TRADE_EXECUTION=true, so the
+   *  per-user row just needs { enabled: true } to schedule the worker. */
+  private async bootstrapPumpfunFor(userId: string): Promise<void> {
+    const { data } = await this.supabase
+      .from('source_state')
+      .select('user_id')
+      .eq('user_id', userId)
+      .eq('source_id', 'pumpfun-trade')
+      .maybeSingle();
+    if (data) return;
+    await this.supabase.from('source_state').upsert(
+      { user_id: userId, source_id: 'pumpfun-trade', payload: { enabled: true }, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,source_id' },
+    );
+    console.log(`b1dzd: auto-enabled pumpfun-trade for user ${userId.slice(0, 8)}…`);
+  }
+
   /** Find every (user, source) pair that has credentials and ensure a tick is scheduled. */
   async discover() {
     if (this.stopping) return;
@@ -98,6 +116,16 @@ export class DaemonRuntime {
     for (const row of arbUsers ?? []) {
       try { await this.bootstrapDcaFor(row.user_id as string); }
       catch (e) { console.error(`b1dzd: dca bootstrap failed: ${(e as Error).message}`); }
+    }
+
+    // Auto-enable pumpfun-trade for any user who already has crypto-trade on.
+    const { data: tradeUsers } = await this.supabase
+      .from('source_state')
+      .select('user_id')
+      .eq('source_id', 'crypto-trade');
+    for (const row of tradeUsers ?? []) {
+      try { await this.bootstrapPumpfunFor(row.user_id as string); }
+      catch (e) { console.error(`b1dzd: pumpfun bootstrap failed: ${(e as Error).message}`); }
     }
 
     for (const source of SOURCES) {

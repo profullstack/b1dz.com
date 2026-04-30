@@ -90,6 +90,9 @@ export interface PumpFunAdapterOptions {
 export interface DiscoverOptions {
   /** Minimum USD market cap to include. Filters out dead-on-arrival tokens. */
   minMarketCapUsd?: number;
+  /** Maximum USD market cap to include. Useful for bonding-curve strategies
+   *  that want to avoid near-graduation tokens. */
+  maxMarketCapUsd?: number;
   /** Maximum age in minutes. Useful for "only brand-new launches". */
   maxAgeMinutes?: number;
   /** Filter by lifecycle state. Empty/undefined returns all states. */
@@ -194,6 +197,7 @@ export class PumpFunDiscoveryAdapter implements VenueAdapter {
 
   private passesFilter(t: PumpFunTokenCandidate, opts: DiscoverOptions, now: number): boolean {
     if (opts.minMarketCapUsd != null && t.marketCapUsd < opts.minMarketCapUsd) return false;
+    if (opts.maxMarketCapUsd != null && t.marketCapUsd > opts.maxMarketCapUsd) return false;
     if (opts.maxAgeMinutes != null) {
       const ageMin = (now - t.createdAtMs) / 60_000;
       if (ageMin > opts.maxAgeMinutes) return false;

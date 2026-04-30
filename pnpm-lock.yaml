@@ -132,6 +132,9 @@ importers:
       '@b1dz/adapters-evm':
         specifier: workspace:*
         version: link:../../packages/adapters-evm
+      '@b1dz/adapters-pumpfun':
+        specifier: workspace:*
+        version: link:../../packages/adapters-pumpfun
       '@b1dz/adapters-solana':
         specifier: workspace:*
         version: link:../../packages/adapters-solana
@@ -298,9 +301,15 @@ importers:
 
   packages/adapters-pumpfun:
     dependencies:
+      '@b1dz/adapters-solana':
+        specifier: workspace:*
+        version: link:../adapters-solana
       '@b1dz/venue-types':
         specifier: workspace:*
         version: link:../venue-types
+      '@b1dz/wallet-provider':
+        specifier: workspace:*
+        version: link:../wallet-provider
     devDependencies:
       '@types/node':
         specifier: latest

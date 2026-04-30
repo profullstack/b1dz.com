@@ -302,6 +302,9 @@ const OVERLAY_KEYS: readonly string[] = [
   // Master switches
   'TRADING_ENABLED',
   'PUMPFUN_ENABLE_SCRAPE',
+  // Pump.fun live trading
+  'PUMPFUN_TRADE_EXECUTION',
+  'PUMPFUN_TRADE_SOL',
 ] as const;
 
 let envOverlayMutex: Promise<void> = Promise.resolve();

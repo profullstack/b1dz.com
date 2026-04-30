@@ -18,7 +18,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@b1dz/venue-types": "workspace:*"
+    "@b1dz/adapters-solana": "workspace:*",
+    "@b1dz/venue-types": "workspace:*",
+    "@b1dz/wallet-provider": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",

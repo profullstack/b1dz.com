@@ -87,6 +87,77 @@ function fmtPrice(v: number) {
     : v.toFixed(6);
 }
 
+// ─── P&L by period ────────────────────────────────────────────────
+
+const PERIODS = [
+  { label: '1 min',    ms: 60_000 },
+  { label: '5 min',    ms: 5 * 60_000 },
+  { label: '15 min',   ms: 15 * 60_000 },
+  { label: '30 min',   ms: 30 * 60_000 },
+  { label: '1 hour',   ms: 60 * 60_000 },
+  { label: '1 day',    ms: 24 * 60 * 60_000 },
+  { label: '1 week',   ms: 7 * 24 * 60 * 60_000 },
+  { label: '1 month',  ms: 30 * 24 * 60 * 60_000 },
+  { label: '3 months', ms: 90 * 24 * 60 * 60_000 },
+  { label: '6 months', ms: 180 * 24 * 60 * 60_000 },
+  { label: '1 year',   ms: 365 * 24 * 60 * 60_000 },
+  { label: 'All time', ms: Infinity },
+] as const;
+
+function PnLBreakdown({ trades }: { trades: ClosedTrade[] }) {
+  const now = Date.now();
+  const rows = PERIODS.map(({ label, ms }) => {
+    const bucket = trades.filter((t) => now - t.exitTime <= ms);
+    if (bucket.length === 0) return { label, count: 0, gross: 0, fees: 0, net: 0, winRate: null };
+    const gross = bucket.reduce((s, t) => s + t.grossPnl, 0);
+    const fees  = bucket.reduce((s, t) => s + t.fee, 0);
+    const net   = bucket.reduce((s, t) => s + t.netPnl, 0);
+    const wins  = bucket.filter((t) => t.netPnl > 0).length;
+    return { label, count: bucket.length, gross, fees, net, winRate: (wins / bucket.length) * 100 };
+  });
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-zinc-800">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-zinc-800 text-zinc-500">
+            <th className="px-3 py-2 text-left">Period</th>
+            <th className="px-3 py-2 text-right">Trades</th>
+            <th className="px-3 py-2 text-right">Gross</th>
+            <th className="px-3 py-2 text-right">Fees</th>
+            <th className="px-3 py-2 text-right font-semibold">Net</th>
+            <th className="px-3 py-2 text-right">Win %</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ label, count, gross, fees, net, winRate }) => {
+            const isPos = net > 0;
+            const isNeg = net < 0;
+            return (
+              <tr key={label} className="border-b border-zinc-900/60 hover:bg-zinc-800/20">
+                <td className="px-3 py-1.5 text-zinc-400">{label}</td>
+                <td className="px-3 py-1.5 text-right text-zinc-500">{count || '—'}</td>
+                <td className={`px-3 py-1.5 text-right ${count ? (gross >= 0 ? 'text-emerald-400' : 'text-red-400') : 'text-zinc-700'}`}>
+                  {count ? `${SIGN(gross)}${FMT(gross)}` : '—'}
+                </td>
+                <td className="px-3 py-1.5 text-right text-zinc-600">
+                  {count ? `−${FMT(fees)}` : '—'}
+                </td>
+                <td className={`px-3 py-1.5 text-right font-semibold ${count ? (isPos ? 'text-emerald-400' : isNeg ? 'text-red-400' : 'text-zinc-400') : 'text-zinc-700'}`}>
+                  {count ? `${SIGN(net)}${FMT(net)}` : '—'}
+                </td>
+                <td className={`px-3 py-1.5 text-right ${count && winRate !== null ? (winRate >= 50 ? 'text-emerald-400' : 'text-red-400') : 'text-zinc-700'}`}>
+                  {count && winRate !== null ? `${winRate.toFixed(0)}%` : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ─── Trade history + summary ──────────────────────────────────────
 
 function TradeHistory({ trades }: { trades: ClosedTrade[] }) {
@@ -113,6 +184,9 @@ function TradeHistory({ trades }: { trades: ClosedTrade[] }) {
 
   return (
     <div className="space-y-4">
+      {/* P&L by period */}
+      <PnLBreakdown trades={trades} />
+
       {/* Summary stats grid */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Total trades" value={`${sorted.length}`} />
