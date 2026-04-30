@@ -14,14 +14,11 @@ import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
 import { maybeBuildDexTradeExecutor } from '../executors/dex-trade-executor.js';
 
-// Arm the DEX executor seam once per process. Returns null unless
-// DEX_TRADE_EXECUTION=true + the wallet env is set — in which case the
-// trade source logs DEX-BUY SKIPPED (signals still flow, execution
-// doesn't). Fire-and-forget: if arming fails we keep running in the
-// skip-only state so the TUI keeps showing DEX signals.
-void maybeBuildDexTradeExecutor()
-  .then((exec) => setDexExecutor(exec))
-  .catch((e) => console.warn(`[trade] DEX executor boot failed: ${(e as Error).message}`));
+// DEX executor is armed lazily on the first tick so that applyEnvOverlay
+// has already injected the user's SOLANA_PRIVATE_KEY / EVM_PRIVATE_KEY
+// from user_settings before we read process.env. Module-level arming
+// would run before any env overlay and always see empty keys.
+let dexExecutorArmed = false;
 
 // Analysis-cache persistence. Candle history + indicators are multi-MB;
 // writing them into source_state.payload every 5s was blowing up Redis
@@ -107,6 +104,15 @@ export const cryptoTradeWorker: SourceWorker = {
           ? uiSettings.dailyLossLimitPct
           : null,
       );
+
+      // Arm the DEX executor on the first tick (inside applyEnvOverlay so
+      // process.env already has the user's SOLANA_PRIVATE_KEY / EVM_PRIVATE_KEY).
+      if (!dexExecutorArmed) {
+        dexExecutorArmed = true;
+        maybeBuildDexTradeExecutor()
+          .then((exec) => { if (exec) setDexExecutor(exec); })
+          .catch((e) => logRaw(`[trade] DEX executor boot failed: ${(e as Error).message}`, 'crypto-trade'));
+      }
 
       const items = await cryptoTradeSource.poll(sourceCtx);
       const signals: unknown[] = (ctx.payload?.signals as unknown[]) ?? [];
