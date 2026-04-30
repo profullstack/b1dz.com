@@ -16,7 +16,8 @@ interface NumField { field: string; label: string; hint?: string }
 const RISK: NumField[] = [
   { field: 'DAILY_LOSS_LIMIT_PCT', label: 'Daily loss limit %', hint: 'Halts trading once realized PnL drops by this %' },
   { field: 'HARD_STOP_PCT', label: 'Hard stop %', hint: 'Per-position stop-loss as % of entry' },
-  { field: 'TAKE_PROFIT_PCT', label: 'Take profit %' },
+  { field: 'TAKE_PROFIT_PCT', label: 'Take profit %', hint: 'Target gain per trade (e.g. 0.015 = 1.5%)' },
+  { field: 'MIN_NET_PROFIT_PCT', label: 'Min net profit %', hint: 'Minimum profit after all fees required to enter (default 0.003 = 0.3%)' },
   { field: 'ROTATE_ADVERSE_PCT', label: 'Rotate adverse %' },
   { field: 'ROTATE_MIN_HOLD_MS', label: 'Rotate min hold (ms)' },
 ];
