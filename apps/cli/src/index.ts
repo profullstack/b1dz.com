@@ -27,6 +27,7 @@ import { loadCredentials, getApiClient } from './auth.js';
 import { cryptoArbSource } from '@b1dz/source-crypto-arb';
 import { cryptoTradeSource } from '@b1dz/source-crypto-trade';
 import { signup, login, logout, whoami, currentUser } from './auth.js';
+import { settings } from './settings.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.resolve(here, '../../../data');
@@ -100,6 +101,7 @@ Auth:
   b1dz login            sign in to an existing account
   b1dz logout           clear local credentials
   b1dz whoami           show current user
+  b1dz settings         show account settings (API keys, thresholds, toggles)
 
 Dashboard:
   b1dz tui                 live crypto dashboard (production API)
@@ -311,6 +313,7 @@ if (source === 'signup') { await signup(); process.exit(0); }
 if (source === 'login') { await login(); process.exit(0); }
 if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
+if (source === 'settings') { await settings(); process.exit(0); }
 if (source === 'status') runDaemonStatus();
 if (source === 'restart') runDaemonRestart();
 

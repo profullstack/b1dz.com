@@ -64,7 +64,9 @@ export function StatusBar({ arb, trade, settings, loading, onMutate }: Props) {
   });
 
   const arbLastTickMs = arb?.daemon?.lastTickAt ? new Date(arb.daemon.lastTickAt).getTime() : 0;
-  const daemonOnline = arbLastTickMs > 0 && (Date.now() - arbLastTickMs) < 10_000;
+  const tradeLastTickMsForOnline = trade?.daemon?.lastTickAt ? new Date(trade.daemon.lastTickAt).getTime() : 0;
+  const freshestTickMs = Math.max(arbLastTickMs, tradeLastTickMsForOnline);
+  const daemonOnline = freshestTickMs > 0 && (Date.now() - freshestTickMs) < 60_000;
   const daemonVer = arb?.daemon?.version ?? trade?.daemon?.version ?? '?';
 
   const daemonLimitPct = ts?.dailyLossLimitPct ?? 5;
