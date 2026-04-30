@@ -532,7 +532,7 @@ export function PluginsSection({
       <dialog
         ref={dialogRef}
         onClose={() => setConfirmTarget(null)}
-        className="rounded-xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl backdrop:bg-black/60 max-w-sm w-full"
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl backdrop:bg-black/60 max-w-sm w-full"
       >
         <h3 className="text-base font-semibold mb-2">Uninstall {confirmTarget?.name}?</h3>
         <p className="text-sm text-zinc-400 mb-5">
