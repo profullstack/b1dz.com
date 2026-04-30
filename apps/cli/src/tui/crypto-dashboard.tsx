@@ -145,6 +145,7 @@ interface TradeState {
       grossPnl: number;
       fee: number;
       netPnl: number;
+      priceSamples?: number[];
     }[];
   };
   daemon: { lastTickAt: string; worker: string; status: string; version?: string };
@@ -1238,7 +1239,8 @@ function DashboardInner() {
   } else {
     for (const t of recentClosedRows) {
       const color = t.netPnl >= 0 ? '{green-fg}' : '{red-fg}';
-      tradeLines.push(` ${color}${t.exchange.padEnd(10)}{/} ${t.pair.padEnd(10)} ${t.volume.toFixed(6)}  ${t.strategyId.padEnd(10)} net:${t.netPnl >= 0 ? '+' : ''}$${t.netPnl.toFixed(2)}`);
+      const spark = unicodeSparkline(t.priceSamples, 12);
+      tradeLines.push(` ${color}${t.exchange.padEnd(10)}{/} ${t.pair.padEnd(10)} ${t.volume.toFixed(6)}  ${t.strategyId.padEnd(10)} net:${t.netPnl >= 0 ? '+' : ''}$${t.netPnl.toFixed(2)}  ${color}${spark}{/}`);
       tradeLines.push(`   entry:$${t.entryPrice.toFixed(2)} exit:$${t.exitPrice.toFixed(2)} gross:$${t.grossPnl.toFixed(2)} fee:$${t.fee.toFixed(2)}  ${timeSince(Math.floor(t.exitTime / 1000))}`);
     }
   }
