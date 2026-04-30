@@ -22,6 +22,7 @@ export default async function ConsolePage() {
           <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-300">← summary</Link>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          <Link href="/settings" className="text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-zinc-400">{user.email}</span>
           <form action="/api/auth/logout" method="POST">
             <button className="text-zinc-500 hover:text-zinc-300">Sign out</button>

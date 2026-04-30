@@ -1,10 +1,13 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import { createServerSupabase } from '@/lib/supabase';
 import {
   KrakenLogo, CoinbaseLogo, BinanceLogo, GeminiLogo,
   UniswapLogo, ZeroExLogo, OneInchLogo, JupiterLogo, PumpFunLogo,
   UniswapV4Logo, PancakeSwapLogo, RaydiumLogo, OrcaLogo, AerodromeLogo,
 } from './_components/brand-logos';
+
+export const dynamic = 'force-dynamic';
 
 const platformMentions = [
   {
@@ -105,7 +108,10 @@ const supportedStrategies = [
   },
 ];
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const supabase = await createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
       {/* Nav */}
@@ -115,8 +121,22 @@ export default function LandingPage() {
         </div>
         <div className="flex items-center gap-4">
           <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Store</Link>
-          <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Sign in</Link>
-          <Link href="/signup" className="text-sm bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-medium px-4 py-2 rounded-lg transition">Get started</Link>
+          {user ? (
+            <>
+              <Link href="/dashboard" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Dashboard</Link>
+              <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200 transition">Console</Link>
+              <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Settings</Link>
+              <span className="text-sm text-zinc-500">{user.email}</span>
+              <form action="/api/auth/logout" method="POST">
+                <button className="text-sm text-zinc-500 hover:text-zinc-300 transition">Sign out</button>
+              </form>
+            </>
+          ) : (
+            <>
+              <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Sign in</Link>
+              <Link href="/signup" className="text-sm bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-medium px-4 py-2 rounded-lg transition">Get started</Link>
+            </>
+          )}
         </div>
       </nav>
 

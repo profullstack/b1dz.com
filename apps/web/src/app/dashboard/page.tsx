@@ -21,6 +21,7 @@ export default async function DashboardPage() {
         </div>
         <div className="flex items-center gap-4">
           <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200">Console →</Link>
+          <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-sm text-zinc-400">{user.email}</span>
           <form action="/api/auth/logout" method="POST">
             <button className="text-sm text-zinc-500 hover:text-zinc-300 transition">Sign out</button>
