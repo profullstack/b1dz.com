@@ -15,11 +15,11 @@ export default async function ConsolePage() {
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
       <nav className="flex items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-6 py-3">
         <div className="flex items-center gap-3">
-          <Link href="/" aria-label="b1dz home">
-            <Image src="/favicon.svg" alt="b1dz" width={40} height={40} className="hover:opacity-80 transition" />
+          <Link href="/" aria-label="b1dz home" className="inline-flex items-center">
+            <Image src="/favicon.svg" alt="b1dz" width={40} height={40} className="block hover:opacity-80 transition" />
           </Link>
-          <span className="text-base text-zinc-300">&gt; console</span>
-          <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-300">← summary</Link>
+          <span className="text-base leading-none text-zinc-300">&gt; console</span>
+          <Link href="/dashboard" className="text-xs leading-none text-zinc-500 hover:text-zinc-300">← summary</Link>
         </div>
         <div className="flex items-center gap-4 text-sm">
           <Link href="/settings" className="text-zinc-400 hover:text-zinc-200">Settings</Link>
