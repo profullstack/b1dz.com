@@ -141,6 +141,7 @@ export function ThresholdsSection({
       </SectionShell>
       <SectionShell
         title="Misc"
+        description="All fields here are optional — leave blank to use built-in defaults. ETH/USD hint overrides the price oracle fallback. Gemini nonce offset fixes clock-skew errors. DEX pair list defaults to WETH-USDC, cbBTC-USDC, WIF-USDC, BONK-USDC, JUP-USDC."
         onSave={onSaveSection(MISC, {
           ARB_DEX_PAIRS: dexPairs.trim() || null,
         })}
