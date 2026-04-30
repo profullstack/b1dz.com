@@ -9,7 +9,7 @@
  * them as plain substrings so regressions (e.g. accidentally dropping
  * the "loading…" badge) show up as failing string matches.
  */
-export const TRADE_STALE_AFTER_MS = 10_000;
+export const TRADE_STALE_AFTER_MS = 30_000;
 
 export interface StatusFreshnessInput {
   /** True when tradeState or its embedded tradeStatus is missing. */

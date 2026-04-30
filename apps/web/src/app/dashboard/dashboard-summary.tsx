@@ -57,7 +57,10 @@ export function DashboardSummary() {
   const arbLastMs = arb?.daemon?.lastTickAt ? new Date(arb.daemon.lastTickAt).getTime() : 0;
   const tradeLastMs = trade?.daemon?.lastTickAt ? new Date(trade.daemon.lastTickAt).getTime() : 0;
   const freshestMs = Math.max(arbLastMs, tradeLastMs);
-  const daemonOnline = freshestMs > 0 && Date.now() - freshestMs < 60_000;
+  const ageMs = freshestMs > 0 ? Date.now() - freshestMs : Infinity;
+  const daemonOnline = ageMs < 120_000;
+  const daemonStale = ageMs >= 30_000 && ageMs < 120_000;
+  const ageSec = freshestMs > 0 ? Math.floor(ageMs / 1000) : null;
   const profitableSpreads = (arb?.spreads ?? []).filter((s) => s.profitable).length;
 
   return (
@@ -90,9 +93,9 @@ export function DashboardSummary() {
         <span className="text-zinc-100">{profitableSpreads}</span>
       </Card>
       <Card label="Daemon">
-        <span className={`flex items-center gap-2 ${daemonOnline ? 'text-emerald-400' : 'text-red-400'}`}>
-          <span className={`inline-block h-2.5 w-2.5 rounded-full ${daemonOnline ? 'bg-emerald-400' : 'bg-red-400'}`} />
-          {daemonOnline ? 'online' : 'offline'}
+        <span className={`flex items-center gap-2 ${daemonOnline ? (daemonStale ? 'text-amber-400' : 'text-emerald-400') : 'text-red-400'}`}>
+          <span className={`inline-block h-2.5 w-2.5 rounded-full ${daemonOnline ? (daemonStale ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400') : 'bg-red-400 animate-pulse'}`} />
+          {daemonOnline ? (daemonStale ? `stale ${ageSec}s` : 'online') : (ageSec !== null ? `offline ${ageSec}s` : 'offline')}
         </span>
       </Card>
       <div className="sm:col-span-2 flex">

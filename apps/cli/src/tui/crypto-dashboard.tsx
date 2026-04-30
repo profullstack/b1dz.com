@@ -627,7 +627,7 @@ function DashboardInner() {
           }
           if (arb.daemon?.lastTickAt) {
             const age = Date.now() - new Date(arb.daemon.lastTickAt).getTime();
-            setDaemonOnline(age < 60_000);
+            setDaemonOnline(age < 120_000);
           }
           if (arb.daemon?.version && arb.daemon.version !== seenDaemonVersion) {
             addLog(`{cyan-fg}Daemon version{/cyan-fg} ${arb.daemon.worker}=v${arb.daemon.version}`);
@@ -647,7 +647,7 @@ function DashboardInner() {
           setArbPipeState(v2);
           if (v2.daemon?.lastTickAt) {
             const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
-            if (age < 60_000) setDaemonOnline(true);
+            if (age < 120_000) setDaemonOnline(true);
           }
         }
 

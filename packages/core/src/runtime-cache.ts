@@ -7,7 +7,7 @@ const DEFAULT_RUNTIME_CACHE_DIR = process.env.B1DZ_RUNTIME_CACHE_DIR || '/tmp/b1
 const REDIS_URL = process.env.REDIS_URL?.trim() || '';
 const REDIS_PREFIX = process.env.B1DZ_RUNTIME_CACHE_PREFIX || 'b1dz:runtime-cache';
 const ANALYSIS_CACHE_PREFIX = process.env.B1DZ_ANALYSIS_CACHE_PREFIX || 'b1dz:analysis-cache';
-const SOURCE_STATE_TTL_MS = 2 * 60_000;
+const SOURCE_STATE_TTL_MS = 5 * 60_000;
 const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60_000;
 // Persisted source_state fallback should still carry the tiny status-bar
 // fields (`daemon`, `tradeStatus`). If the runtime cache is unavailable in a

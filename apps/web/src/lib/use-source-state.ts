@@ -14,12 +14,19 @@ export interface SourceStateBundle {
 }
 
 const POLL_MS = 5000;
+const FETCH_TIMEOUT_MS = 8000;
 
 async function fetchJson<T>(path: string): Promise<T | null> {
-  const res = await fetch(path, { cache: 'no-store' }).catch(() => null);
-  if (!res?.ok) return null;
-  const body = (await res.json().catch(() => null)) as { value?: unknown } | null;
-  return (body?.value ?? null) as T | null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(path, { cache: 'no-store', signal: controller.signal }).catch(() => null);
+    if (!res?.ok) return null;
+    const body = (await res.json().catch(() => null)) as { value?: unknown } | null;
+    return (body?.value ?? null) as T | null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function useSourceState(): SourceStateBundle {
@@ -33,32 +40,44 @@ export function useSourceState(): SourceStateBundle {
     error: null,
   });
   const cancelled = useRef(false);
+  // Preserve last-known-good values — a null/failed fetch should not blank the UI.
+  const lastGood = useRef<Pick<SourceStateBundle, 'arb' | 'trade' | 'settings' | 'pipeline'>>({
+    arb: null, trade: null, settings: null, pipeline: null,
+  });
 
   useEffect(() => {
     cancelled.current = false;
+
     const load = async () => {
-      try {
-        const [arb, trade, settings, pipeline] = await Promise.all([
-          fetchJson<ArbState>('/api/storage/source-state/crypto-arb'),
-          fetchJson<TradeState>('/api/storage/source-state/crypto-trade'),
-          fetchJson<UiSettings>('/api/storage/source-state/crypto-ui-settings'),
-          fetchJson<ArbPipelineState>('/api/storage/source-state/arb-pipeline'),
-        ]);
-        if (cancelled.current) return;
-        setBundle({
-          arb,
-          trade,
-          settings,
-          pipeline,
-          loading: false,
-          lastFetched: Date.now(),
-          error: null,
-        });
-      } catch (e) {
-        if (cancelled.current) return;
-        setBundle((prev) => ({ ...prev, loading: false, error: (e as Error).message }));
-      }
+      // Fetch independently — one slow/failed endpoint doesn't block the rest.
+      const [arb, trade, settings, pipeline] = await Promise.all([
+        fetchJson<ArbState>('/api/storage/source-state/crypto-arb').catch(() => null),
+        fetchJson<TradeState>('/api/storage/source-state/crypto-trade').catch(() => null),
+        fetchJson<UiSettings>('/api/storage/source-state/crypto-ui-settings').catch(() => null),
+        fetchJson<ArbPipelineState>('/api/storage/source-state/arb-pipeline').catch(() => null),
+      ]);
+
+      if (cancelled.current) return;
+
+      // Only overwrite last-good when the endpoint actually returned data.
+      if (arb !== null) lastGood.current.arb = arb;
+      if (trade !== null) lastGood.current.trade = trade;
+      if (settings !== null) lastGood.current.settings = settings;
+      if (pipeline !== null) lastGood.current.pipeline = pipeline;
+
+      const anyFresh = arb !== null || trade !== null;
+
+      setBundle((prev) => ({
+        arb: lastGood.current.arb,
+        trade: lastGood.current.trade,
+        settings: lastGood.current.settings,
+        pipeline: lastGood.current.pipeline,
+        loading: false,
+        lastFetched: anyFresh ? Date.now() : prev.lastFetched,
+        error: null,
+      }));
     };
+
     void load();
     const id = window.setInterval(load, POLL_MS);
     return () => {
