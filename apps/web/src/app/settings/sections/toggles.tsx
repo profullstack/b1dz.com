@@ -4,8 +4,10 @@ import { useState } from 'react';
 import { BoolRow, SectionShell, readPlainBool, saveSettings, type SettingsResponse } from '../shared';
 
 const TOGGLES = [
+  { field: 'TRADING_ENABLED', label: 'Trading enabled (master on/off)' },
   { field: 'ARB_TRIANGULAR', label: 'Triangular arb scanner' },
   { field: 'DEX_TRADE_EXECUTION', label: 'DEX trade execution (live signing)' },
+  { field: 'PUMPFUN_ENABLE_SCRAPE', label: 'PumpFun scraper' },
   { field: 'MARGIN_TRADING', label: 'Margin trading' },
   { field: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' },
   { field: 'ENABLE_PROXY', label: 'Enable HTTP proxy' },

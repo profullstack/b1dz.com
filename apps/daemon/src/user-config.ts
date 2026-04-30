@@ -299,6 +299,9 @@ const OVERLAY_KEYS: readonly string[] = [
   'V2_MAX_TRADE_USD',
   // 0x API
   'ZEROX_API_KEY',
+  // Master switches
+  'TRADING_ENABLED',
+  'PUMPFUN_ENABLE_SCRAPE',
 ] as const;
 
 let envOverlayMutex: Promise<void> = Promise.resolve();

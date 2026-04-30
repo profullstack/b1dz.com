@@ -117,6 +117,8 @@ export const PLAIN_BOOL_FIELDS = [
   'ENABLE_PROXY',
   'DCA_ENABLED',
   'ARB_EXECUTOR_UNISWAP_BASE',
+  'TRADING_ENABLED',
+  'PUMPFUN_ENABLE_SCRAPE',
 ] as const;
 
 export type PlainStringField = typeof PLAIN_STRING_FIELDS[number];
