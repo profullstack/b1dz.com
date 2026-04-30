@@ -18,8 +18,6 @@ export interface B1dzClientOptions {
   onRefresh?: (tokens: Tokens) => void | Promise<void>;
 }
 
-export interface DealDashCreds { phpsessid: string; rememberme: string; savedAt?: string; }
-
 export interface BacktestRunOptions {
   timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
   pairs?: string[];
@@ -93,18 +91,6 @@ export interface BacktestRunResponse {
   };
   summary: { succeeded: number; skipped: number; failed: number; pairsRequested: number; durationMs: number };
 }
-export interface MarketEntry { min: number; median: number; mean?: number; count: number; }
-export interface AuctionPageInfo {
-  name?: string;
-  categoryName?: string;
-  buyItNowPrice?: number;
-  exchangeable?: boolean;
-  productId?: number;
-  noReEntry?: boolean;
-  exchangedAt?: number;
-  exchangedFor?: number;
-}
-
 export class B1dzClient {
   private baseUrl: string;
   private tokens: Tokens;
@@ -225,19 +211,6 @@ export class B1dzClient {
       this.request<BacktestRunResponse>('POST', '/api/backtest', opts),
   };
 
-  // ----- dealdash actions (server-side proxies the user's session) -----
-  dealdash = {
-    bookBid: (auctionId: number, count = 1) =>
-      this.request<{ ok: true }>('POST', `/api/sources/dealdash/book-bid/${auctionId}`, { count }),
-    cancelBid: (auctionId: number) =>
-      this.request<{ ok: true }>('POST', `/api/sources/dealdash/cancel-bid/${auctionId}`),
-    exchange: (auctionId: number, orderId: string) =>
-      this.request<{ ok: true }>('POST', `/api/sources/dealdash/exchange/${auctionId}`, { orderId }),
-    pageInfo: (auctionId: number) =>
-      this.request<{ value: AuctionPageInfo | null }>('GET', `/api/sources/dealdash/page-info/${auctionId}`).then(r => r.value),
-    marketPrice: (title: string) =>
-      this.request<{ value: MarketEntry; cached: boolean }>('GET', `/api/sources/dealdash/market-price?title=${encodeURIComponent(title)}`).then(r => r.value),
-  };
 }
 
 // ----- standalone auth helpers (don't need a client instance) -----
