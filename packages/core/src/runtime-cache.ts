@@ -17,11 +17,9 @@ const LIVE_SOURCE_STATE_FIELDS = new Set([
   'activityLog',
   'openOrders',
   'opportunities',
-  'prices',
   'rawLog',
   'recentTrades',
   'signals',
-  'spreads',
   'tradeState',
 ]);
 

@@ -43,14 +43,14 @@ function getKeys() {
 //     user can escape InvalidNonce without regenerating the key.
 //
 // Encoded as a string in the payload — Gemini accepts string nonces.
-function parseOffsetEnv(): bigint {
+function readOffset(): bigint {
   try { return BigInt(process.env.GEMINI_NONCE_OFFSET ?? '0') }
   catch { return 0n }
 }
-const NONCE_OFFSET = parseOffsetEnv();
 let lastNonce = 0n;
 function nextNonce(): string {
-  const nowNs = BigInt(Date.now()) * 1_000_000n + NONCE_OFFSET;
+  // Read offset dynamically so applyEnvOverlay / DB-sourced GEMINI_NONCE_OFFSET takes effect.
+  const nowNs = BigInt(Date.now()) * 1_000_000n + readOffset();
   lastNonce = nowNs > lastNonce ? nowNs : lastNonce + 1n;
   return lastNonce.toString();
 }
