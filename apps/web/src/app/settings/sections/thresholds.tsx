@@ -17,16 +17,11 @@ const RISK: NumField[] = [
   { field: 'DAILY_LOSS_LIMIT_PCT', label: 'Daily loss limit %', hint: 'Halts trading once realized PnL drops by this %' },
   { field: 'HARD_STOP_PCT', label: 'Hard stop %', hint: 'Per-position stop-loss as % of entry' },
   { field: 'TAKE_PROFIT_PCT', label: 'Take profit %' },
-  { field: 'ENTRY_MIN_SCORE', label: 'Entry min score', hint: 'Minimum strategy score to open a position' },
-  { field: 'MIN_HOLD_SECS', label: 'Min hold seconds' },
-  { field: 'MIN_VOLUME_USD', label: 'Min volume USD' },
-  { field: 'MIN_PER_EXCHANGE_VOL_USD', label: 'Min per-exchange vol USD' },
   { field: 'ROTATE_ADVERSE_PCT', label: 'Rotate adverse %' },
   { field: 'ROTATE_MIN_HOLD_MS', label: 'Rotate min hold (ms)' },
 ];
 const SLIPPAGE: NumField[] = [
   { field: 'BUY_SLIPPAGE_BPS', label: 'CEX buy slippage (bps)' },
-  { field: 'DEX_SLIPPAGE_BPS', label: 'DEX slippage (bps)' },
   { field: 'DEX_TRADE_BUDGET_USD', label: 'DEX trade budget USD' },
 ];
 const AUTO_SEED: NumField[] = [

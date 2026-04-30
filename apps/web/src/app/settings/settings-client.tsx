@@ -1,26 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CexSection } from './sections/cex';
-import { DexSection } from './sections/dex';
 import { WalletsSection } from './sections/wallets';
-import { RpcSection } from './sections/rpc';
 import { ThresholdsSection } from './sections/thresholds';
 import { TogglesSection } from './sections/toggles';
 import { PluginsSection } from './sections/plugins';
-import { StrategiesSection } from './sections/strategies';
 import type { SettingsResponse } from './shared';
 import { importKey } from '@/lib/browser-crypto';
 
-type Tab = 'plugins' | 'wallets' | 'cex' | 'dex' | 'rpc' | 'strategies' | 'thresholds' | 'toggles';
+type Tab = 'plugins' | 'wallets' | 'thresholds' | 'toggles';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'plugins', label: 'Plugins' },
   { id: 'wallets', label: 'Wallets' },
-  { id: 'cex', label: 'CEX keys' },
-  { id: 'dex', label: 'DEX keys' },
-  { id: 'rpc', label: 'RPC URLs' },
-  { id: 'strategies', label: 'Strategies' },
   { id: 'thresholds', label: 'Thresholds' },
   { id: 'toggles', label: 'Toggles' },
 ];
@@ -72,8 +64,6 @@ export function SettingsClient() {
 
   const onSaved = (next: SettingsResponse) => setData(next);
 
-  const cryptoUnavailable = !cryptoKey || (data && data.cryptoConfigured === false);
-
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-6">
       <header className="space-y-1">
@@ -117,10 +107,6 @@ export function SettingsClient() {
       {data && tab !== 'plugins' && (
         <div>
           {tab === 'wallets' && <WalletsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
-          {tab === 'cex' && <CexSection data={data} cryptoKey={cryptoKey} cryptoUnavailable={!!cryptoUnavailable} onSaved={onSaved} />}
-          {tab === 'dex' && <DexSection data={data} cryptoKey={cryptoKey} cryptoUnavailable={!!cryptoUnavailable} onSaved={onSaved} />}
-          {tab === 'rpc' && <RpcSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
-          {tab === 'strategies' && <StrategiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'thresholds' && <ThresholdsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'toggles' && <TogglesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
         </div>

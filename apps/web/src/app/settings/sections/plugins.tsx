@@ -29,7 +29,11 @@ interface PluginFieldSpec {
 const PLUGIN_FIELDS: Record<string, PluginFieldSpec> = {
   coinbase: {
     strings: [{ key: 'COINBASE_API_KEY_NAME', label: 'API key name', hint: 'organizations/.../apiKeys/...' }],
-    secrets: [{ key: 'COINBASE_API_PRIVATE_KEY', label: 'EC private key (PEM)', multiline: true, hint: '-----BEGIN EC PRIVATE KEY----- block' }],
+    secrets: [
+      { key: 'COINBASE_API_PRIVATE_KEY', label: 'EC private key (PEM)', multiline: true, hint: '-----BEGIN EC PRIVATE KEY----- block' },
+      { key: 'COINBASE_API_PRIVATE_KEY_B', label: 'EC private key B (PEM, optional)', multiline: true, hint: 'Second account key' },
+      { key: 'COINBASE_EC_KEY_B', label: 'EC key B legacy (PEM, optional)', multiline: true, hint: 'Legacy secondary key' },
+    ],
   },
   kraken: {
     secrets: [
