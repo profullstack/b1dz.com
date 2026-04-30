@@ -1549,7 +1549,11 @@ function DashboardInner() {
       let row = lbl;
       for (let c = 0; c <= colWidth; c++) {
         const ch = grid[r][c];
-        if (ch === '●') row += '{green-fg}●{/}';
+        if (ch === '●') {
+          const actualVal = pts[c]?.actual;
+          const dotColor = (actualVal !== null && actualVal !== undefined && actualVal < bankroll) ? '{red-fg}' : '{green-fg}';
+          row += `${dotColor}●{/}`;
+        }
         else if (ch === '▲') row += '{yellow-fg}▲{/}';
         else if (ch === '◆') row += '{cyan-fg}◆{/}';
         else if (ch === '·') row += '{blue-fg}·{/}';
@@ -1681,12 +1685,18 @@ function DashboardInner() {
         <box
           top={0} left={0} width="100%" height={1}
           tags={true}
-          style={{ bg: 'cyan', fg: 'black' }}
-          content={` {bold}Growth & Trade History{/bold}   Esc: back to dashboard   [/] PgUp/PgDn: scroll   ${allClosed.length} trades`}
+          style={{ bg: 'blue', fg: 'white' }}
+          content={statusText}
         />
         <box
-          top={1} left={0} width="100%"
-          height={'100%-1' as any}
+          top={1} left={0} width="100%" height={1}
+          tags={true}
+          style={{ bg: 'cyan', fg: 'black' }}
+          content={` {bold}Growth & Trade History{/bold}   Esc: back   [/] PgUp/PgDn: scroll   ${allClosed.length} trades`}
+        />
+        <box
+          top={2} left={0} width="100%"
+          height={'100%-2' as any}
           border={{ type: 'line' }}
           tags={true}
           scrollable={true}

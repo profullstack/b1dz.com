@@ -137,7 +137,26 @@ export function ProjectionsClient() {
     naive: ISeriesApi<'Line'> | null;
     conservative: ISeriesApi<'Line'> | null;
     riskAdjusted: ISeriesApi<'Line'> | null;
-  }>({ linear: null, naive: null, conservative: null, riskAdjusted: null });
+    actualGain: ISeriesApi<'Line'> | null;
+    actualLoss: ISeriesApi<'Line'> | null;
+  }>({ linear: null, naive: null, conservative: null, riskAdjusted: null, actualGain: null, actualLoss: null });
+
+  const [visible, setVisible] = useState({
+    linear: true, naive: true, conservative: true, riskAdjusted: true, actual: true,
+  });
+
+  const toggleVisible = (key: keyof typeof visible) => {
+    setVisible((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      if (key === 'actual') {
+        seriesRef.current.actualGain?.applyOptions({ visible: next.actual });
+        seriesRef.current.actualLoss?.applyOptions({ visible: next.actual });
+      } else {
+        (seriesRef.current[key as 'linear' | 'naive' | 'conservative' | 'riskAdjusted'])?.applyOptions({ visible: next[key as keyof typeof next] as boolean });
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!chartEl.current) return;
@@ -158,7 +177,9 @@ export function ProjectionsClient() {
     seriesRef.current.linear = chart.addSeries(LineSeries, { color: '#71717a', lineWidth: 1, lineStyle: 2, title: 'Linear' });
     seriesRef.current.naive = chart.addSeries(LineSeries, { color: '#f59e0b', lineWidth: 2, title: 'Naive Compound' });
     seriesRef.current.conservative = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 1, title: 'Conservative' });
-    seriesRef.current.riskAdjusted = chart.addSeries(LineSeries, { color: '#22c55e', lineWidth: 2, title: 'Risk-Adjusted' });
+    seriesRef.current.riskAdjusted = chart.addSeries(LineSeries, { color: '#06b6d4', lineWidth: 2, title: 'Risk-Adjusted' });
+    seriesRef.current.actualGain = chart.addSeries(LineSeries, { color: '#22c55e', lineWidth: 2, lineStyle: 0, title: 'Actual (gain)' });
+    seriesRef.current.actualLoss = chart.addSeries(LineSeries, { color: '#ef4444', lineWidth: 2, lineStyle: 0, title: 'Actual (loss)' });
     chartRef.current = chart;
     const ro = new ResizeObserver(() => chart.timeScale().fitContent());
     ro.observe(chartEl.current!);
@@ -166,7 +187,7 @@ export function ProjectionsClient() {
       ro.disconnect();
       chart.remove();
       chartRef.current = null;
-      seriesRef.current = { linear: null, naive: null, conservative: null, riskAdjusted: null };
+      seriesRef.current = { linear: null, naive: null, conservative: null, riskAdjusted: null, actualGain: null, actualLoss: null };
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -181,15 +202,33 @@ export function ProjectionsClient() {
   const toLine = (pts: { day: number; bankroll: number }[]): LineData<UTCTimestamp>[] =>
     pts.map((p) => ({ time: (baseTs + p.day * 86400) as UTCTimestamp, value: p.bankroll }));
 
+  // Actual PnL from real closed trades
+  const actualSeries = useMemo(() => {
+    const sorted = [...closedTrades].sort((a, b) => a.exitTime - b.exitTime);
+    const gainPts: LineData<UTCTimestamp>[] = [];
+    const lossPts: LineData<UTCTimestamp>[] = [];
+    let cum = 0;
+    for (const t of sorted) {
+      cum += t.netPnl;
+      const value = startingBankroll + cum;
+      const time = Math.floor(t.exitTime / 1000) as UTCTimestamp;
+      if (value >= startingBankroll) gainPts.push({ time, value });
+      else lossPts.push({ time, value });
+    }
+    return { gainPts, lossPts };
+  }, [closedTrades, startingBankroll]);
+
   useEffect(() => {
     if (!chartRef.current) return;
     seriesRef.current.linear?.setData(toLine(result.series.linear));
     seriesRef.current.naive?.setData(toLine(result.series.naiveCompounded));
     seriesRef.current.conservative?.setData(toLine(result.series.conservative));
     seriesRef.current.riskAdjusted?.setData(toLine(result.series.riskAdjusted));
+    seriesRef.current.actualGain?.setData(actualSeries.gainPts);
+    seriesRef.current.actualLoss?.setData(actualSeries.lossPts);
     chartRef.current.timeScale().fitContent();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [result, baseTs]);
+  }, [result, baseTs, actualSeries]);
 
   const { derived, checkpoints, warnings } = result;
 
@@ -339,18 +378,24 @@ export function ProjectionsClient() {
           </div>
         </div>
 
-        <div className="mb-3 flex flex-wrap gap-4 text-xs">
+        <div className="mb-3 flex flex-wrap gap-2 text-xs">
           {([
-            { color: 'bg-zinc-500', label: 'Linear' },
-            { color: 'bg-amber-500', label: 'Naive Compound' },
-            { color: 'bg-blue-500', label: 'Conservative' },
-            { color: 'bg-green-500', label: 'Risk-Adjusted' },
-          ] as const).map(({ color, label }) => (
-            <div key={label} className="flex items-center gap-1.5">
-              <span className={`h-2 w-5 rounded-sm ${color}`} />
+            { key: 'linear' as const, color: 'bg-zinc-500', label: 'Linear', extra: '' },
+            { key: 'naive' as const, color: 'bg-amber-500', label: 'Naive Compound', extra: '' },
+            { key: 'conservative' as const, color: 'bg-blue-500', label: 'Conservative', extra: '' },
+            { key: 'riskAdjusted' as const, color: 'bg-cyan-500', label: 'Risk-Adjusted', extra: '' },
+            { key: 'actual' as const, color: 'bg-green-500', label: 'Actual PnL', extra: 'border-r-2 border-r-red-500' },
+          ]).map(({ key, color, label, extra }) => (
+            <button
+              key={key}
+              onClick={() => toggleVisible(key)}
+              className={`flex items-center gap-1.5 rounded px-2 py-1 transition hover:bg-zinc-800 ${!visible[key] ? 'opacity-40' : ''}`}
+            >
+              <span className={`h-2 w-5 rounded-sm ${color} ${extra}`} />
               <span className="text-zinc-400">{label}</span>
-            </div>
+            </button>
           ))}
+          <span className="ml-1 self-center text-zinc-600">click to toggle</span>
         </div>
 
         <div ref={chartEl} className="h-[360px] overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80" />
