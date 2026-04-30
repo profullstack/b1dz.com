@@ -42,7 +42,7 @@ export interface RuntimeLease {
 }
 
 let redisClientPromise: Promise<RuntimeRedisClient | null> | null = null;
-let redisDisabled = false;
+let redisRetryAfter = 0; // epoch ms — don't attempt before this
 
 function enc(value: string): string {
   return encodeURIComponent(value);
@@ -92,7 +92,8 @@ async function writeEnvelope<T>(path: string, value: T, ttlMs: number) {
 }
 
 async function getRedisClient(): Promise<RuntimeRedisClient | null> {
-  if (!REDIS_URL || redisDisabled) return null;
+  if (!REDIS_URL) return null;
+  if (Date.now() < redisRetryAfter) return null;
   if (!redisClientPromise) {
     redisClientPromise = (async () => {
       try {
@@ -101,7 +102,9 @@ async function getRedisClient(): Promise<RuntimeRedisClient | null> {
         await client.connect();
         return client;
       } catch {
-        redisDisabled = true;
+        // Back off 30 s before retrying so a slow Redis startup doesn't spam.
+        redisRetryAfter = Date.now() + 30_000;
+        redisClientPromise = null;
         return null;
       }
     })();

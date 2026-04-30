@@ -15,7 +15,7 @@ redis-server \
   --daemonize no &
 REDIS_PID=$!
 
-for _ in $(seq 1 30); do
+for _ in $(seq 1 150); do
   if redis-cli -u "${REDIS_URL}" ping >/dev/null 2>&1; then
     break
   fi
