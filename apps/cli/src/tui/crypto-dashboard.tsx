@@ -101,8 +101,8 @@ interface ArbPipelineState {
 }
 
 interface TradeStatusData {
-  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
-  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples?: number[] }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples?: number[] } | null;
   dailyPnl: number;
   dailyPnlPct: number;
   dailyFees?: number;
@@ -211,6 +211,20 @@ function padLeft(value: string, width: number): string {
 
 function padRight(value: string, width: number): string {
   return value.length >= width ? value : `${value}${' '.repeat(width - value.length)}`;
+}
+
+const SPARK_BLOCKS = '▁▂▃▄▅▆▇█';
+function unicodeSparkline(samples: number[] | undefined, width = 10): string {
+  if (!samples || samples.length < 2) return ''.padEnd(width, ' ');
+  const min = Math.min(...samples);
+  const max = Math.max(...samples);
+  const range = max - min;
+  const out = range === 0
+    ? '▄'.repeat(samples.length)
+    : samples
+        .map((v) => SPARK_BLOCKS[Math.min(7, Math.round(((v - min) / range) * 7))])
+        .join('');
+  return out.length >= width ? out.slice(-width) : ' '.repeat(width - out.length) + out;
 }
 
 const CHART_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
@@ -948,7 +962,7 @@ function DashboardInner() {
 
   // Positions — from daemon tradeStatus (source of truth, not trade history)
   const posLines: string[] = [
-    '{bold} Exch        Pair             Coins        Value       Entry        Last         PnL               Stop        Age{/bold}',
+    '{bold} Exch        Pair             Coins        Value       Entry        Last         PnL               Stop        Age      Chart{/bold}',
   ];
   for (const pos of visiblePositions) {
     const volume = typeof pos.volume === 'number' && Number.isFinite(pos.volume) ? pos.volume : 0;
@@ -972,16 +986,18 @@ function DashboardInner() {
     // (Holdings panel covers the same data), so this branch is unreachable
     // in practice. Fall back to a `-` PnL cell defensively rather than
     // showing a misleading "untracked" label.
+    const sparkCell = unicodeSparkline(pos.priceSamples, 10);
+    const sparkColored = `${pnlColor}${sparkCell}{/}`;
     if (entryPrice > 0) {
       const entryCell = padLeft(`$${formatUsdPrice(entryPrice)}`, 11);
       const pnlText = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`;
       const pnlCell = padLeft(pnlText, 18);
       const stopCell = padLeft(`$${formatUsdPrice(stopPrice)}`, 11);
       const ageCell = padLeft(pos.elapsed ?? '-', 8);
-      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}`);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}  ${sparkColored}`);
     } else {
       const pnlCell = padLeft('-', 18);
-      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${pnlCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}`);
+      posLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${pnlCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}  ${sparkColored}`);
     }
   }
   if (visiblePositions.length === 0) {

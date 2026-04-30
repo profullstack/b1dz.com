@@ -264,7 +264,7 @@ function TradeHistory({ trades }: { trades: ClosedTrade[] }) {
                       {SIGN(t.netPnl)}{FMT(t.netPnl)}
                     </td>
                     <td className="px-2 py-1.5 text-center">
-                      <Sparkline samples={t.priceSamples} />
+                      <Sparkline samples={t.priceSamples} profitable={t.netPnl >= 0} />
                     </td>
                   </tr>
                 );

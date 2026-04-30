@@ -68,7 +68,7 @@ export function PositionsTable({ trade }: Props) {
                   <td className="px-3 py-1.5 text-right text-zinc-300">{stop > 0 ? `$${formatUsdPrice(stop)}` : '-'}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-400">{p.elapsed ?? '-'}</td>
                   <td className="px-3 py-1.5 text-center">
-                    <Sparkline samples={p.priceSamples} />
+                    <Sparkline samples={p.priceSamples} profitable={pnlUsd >= 0} />
                   </td>
                 </tr>
               );
