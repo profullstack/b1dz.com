@@ -16,7 +16,7 @@ export default async function DashboardPage() {
     <main className="min-h-screen">
       <nav className="flex items-center justify-between max-w-6xl mx-auto px-6 py-4 border-b border-zinc-800">
         <div className="flex items-center gap-2">
-          <Image src="/logo.svg" alt="b1dz" width={28} height={28} />
+          <Image src="/favicon.svg" alt="b1dz" width={28} height={28} />
           <span className="text-lg font-bold bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">b1dz</span>
         </div>
         <div className="flex items-center gap-4">
