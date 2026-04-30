@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { calculateProjection } from '@b1dz/projection-engine';
+import { calculateProjection, calculateEdgeRetentionProjection } from '@b1dz/projection-engine';
 import { tuiEvents } from './events.js';
 import { computeStatusFreshness } from './statusFreshness.js';
 import { loadCredentials } from '../auth.js';
@@ -1443,18 +1443,55 @@ function DashboardInner() {
       maxHourlyProfit: hourlyProfit * 3,
       liquidityCap: bankroll * 50,
     });
-    const { derived } = result;
+
+    // ── Edge retention analysis ────────────────────────────────────
+    const erResult = calculateEdgeRetentionProjection({
+      startingBankroll: bankroll,
+      observedHourlyProfit: hourlyProfit,
+      targetHourlyProfit: hourlyProfit,
+      days: projDays,
+      feeHaircut: 0.001,
+      slippageHaircut: 0.001,
+      failureHaircut: 0.02,
+      drawdownHaircut: 0.05,
+    });
+    const ed = erResult.derived;
 
     const lines: string[] = [];
 
-    // ── Summary header (mirrors web summary cards) ─────────────────
+    // ── Edge retention summary ─────────────────────────────────────
+    const retStr = ed.requiredEdgeRetention <= 1
+      ? `{magenta-fg}${(ed.requiredEdgeRetention * 100).toFixed(1)}%{/}`
+      : `{red-fg}${(ed.requiredEdgeRetention * 100).toFixed(1)}% (exceeds observed){/}`;
+    const safetyStr = ed.safetyMargin >= 2
+      ? `{green-fg}${ed.safetyMargin.toFixed(2)}×{/}`
+      : ed.safetyMargin >= 1
+      ? `{yellow-fg}${ed.safetyMargin.toFixed(2)}×{/}`
+      : `{red-fg}${ed.safetyMargin.toFixed(2)}× (below target){/}`;
+    lines.push(
+      ` {magenta-fg}{bold}EDGE RETENTION{/bold}{/}  ` +
+      `{bold}Observed:{/bold} ${(ed.observedHourlyReturn * 100).toFixed(4)}%/hr  ` +
+      `{bold}Required:{/bold} {magenta-fg}${(ed.requiredHourlyReturn * 100).toFixed(4)}%/hr{/}  ` +
+      `{bold}Retention needed:{/bold} ${retStr}  ` +
+      `{bold}Safety:{/bold} ${safetyStr}`,
+    );
+    lines.push(
+      `   {bold}Goal:{/bold} $${bankroll.toFixed(2)} → {magenta-fg}$${ed.endingBankrollTarget.toFixed(2)}{/}  ` +
+      `{bold}Profit needed:{/bold} {magenta-fg}$${ed.targetProfit.toFixed(2)}{/}  ` +
+      `{bold}Daily compound (observed):{/bold} ${(ed.observedDailyCompoundedReturn * 100).toFixed(3)}%`,
+    );
+    lines.push('');
+
+    // ── Performance summary ────────────────────────────────────────
+    const { derived } = result;
     const hrPct = (derived.hourlyReturnRate * 100).toFixed(4);
     const dailyPct = (derived.dailyCompoundedReturn * 100).toFixed(3);
     const naive1y = result.series.naiveCompounded[result.series.naiveCompounded.length - 1]?.bankroll ?? bankroll;
     const naiveMult = naive1y / bankroll;
     lines.push(
-      ` {bold}Bankroll:{/bold} $${bankroll.toFixed(2)}  ` +
-      `{bold}Hourly:{/bold} $${hourlyProfit.toFixed(4)}/hr  ` +
+      ` {bold}PERFORMANCE{/bold}  ` +
+      `{bold}Bankroll:{/bold} $${bankroll.toFixed(2)}  ` +
+      `{bold}Observed:{/bold} $${hourlyProfit.toFixed(4)}/hr  ` +
       `{bold}Hourly%:{/bold} ${hrPct}%  ` +
       `{bold}Daily compound:{/bold} ${dailyPct}%`,
     );
@@ -1462,7 +1499,7 @@ function DashboardInner() {
       `   {bold}Flat 1d:{/bold} $${(bankroll + hourlyProfit * 24).toFixed(2)}  ` +
       `{bold}Flat 7d:{/bold} $${(bankroll + hourlyProfit * 168).toFixed(2)}  ` +
       `{bold}Flat 30d:{/bold} $${(bankroll + hourlyProfit * 720).toFixed(2)}  ` +
-      `{bold}Naive 1y:{/bold} {yellow-fg}$${naive1y >= 1e9 ? (naive1y / 1e9).toFixed(2) + 'B' : naive1y >= 1e6 ? (naive1y / 1e6).toFixed(2) + 'M' : naive1y.toFixed(2)}{/}` +
+      `{bold}Naive ${projDays}d:{/bold} {yellow-fg}$${naive1y >= 1e9 ? (naive1y / 1e9).toFixed(2) + 'B' : naive1y >= 1e6 ? (naive1y / 1e6).toFixed(2) + 'M' : naive1y.toFixed(2)}{/}` +
       ` ({yellow-fg}${naiveMult >= 1000 ? naiveMult.toFixed(0) + 'K×' : naiveMult.toFixed(1) + '×'}{/})`,
     );
 
@@ -1575,22 +1612,29 @@ function DashboardInner() {
     );
     lines.push('');
 
-    // ── Checkpoint table — all 4 modes ────────────────────────────
-    lines.push(' {bold}Projections{/bold}');
-    lines.push(' Period         Linear          Naive           Risk-adj        Conservative');
-    lines.push(' ' + '─'.repeat(78));
-    for (const cp of result.checkpoints) {
+    // ── Checkpoint table ───────────────────────────────────────────
+    const fmtV = (v: number) => {
+      const s = v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}K` : `$${v.toFixed(2)}`;
+      return s.padStart(13);
+    };
+    const breakEvenScenario = erResult.scenarios.find((s) => Math.abs(s.edgeRetention - ed.requiredEdgeRetention) < 0.005);
+    const tenPct = erResult.scenarios.find((s) => Math.abs(s.edgeRetention - 0.1) < 0.005);
+    const twentyFivePct = erResult.scenarios.find((s) => Math.abs(s.edgeRetention - 0.25) < 0.005);
+    lines.push(' {bold}Projections (edge retention){/bold}');
+    lines.push(` ${'Period'.padEnd(10)} ${'Linear'.padStart(13)}  ${'10% edge'.padStart(13)}  ${`${(ed.requiredEdgeRetention * 100).toFixed(1)}% break-even`.padStart(18)}  ${'25% edge'.padStart(13)}  ${'Risk-adj'.padStart(13)}`);
+    lines.push(' ' + '─'.repeat(85));
+    for (const cp of erResult.checkpoints) {
       if (cp.day === 0) continue;
       const label =
         cp.day === 7 ? '1 week' : cp.day === 14 ? '2 weeks' : cp.day === 30 ? '1 month' :
         cp.day === 60 ? '2 months' : cp.day === 90 ? '3 months' : cp.day === 180 ? '6 months' :
         cp.day === 365 ? '1 year' : `${cp.day}d`;
-      const fmtV = (v: number) => {
-        const s = v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}K` : `$${v.toFixed(2)}`;
-        return s.padStart(14);
-      };
+      const riskCp = result.checkpoints.find((c) => c.day === cp.day);
+      const tenVal = tenPct ? (cp.scenarios[tenPct.label] ?? 0) : cp.linearBankroll;
+      const beVal = breakEvenScenario ? (cp.scenarios[breakEvenScenario.label] ?? 0) : cp.linearBankroll;
+      const q25Val = twentyFivePct ? (cp.scenarios[twentyFivePct.label] ?? 0) : cp.linearBankroll;
       lines.push(
-        ` ${label.padEnd(15)} ${fmtV(cp.linearBankroll)}  {yellow-fg}${fmtV(cp.naiveCompoundedBankroll)}{/}  ${fmtV(cp.riskAdjustedBankroll)}  {cyan-fg}${fmtV(cp.conservativeBankroll)}{/}`,
+        ` ${label.padEnd(10)} ${fmtV(cp.linearBankroll)}  ${fmtV(tenVal)}  {magenta-fg}${fmtV(beVal).padStart(18)}{/}  ${fmtV(q25Val)}  ${riskCp ? fmtV(riskCp.riskAdjustedBankroll) : '—'.padStart(13)}`,
       );
     }
 
