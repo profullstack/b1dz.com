@@ -2273,8 +2273,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // a minimum net margin (default 30bps). Tune via MIN_NET_PROFIT_PCT.
       const roundTripFee = feeRateForExchange(tradeExchange) * 2;
       const minNetProfitPct = Number.parseFloat(process.env.MIN_NET_PROFIT_PCT ?? '0.003');
-      const takeProfitPct = takeProfitPctFromEnv();
-      const netTakeProfit = takeProfitPct - roundTripFee;
+      // Use the hardcoded constant — exit-decision.ts also uses it, so the
+      // gate must match the value that will actually trigger the take-profit.
+      const netTakeProfit = TAKE_PROFIT_PCT - roundTripFee;
       if (netTakeProfit < minNetProfitPct) {
         console.log(`[trade] ${item.pair} net take-profit ${(netTakeProfit * 100).toFixed(2)}% < min ${(minNetProfitPct * 100).toFixed(2)}% (fees=${(roundTripFee * 100).toFixed(2)}%)`);
         return null;
