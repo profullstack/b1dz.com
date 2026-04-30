@@ -87,7 +87,11 @@ const PLUGIN_FIELDS: Record<string, PluginFieldSpec> = {
       { key: 'ARB_MIN_NET_USD', label: 'Min net profit USD', hint: 'e.g. 0.01' },
       { key: 'ARB_MIN_NET_BPS', label: 'Min net profit bps', hint: 'e.g. 3 (= 0.03%)' },
     ],
-    bools: [{ key: 'ARB_EXECUTOR_UNISWAP_BASE', label: 'Arm Uniswap V3 executor' }],
+    bools: [
+      { key: 'ARB_EXECUTOR_UNISWAP_BASE', label: 'Arm Uniswap V3 executor' },
+      { key: 'ARB_TRIANGULAR', label: 'Triangular arb scanner' },
+      { key: 'MARGIN_TRADING', label: 'Margin trading' },
+    ],
   },
   dca: {
     bools: [{ key: 'DCA_ENABLED', label: 'DCA enabled' }],
@@ -116,14 +120,22 @@ const PLUGIN_FIELDS: Record<string, PluginFieldSpec> = {
       { key: 'MIN_HOLD_SECS', label: 'Min hold (secs)', hint: 'e.g. 300' },
       { key: 'MIN_VOLUME_USD', label: 'Min volume USD', hint: 'Pair must clear this threshold' },
     ],
+    bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
   },
   momentum: {
     numbers: [
       { key: 'ENTRY_MIN_SCORE', label: 'Min entry score', hint: '0–1' },
       { key: 'MIN_HOLD_SECS', label: 'Min hold (secs)' },
     ],
+    bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
   },
 };
+
+const SYSTEM_BOOLS: { key: string; label: string }[] = [
+  { key: 'TRADING_ENABLED', label: 'Trading enabled (master on/off)' },
+  { key: 'DEX_TRADE_EXECUTION', label: 'DEX trade execution (live signing)' },
+  { key: 'ENABLE_PROXY', label: 'Enable HTTP proxy' },
+];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -366,6 +378,33 @@ export function PluginsSection({
 
   return (
     <div className="space-y-4">
+      {data && (
+        <SectionShell
+          title="System"
+          description="Global flags that apply across all plugins."
+          onSave={async () => {
+            const plain: Record<string, boolean> = {};
+            for (const { key } of SYSTEM_BOOLS) {
+              plain[key] = plainDrafts[key] !== undefined
+                ? plainDrafts[key] === 'true'
+                : readPlainBool(data, key);
+            }
+            const next = await saveSettings({ plain }, { cryptoKey });
+            onSaved(next);
+          }}
+        >
+          {SYSTEM_BOOLS.map(({ key, label }) => (
+            <BoolRow
+              key={key}
+              field={key}
+              label={label}
+              value={plainDrafts[key] !== undefined ? plainDrafts[key] === 'true' : readPlainBool(data, key)}
+              onChange={(v) => setPlainDrafts(d => ({ ...d, [key]: String(v) }))}
+            />
+          ))}
+        </SectionShell>
+      )}
+
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
