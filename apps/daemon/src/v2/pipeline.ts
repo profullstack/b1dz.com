@@ -166,6 +166,7 @@ export async function initV2Pipeline(): Promise<PipelineState> {
   if (instance) return instance;
   if (initPromise) return initPromise;
   initPromise = (async () => {
+    try {
     const maxPairs = intEnv('ARB_MAX_PAIRS', intEnv('V2_MAX_PAIRS', 10));
     const sizeUsd = floatEnv('ARB_SIZE_USD', floatEnv('V2_SIZE_USD', 100));
     const intervalMs = intEnv('ARB_INTERVAL_MS', intEnv('V2_INTERVAL_MS', 5000));
@@ -254,6 +255,11 @@ export async function initV2Pipeline(): Promise<PipelineState> {
       lastRefreshAt: startedAt,
     };
     return instance;
+    } catch (e) {
+      // Reset so the next tick can retry rather than returning a stale rejection.
+      initPromise = null;
+      throw e;
+    }
   })();
   return initPromise;
 }

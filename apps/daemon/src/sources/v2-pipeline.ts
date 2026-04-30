@@ -24,7 +24,20 @@ export const v2PipelineWorker: SourceWorker = {
     return !!payload?.enabled;
   },
   async tick(ctx: UserContext) {
-    await initV2Pipeline();
+    try {
+      await initV2Pipeline();
+    } catch (e) {
+      await ctx.savePayload({
+        enabled: ctx.payload?.enabled ?? true,
+        daemon: {
+          lastTickAt: new Date().toISOString(),
+          worker: 'arb-pipeline',
+          status: `init-error: ${(e as Error).message?.slice(0, 120)}`,
+          version: getB1dzVersion(),
+        },
+      });
+      return;
+    }
     const snap = v2Snapshot();
     if (!snap) {
       await ctx.savePayload({
