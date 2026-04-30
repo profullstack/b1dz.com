@@ -211,13 +211,13 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     },
   },
   {
-    status: 'coming-soon',
+    status: 'preview',
     pricing: { model: 'free' },
     tagline: 'EVM DEX liquidity via the 0x Protocol API.',
     manifest: {
       id: '0x',
       kind: 'connector',
-      version: '0.0.0',
+      version: '0.1.0',
       name: '0x Protocol — EVM',
       author: 'b1dz',
       description: 'Price discovery and swap routing via the 0x/Matcha aggregator. Supports Base, Ethereum, and other EVM chains. Requires ZEROX_API_KEY.',
