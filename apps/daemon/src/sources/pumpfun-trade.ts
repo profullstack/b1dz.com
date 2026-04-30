@@ -27,7 +27,6 @@ import {
   type PumpPosition,
 } from '@b1dz/adapters-pumpfun';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
-import { loadUserConfig, applyEnvOverlay } from '../user-config.js';
 
 const PUMP_API_BASE = 'https://frontend-api-v3.pump.fun';
 
@@ -65,6 +64,7 @@ export const pumpfunTradeWorker: SourceWorker = {
   },
 
   async tick(ctx: UserContext): Promise<void> {
+    // runtime.ts already applies the per-user env overlay before calling tick().
     // Redirect console output into the activity log for this worker.
     const origLog = console.log;
     const origErr = console.error;
@@ -72,11 +72,7 @@ export const pumpfunTradeWorker: SourceWorker = {
     console.error = (...args: unknown[]) => logRaw(args.map(String).join(' '), 'pumpfun-trade');
 
     try {
-      // Load user config and apply env overlay for the duration of the tick.
-      const userConfig = await loadUserConfig(ctx.userId);
-      await applyEnvOverlay(userConfig, async () => {
-        await runTick(ctx);
-      });
+      await runTick(ctx);
     } finally {
       console.log = origLog;
       console.error = origErr;
