@@ -259,10 +259,11 @@ const OVERLAY_KEYS: readonly string[] = [
   'EVM_PRIVATE_KEY',
   'SOLANA_PRIVATE_KEY',
   'ONEINCH_API_KEY',
-  // Plain user-overridable
+  // Plain user-overridable — risk
   'DAILY_LOSS_LIMIT_PCT',
   'DEX_SLIPPAGE_BPS',
   'DEX_TRADE_BUDGET_USD',
+  'DEX_TRADE_MAX_USD',
   'DEX_TRADE_EXECUTION',
   'MARGIN_TRADING',
   'BUY_SLIPPAGE_BPS',
@@ -274,6 +275,30 @@ const OVERLAY_KEYS: readonly string[] = [
   'MIN_PER_EXCHANGE_VOL_USD',
   'ROTATE_ADVERSE_PCT',
   'ROTATE_MIN_HOLD_MS',
+  // Strategy modes
+  'ARB_MODE',
+  'V2_MODE',
+  // CEX arb sizing
+  'ARB_MAX_TRADE_USD',
+  'ARB_SIZE_USD',
+  'ARB_MIN_NET_USD',
+  'ARB_MIN_NET_BPS',
+  'ARB_EXECUTOR_UNISWAP_BASE',
+  // DCA
+  'DCA_ENABLED',
+  'DCA_TOTAL_ALLOCATION_PCT',
+  'DCA_MAX_COINS',
+  'DCA_COINS',
+  'DCA_EXCHANGES',
+  'DCA_INTERVAL_MS',
+  // V2 pipeline
+  'V2_SIZE_USD',
+  'V2_MAX_PAIRS',
+  'V2_MIN_NET_USD',
+  'V2_MIN_NET_BPS',
+  'V2_MAX_TRADE_USD',
+  // 0x API
+  'ZEROX_API_KEY',
 ] as const;
 
 let envOverlayMutex: Promise<void> = Promise.resolve();

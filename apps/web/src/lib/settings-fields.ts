@@ -47,6 +47,12 @@ export const PLAIN_STRING_FIELDS = [
   'ARB_DEX_PAIRS',
   // Proxy URL
   'PROXY_URL',
+  // Strategy modes
+  'ARB_MODE',
+  'V2_MODE',
+  // DCA coin/exchange lists (comma-separated)
+  'DCA_COINS',
+  'DCA_EXCHANGES',
 ] as const;
 
 export const PLAIN_NUMBER_FIELDS = [
@@ -64,6 +70,22 @@ export const PLAIN_NUMBER_FIELDS = [
   'BUY_SLIPPAGE_BPS',
   'DEX_SLIPPAGE_BPS',
   'DEX_TRADE_BUDGET_USD',
+  'DEX_TRADE_MAX_USD',
+  // CEX arb
+  'ARB_MAX_TRADE_USD',
+  'ARB_SIZE_USD',
+  'ARB_MIN_NET_USD',
+  'ARB_MIN_NET_BPS',
+  // DCA
+  'DCA_TOTAL_ALLOCATION_PCT',
+  'DCA_MAX_COINS',
+  'DCA_INTERVAL_MS',
+  // V2 pipeline
+  'V2_SIZE_USD',
+  'V2_MAX_PAIRS',
+  'V2_MIN_NET_USD',
+  'V2_MIN_NET_BPS',
+  'V2_MAX_TRADE_USD',
   // Auto-seed
   'ARB_AUTO_SEED_MIN_USD',
   'ARB_AUTO_SEED_PER_PAIR_USD',
@@ -93,6 +115,8 @@ export const PLAIN_BOOL_FIELDS = [
   'MARGIN_TRADING',
   'REQUIRE_CONFIRM_UPTREND',
   'ENABLE_PROXY',
+  'DCA_ENABLED',
+  'ARB_EXECUTOR_UNISWAP_BASE',
 ] as const;
 
 export type PlainStringField = typeof PLAIN_STRING_FIELDS[number];

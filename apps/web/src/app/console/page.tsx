@@ -3,6 +3,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import { ConsoleClient } from './console-client';
+import { RenewalBanner } from '@/components/renewal-banner';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,7 @@ export default async function ConsolePage() {
           <Link href="/dashboard" className="text-xs leading-none text-zinc-500 hover:text-zinc-300">← summary</Link>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          <Link href="/store" className="text-zinc-400 hover:text-zinc-200">Store</Link>
           <Link href="/settings" className="text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-zinc-400">{user.email}</span>
           <form action="/api/auth/logout" method="POST">
@@ -29,6 +31,7 @@ export default async function ConsolePage() {
           </form>
         </div>
       </nav>
+      <RenewalBanner userId={user.id} />
       <ConsoleClient />
     </main>
   );

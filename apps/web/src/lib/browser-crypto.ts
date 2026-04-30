@@ -39,7 +39,7 @@ export async function importKey(base64Key: string): Promise<CryptoKey> {
   if (raw.length !== 32) {
     throw new Error(`encryption key must decode to 32 bytes (got ${raw.length})`);
   }
-  return crypto.subtle.importKey('raw', raw, { name: ALGO }, false, ['encrypt', 'decrypt']);
+  return crypto.subtle.importKey('raw', raw.buffer as ArrayBuffer, { name: ALGO }, false, ['encrypt', 'decrypt']);
 }
 
 export async function encryptJson(key: CryptoKey, obj: unknown): Promise<CipherBlob> {
@@ -69,9 +69,9 @@ export async function decryptJson<T>(key: CryptoKey, blob: CipherBlob): Promise<
   sealed.set(ct, 0);
   sealed.set(tag, ct.length);
   const plaintext = await crypto.subtle.decrypt(
-    { name: ALGO, iv, tagLength: TAG_BYTES * 8 },
+    { name: ALGO, iv: iv as unknown as ArrayBuffer, tagLength: TAG_BYTES * 8 },
     key,
-    sealed,
+    sealed as unknown as ArrayBuffer,
   );
   return JSON.parse(new TextDecoder().decode(plaintext)) as T;
 }

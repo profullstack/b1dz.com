@@ -4,6 +4,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { TradingChart } from './trading-chart';
 import { DashboardSummary } from './dashboard-summary';
+import { RenewalBanner } from '@/components/renewal-banner';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,7 @@ export default async function DashboardPage() {
           <span className="text-base leading-none text-zinc-300">&gt; dashboard</span>
         </div>
         <div className="flex items-center gap-4">
+          <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200">Store</Link>
           <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200">Console →</Link>
           <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-sm text-zinc-400">{user.email}</span>
@@ -30,6 +32,8 @@ export default async function DashboardPage() {
           </form>
         </div>
       </nav>
+
+      <RenewalBanner userId={user.id} />
 
       <div className="max-w-6xl mx-auto px-6 py-8">
         <h1 className="text-2xl font-bold mb-2">Dashboard</h1>

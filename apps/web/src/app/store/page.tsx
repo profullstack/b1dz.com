@@ -2,11 +2,15 @@ import Link from 'next/link';
 import Image from 'next/image';
 import type { Metadata } from 'next';
 import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
+import { createServerSupabase } from '@/lib/supabase';
+import { coinpayConfigured } from '@/lib/coinpay-client';
+import { InstallButton } from './install-button';
 
 export const metadata: Metadata = {
   title: 'b1dz Store — Plugin Marketplace',
   description: 'Browse and install DEX connectors and trading strategies for b1dz. Signals-only execution — authors never touch your keys.',
 };
+export const dynamic = 'force-dynamic';
 
 const kindLabels: Record<string, string> = {
   connector: 'DEX Connector',
@@ -31,7 +35,31 @@ function priceLabel(pricing: CatalogEntry['pricing']): string {
   return `${pricing.bps / 100}% rev share`;
 }
 
-export default function StorePage() {
+interface InstalledRow {
+  plugin_id: string;
+  status: string;
+  paid_until: string | null;
+}
+
+async function fetchInstalled(): Promise<Map<string, InstalledRow>> {
+  const supabase = await createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return new Map();
+  const { data } = await supabase
+    .from('user_installed_plugins')
+    .select('plugin_id, status, paid_until')
+    .eq('user_id', user.id);
+  const map = new Map<string, InstalledRow>();
+  for (const r of (data ?? []) as InstalledRow[]) map.set(r.plugin_id, r);
+  return map;
+}
+
+export default async function StorePage() {
+  const supabase = await createServerSupabase();
+  const { data: { user } } = await supabase.auth.getUser();
+  const installed = user ? await fetchInstalled() : new Map<string, InstalledRow>();
+  const cpOk = coinpayConfigured();
+
   const connectors = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'connector');
   const strategies = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'strategy');
 
@@ -44,8 +72,21 @@ export default function StorePage() {
         <div className="flex items-center gap-4">
           <Link href="/" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Home</Link>
           <Link href="/store" className="text-sm text-orange-400 hover:text-orange-300 transition">Store</Link>
-          <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Sign in</Link>
-          <Link href="/signup" className="text-sm bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-medium px-4 py-2 rounded-lg transition">Get started</Link>
+          {user ? (
+            <>
+              <Link href="/dashboard" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Dashboard</Link>
+              <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Settings</Link>
+              <span className="text-sm text-zinc-500">{user.email}</span>
+              <form action="/api/auth/logout" method="POST">
+                <button className="text-sm text-zinc-500 hover:text-zinc-300 transition">Sign out</button>
+              </form>
+            </>
+          ) : (
+            <>
+              <Link href="/login" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Sign in</Link>
+              <Link href="/signup" className="text-sm bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-medium px-4 py-2 rounded-lg transition">Get started</Link>
+            </>
+          )}
         </div>
       </nav>
 
@@ -56,17 +97,18 @@ export default function StorePage() {
         <p className="text-xl text-zinc-400 max-w-2xl mx-auto">
           DEX connectors and trading strategies for the b1dz terminal. Signals-only — plugin authors never touch your keys.
         </p>
-        <div className="mt-8 inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/70 px-4 py-2 text-xs uppercase tracking-[0.3em] text-zinc-500">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
-          v0 — preview catalog. <span className="font-mono normal-case tracking-normal text-orange-400 ml-1">b1dz store install</span> lands with the registry.
-        </div>
+        {user && !cpOk && (
+          <div className="mt-6 inline-block rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-300">
+            Operator note: Coinpay not configured — paid plugin purchases disabled until env vars land.
+          </div>
+        )}
       </section>
 
       <section className="max-w-6xl mx-auto px-6 py-10">
         <SectionHeader title="DEX Connectors" count={connectors.length} />
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
           {connectors.map((e) => (
-            <PluginCard key={e.manifest.id} entry={e} />
+            <PluginCard key={e.manifest.id} entry={e} loggedIn={!!user} installed={installed.get(e.manifest.id) ?? null} coinpayConfigured={cpOk} />
           ))}
         </div>
       </section>
@@ -75,37 +117,8 @@ export default function StorePage() {
         <SectionHeader title="Strategies" count={strategies.length} />
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
           {strategies.map((e) => (
-            <PluginCard key={e.manifest.id} entry={e} />
+            <PluginCard key={e.manifest.id} entry={e} loggedIn={!!user} installed={installed.get(e.manifest.id) ?? null} coinpayConfigured={cpOk} />
           ))}
-        </div>
-        <p className="mt-6 text-center text-sm text-zinc-500">
-          The in-repo strategies are placeholders. The authoring SDK opens soon —{' '}
-          <Link href="/signup" className="text-orange-400 hover:text-orange-300 transition">sign up</Link> to get notified.
-        </p>
-      </section>
-
-      <section className="max-w-5xl mx-auto px-6 py-16">
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 px-8 py-10">
-          <h2 className="text-2xl font-bold mb-3">
-            <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Sell your strategy on b1dz</span>
-          </h2>
-          <p className="text-zinc-400 mb-6 max-w-3xl">
-            Authors publish a strategy as a signal stream. b1dz&apos;s engine applies each user&apos;s risk limits, signs trades, and tracks realized-vs-expected PnL. You never need a user&apos;s keys. Revenue is attributed per signal.
-          </p>
-          <div className="grid sm:grid-cols-3 gap-4 text-sm">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-              <div className="text-zinc-500 uppercase tracking-wider text-xs mb-1">Sandbox</div>
-              <div className="text-zinc-200">Signals-only. No wallet access, ever.</div>
-            </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-              <div className="text-zinc-500 uppercase tracking-wider text-xs mb-1">Payout</div>
-              <div className="text-zinc-200">Monthly subscription or PnL rev-share — author picks.</div>
-            </div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-              <div className="text-zinc-500 uppercase tracking-wider text-xs mb-1">Attribution</div>
-              <div className="text-zinc-200">Expected vs realized tracked per-signal, not per-bundle.</div>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -127,7 +140,12 @@ function SectionHeader({ title, count }: { title: string; count: number }) {
   );
 }
 
-function PluginCard({ entry }: { entry: CatalogEntry }) {
+function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk }: {
+  entry: CatalogEntry;
+  loggedIn: boolean;
+  installed: InstalledRow | null;
+  coinpayConfigured: boolean;
+}) {
   const { manifest, status, pricing, tagline } = entry;
   return (
     <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-5 hover:border-orange-500/30 transition">
@@ -143,21 +161,18 @@ function PluginCard({ entry }: { entry: CatalogEntry }) {
       </div>
       {tagline && <p className="text-sm text-zinc-300 mb-2">{tagline}</p>}
       {manifest.description && <p className="text-sm text-zinc-400 leading-relaxed mb-4">{manifest.description}</p>}
-      <div className="mb-4">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Install</div>
-        <code className="block rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs font-mono text-orange-300 overflow-x-auto">
-          b1dz store install {manifest.id}
-        </code>
-      </div>
-      <div className="mt-auto flex items-center justify-between pt-3 border-t border-zinc-800">
+      <div className="mt-auto flex items-center justify-between pt-3 border-t border-zinc-800 gap-3">
         <div className="flex flex-wrap gap-1.5">
-          {manifest.capabilities.map((c) => (
+          {manifest.capabilities.slice(0, 3).map((c) => (
             <span key={c} className="rounded-md bg-zinc-950 border border-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-400">
               {c}
             </span>
           ))}
         </div>
-        <span className="text-sm font-semibold text-zinc-200 whitespace-nowrap ml-3">{priceLabel(pricing)}</span>
+        <div className="flex flex-col items-end gap-2">
+          <span className="text-sm font-semibold text-zinc-200 whitespace-nowrap">{priceLabel(pricing)}</span>
+          <InstallButton entry={entry} loggedIn={loggedIn} installed={installed} coinpayConfigured={cpOk} />
+        </div>
       </div>
     </div>
   );

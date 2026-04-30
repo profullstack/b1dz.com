@@ -7,22 +7,26 @@ import { WalletsSection } from './sections/wallets';
 import { RpcSection } from './sections/rpc';
 import { ThresholdsSection } from './sections/thresholds';
 import { TogglesSection } from './sections/toggles';
+import { PluginsSection } from './sections/plugins';
+import { StrategiesSection } from './sections/strategies';
 import type { SettingsResponse } from './shared';
 import { importKey } from '@/lib/browser-crypto';
 
-type Tab = 'wallets' | 'cex' | 'dex' | 'rpc' | 'thresholds' | 'toggles';
+type Tab = 'plugins' | 'wallets' | 'cex' | 'dex' | 'rpc' | 'strategies' | 'thresholds' | 'toggles';
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: 'plugins', label: 'Plugins' },
   { id: 'wallets', label: 'Wallets' },
   { id: 'cex', label: 'CEX keys' },
   { id: 'dex', label: 'DEX keys' },
   { id: 'rpc', label: 'RPC URLs' },
+  { id: 'strategies', label: 'Strategies' },
   { id: 'thresholds', label: 'Thresholds' },
   { id: 'toggles', label: 'Toggles' },
 ];
 
 export function SettingsClient() {
-  const [tab, setTab] = useState<Tab>('wallets');
+  const [tab, setTab] = useState<Tab>('plugins');
   const [data, setData] = useState<SettingsResponse | null>(null);
   const [cryptoKey, setCryptoKey] = useState<CryptoKey | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
@@ -108,12 +112,15 @@ export function SettingsClient() {
       {loading && !data && <p className="text-sm text-zinc-500">loading…</p>}
       {error && <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
 
-      {data && (
+      {tab === 'plugins' && <PluginsSection />}
+
+      {data && tab !== 'plugins' && (
         <div>
           {tab === 'wallets' && <WalletsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'cex' && <CexSection data={data} cryptoKey={cryptoKey} cryptoUnavailable={!!cryptoUnavailable} onSaved={onSaved} />}
           {tab === 'dex' && <DexSection data={data} cryptoKey={cryptoKey} cryptoUnavailable={!!cryptoUnavailable} onSaved={onSaved} />}
           {tab === 'rpc' && <RpcSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
+          {tab === 'strategies' && <StrategiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'thresholds' && <ThresholdsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'toggles' && <TogglesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
         </div>
