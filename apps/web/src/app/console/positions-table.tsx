@@ -2,6 +2,7 @@
 
 import { formatUsdPrice } from './format';
 import type { TradeState } from '@/lib/source-state-types';
+import { Sparkline } from '@/components/sparkline';
 
 interface Props {
   trade: TradeState | null;
@@ -30,12 +31,13 @@ export function PositionsTable({ trade }: Props) {
               <th className="px-3 py-2 text-right">PnL</th>
               <th className="px-3 py-2 text-right">Stop</th>
               <th className="px-3 py-2 text-right">Age</th>
+              <th className="px-3 py-2 text-center">Chart</th>
             </tr>
           </thead>
           <tbody>
             {visible.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-3 text-zinc-500">No open positions</td>
+                <td colSpan={10} className="px-3 py-3 text-zinc-500">No open positions</td>
               </tr>
             )}
             {visible.map((p, i) => {
@@ -65,6 +67,9 @@ export function PositionsTable({ trade }: Props) {
                   </td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{stop > 0 ? `$${formatUsdPrice(stop)}` : '-'}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-400">{p.elapsed ?? '-'}</td>
+                  <td className="px-3 py-1.5 text-center">
+                    <Sparkline samples={p.priceSamples} />
+                  </td>
                 </tr>
               );
             })}

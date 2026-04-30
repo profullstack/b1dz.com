@@ -199,6 +199,7 @@ interface Position {
   highWaterMark: number; // highest price seen since entry
   strategyId?: string;
   entryFee: number; // buy-side fee in USD — included in netPnl on close
+  priceSamples: number[]; // bid samples per tick, capped at 20, for sparkline
 }
 const openPositions = new Map<string, Position>();
 interface PendingLiquidation {
@@ -221,6 +222,7 @@ export interface ClosedTrade {
   grossPnl: number;
   fee: number;
   netPnl: number;
+  priceSamples?: number[]; // bid samples from open to close, for sparkline
 }
 
 const closedTrades: ClosedTrade[] = [];
@@ -388,6 +390,7 @@ function restorePosition(
     entryTime,
     highWaterMark: entryPrice,
     entryFee: 0, // unknown for externally-detected positions
+    priceSamples: [],
   });
   pendingLiquidations.delete(`${exchange}:${pair}`);
   console.log(`[trade] RESTORED from exchange: ${exchange}:${pair} ${volume} @ $${entryPrice.toFixed(2)} (${reason})`);
@@ -1519,6 +1522,7 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
       highWaterMark: Number.isFinite(pos.highWaterMark) ? pos.highWaterMark : pos.entryPrice,
       strategyId: pos.strategyId,
       entryFee: Number.isFinite(pos.entryFee) ? pos.entryFee : 0,
+      priceSamples: Array.isArray(pos.priceSamples) ? pos.priceSamples : [],
     });
   }
   lastExitAt.clear();
@@ -1751,8 +1755,8 @@ export function getDexExecutor(): DexTradeExecutor | null {
 
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
-  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string }[];
-  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples: number[] }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples: number[] } | null;
   dailyPnl: number;
   dailyPnlPct: number;
   dailyFees: number;
@@ -1804,6 +1808,7 @@ export function getTradeStatus(): TradeStatus {
         pnlUsd,
         stopPrice: trailingStopPrice(pos),
         elapsed: elapsed + stale,
+        priceSamples: [...pos.priceSamples],
       };
     })
     .filter((pos) => (pos.currentPrice * pos.volume) >= DUST_USD_THRESHOLD);
@@ -1927,6 +1932,7 @@ async function actOnDex(args: {
         grossPnl,
         fee: 0,
         netPnl,
+        priceSamples: [...(pos.priceSamples ?? []), exitPrice],
       });
       cumulativePnl += netPnl;
       while (closedTrades.length > 100) closedTrades.shift();
@@ -1990,6 +1996,7 @@ async function actOnDex(args: {
       highWaterMark: entryPrice,
       strategyId: meta.strategy ?? 'dex',
       entryFee: 0, // DEX pool fees are baked into the fill price
+      priceSamples: [entryPrice],
     });
     const txPart = result.txId ? ` tx=${result.txId}` : '';
     console.log(`[trade] DEX BUY placed ${exchange}:${pair}${txPart} vol=${baseVolume.toFixed(8)} @ $${entryPrice.toFixed(6)}`);
@@ -2054,11 +2061,13 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           item.analysis = getAnalysisForItem(item, cooldownActive);
           items.push(item);
 
-          // Update high water mark for open positions
+          // Update high water mark and price samples for open positions
           const posKey = `${exchange}:${pair}`;
           const pos = openPositions.get(posKey);
-          if (pos && snap.bid > pos.highWaterMark) {
-            pos.highWaterMark = snap.bid;
+          if (pos) {
+            if (snap.bid > pos.highWaterMark) pos.highWaterMark = snap.bid;
+            pos.priceSamples.push(snap.bid);
+            if (pos.priceSamples.length > 20) pos.priceSamples.shift();
           }
 
           // Keep raw logs useful: positions every tick, warmup checkpoints,
@@ -2410,6 +2419,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             grossPnl,
             fee,
             netPnl,
+            priceSamples: [...(pos.priceSamples ?? []), meta.snap.bid],
           });
           while (closedTrades.length > 100) closedTrades.shift();
           const todayStart = new Date();
@@ -2576,6 +2586,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           highWaterMark: aggressivePrice,
           strategyId: meta.strategy ?? 'composite',
           entryFee: entryFeeUsd,
+          priceSamples: [aggressivePrice],
         });
         recordDailyFee(entryFeeUsd);
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);

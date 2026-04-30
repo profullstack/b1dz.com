@@ -56,6 +56,7 @@ export interface TradeStatusData {
     pnlUsd: number;
     stopPrice: number;
     elapsed: string;
+    priceSamples?: number[];
   }[];
   position?: {
     pair: string;
@@ -66,6 +67,7 @@ export interface TradeStatusData {
     pnlUsd: number;
     stopPrice: number;
     elapsed: string;
+    priceSamples?: number[];
   } | null;
   dailyPnl?: number;
   dailyPnlPct?: number;
@@ -109,6 +111,7 @@ export interface TradeState {
       grossPnl: number;
       fee: number;
       netPnl: number;
+      priceSamples?: number[];
     }[];
   };
   daemon?: { lastTickAt: string; worker: string; status: string; version?: string };

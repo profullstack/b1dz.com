@@ -1,9 +1,23 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'Datatype';
+  src: url('/fonts/Datatype.woff2') format('woff2');
+  font-weight: 100 900;
+  font-stretch: 50% 150%;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
 }
 
 body {
   @apply bg-zinc-950 text-zinc-100 font-sans antialiased;
+}
+
+.datatype-chart {
+  font-family: 'Datatype', sans-serif;
+  font-variation-settings: 'wdth' 75, 'wght' 500;
+  font-feature-settings: 'calt' 1, 'liga' 1;
 }

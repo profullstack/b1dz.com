@@ -13,6 +13,7 @@ import {
 } from 'lightweight-charts';
 import { useSourceState } from '@/lib/use-source-state';
 import type { TradeState } from '@/lib/source-state-types';
+import { Sparkline } from '@/components/sparkline';
 
 type ClosedTrade = NonNullable<NonNullable<TradeState['tradeState']>['closedTrades']>[number];
 
@@ -238,6 +239,7 @@ function TradeHistory({ trades }: { trades: ClosedTrade[] }) {
                 <th className="px-2 py-2 text-right">Gross</th>
                 <th className="px-2 py-2 text-right">Fee</th>
                 <th className="px-2 py-2 text-right font-semibold">Net</th>
+                <th className="px-2 py-2 text-center">Chart</th>
               </tr>
             </thead>
             <tbody>
@@ -260,6 +262,9 @@ function TradeHistory({ trades }: { trades: ClosedTrade[] }) {
                     <td className="px-2 py-1.5 text-right text-zinc-600">−{FMT(t.fee)}</td>
                     <td className={`px-2 py-1.5 text-right font-semibold ${win ? 'text-emerald-400' : 'text-red-400'}`}>
                       {SIGN(t.netPnl)}{FMT(t.netPnl)}
+                    </td>
+                    <td className="px-2 py-1.5 text-center">
+                      <Sparkline samples={t.priceSamples} />
                     </td>
                   </tr>
                 );
