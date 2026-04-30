@@ -8,6 +8,7 @@ import {
   TAKE_PROFIT_PCT,
   TIME_EXIT_MS,
   TIME_EXIT_FLAT_PCT,
+  takeProfitPctFromEnv,
 } from './trade-config.js';
 
 export interface ExitDecisionInput {
@@ -40,9 +41,10 @@ export function decideExit(input: ExitDecisionInput): ExitDecision {
   const { pnlPct, bid, stopPrice, elapsed, minHoldMs, hardStopPct, confirmTrend, strategySell } = input;
   const inMinHold = elapsed < minHoldMs;
   const holdForUptrend = confirmTrend === 'bull' && pnlPct > hardStopPct;
+  const takeProfitPct = takeProfitPctFromEnv();
 
-  if (pnlPct >= TAKE_PROFIT_PCT) {
-    return { exitReason: `take-profit +${(pnlPct * 100).toFixed(2)}%`, suppressReason: null };
+  if (pnlPct >= takeProfitPct) {
+    return { exitReason: `take-profit +${(pnlPct * 100).toFixed(2)}% (target ${(takeProfitPct * 100).toFixed(2)}%)`, suppressReason: null };
   }
 
   const stopHit = bid <= stopPrice;

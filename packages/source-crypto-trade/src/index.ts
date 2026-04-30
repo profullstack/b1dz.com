@@ -258,6 +258,9 @@ let dailyPnl = 0;
 let dailyFees = 0;
 let dailyPnlDate = new Date().toDateString();
 let dailyEquityBaselineUsd = 0;
+/** All-time cumulative PnL and fees — survives daily resets. */
+let cumulativePnl = 0;
+let cumulativeFees = 0;
 let tradePollCount = 0;
 let lastEligiblePairs: string[] = [];
 let lastQuoteBalanceRefresh = 0;
@@ -1564,7 +1567,9 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
   } else {
     dailyFees = recomputedFeesFromClosed;
   }
-  console.log(`[trade] RESTORED trade state: positions=${openPositions.size} closedTrades=${closedTrades.length} dailyPnl=$${dailyPnl.toFixed(2)} dailyFees=$${dailyFees.toFixed(2)} dailyPnlDate=${dailyPnlDate} baseline=$${dailyEquityBaselineUsd.toFixed(2)}`);
+  if (Number.isFinite(tradeState.cumulativePnl)) cumulativePnl = Number(tradeState.cumulativePnl);
+  if (Number.isFinite(tradeState.cumulativeFees)) cumulativeFees = Math.max(0, Number(tradeState.cumulativeFees));
+  console.log(`[trade] RESTORED trade state: positions=${openPositions.size} closedTrades=${closedTrades.length} dailyPnl=$${dailyPnl.toFixed(2)} dailyFees=$${dailyFees.toFixed(2)} cumulativePnl=$${cumulativePnl.toFixed(2)} dailyPnlDate=${dailyPnlDate} baseline=$${dailyEquityBaselineUsd.toFixed(2)}`);
 }
 
 /**
@@ -1585,6 +1590,8 @@ export function serializeTradeState(): Record<string, unknown> {
     dailyPnlDate,
     dailyEquityBaselineUsd,
     closedTrades,
+    cumulativePnl,
+    cumulativeFees,
   };
 }
 
@@ -1749,6 +1756,8 @@ export interface TradeStatus {
   dailyPnl: number;
   dailyPnlPct: number;
   dailyFees: number;
+  cumulativePnl: number;
+  cumulativeFees: number;
   dailyLossLimitHit: boolean;
   dailyLossLimitPct: number;
   cooldowns: { pair: string; remainingSec: number }[];
@@ -1821,6 +1830,8 @@ export function getTradeStatus(): TradeStatus {
     dailyPnl: trackedDailyPnl,
     dailyPnlPct: dailyEquityBaselineUsd > 0 ? (trackedDailyPnl / dailyEquityBaselineUsd) * 100 : 0,
     dailyFees,
+    cumulativePnl,
+    cumulativeFees,
     dailyLossLimitHit: dailyEquityBaselineUsd > 0 ? ((trackedDailyPnl / dailyEquityBaselineUsd) * 100) <= -dailyLossLimitPctRuntime : false,
     dailyLossLimitPct: dailyLossLimitPctRuntime,
     cooldowns,
@@ -1917,6 +1928,7 @@ async function actOnDex(args: {
         fee: 0,
         netPnl,
       });
+      cumulativePnl += netPnl;
       while (closedTrades.length > 100) closedTrades.shift();
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -2384,6 +2396,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           const grossPnl = (meta.snap.bid - pos.entryPrice) * sellVolume;
           const netPnl = grossPnl - fee;
           recordDailyFee(sellFee); // entryFee already recorded on buy
+          cumulativePnl += netPnl;
+          cumulativeFees += fee;
           closedTrades.push({
             exchange,
             pair,
