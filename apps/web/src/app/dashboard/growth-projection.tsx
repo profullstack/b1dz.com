@@ -396,20 +396,50 @@ export function GrowthProjection() {
     chartRef.current.timeScale().fitContent();
   }, [flat, compounded, conservative, riskAdjusted, real]);
 
-  const projRows = useMemo(() =>
-    BREAKPOINTS.map(({ days, label }) => {
+  const projRows = useMemo(() => {
+    const now = Date.now();
+    // Observed daily rate from actual trade history
+    const totalNetPnl = closedTrades.reduce((s, t) => s + t.netPnl, 0);
+    const daysElapsed = closedTrades.length >= 2
+      ? (Math.max(...closedTrades.map((t) => t.exitTime)) - firstTradeMs) / 86_400_000
+      : 0;
+    const currentBalance = bankroll + totalNetPnl;
+    const observedDailyRate = daysElapsed > 0 && currentBalance > 0 && bankroll > 0
+      ? Math.pow(currentBalance / bankroll, 1 / daysElapsed) - 1
+      : null;
+
+    return BREAKPOINTS.map(({ days, label }) => {
       const conservativeRate = Math.min(dailyRate, Math.pow(1 + MAX_MONTHLY_GROWTH, 1 / 30) - 1);
       const riskRate = dailyRate * RISK_HAIRCUT;
+      const targetMs = firstTradeMs + days * 86_400_000;
+
+      let realtime: number | null = null;
+      if (closedTrades.length > 0) {
+        if (targetMs <= now) {
+          // Past: sum trades that closed on or before this breakpoint
+          const cum = closedTrades
+            .filter((t) => t.exitTime <= targetMs)
+            .reduce((s, t) => s + t.netPnl, 0);
+          realtime = bankroll + cum;
+        } else if (observedDailyRate !== null) {
+          // Future: project forward from current balance using observed rate
+          const daysRemaining = (targetMs - now) / 86_400_000;
+          realtime = currentBalance * Math.pow(1 + observedDailyRate, daysRemaining);
+        }
+      }
+
       return {
         label,
+        days,
+        isPast: targetMs <= now,
         flat: bankroll + hourlyProfit * days * 24,
         compound: bankroll * Math.pow(1 + dailyRate, days),
         conservative: bankroll * Math.pow(1 + conservativeRate, days),
         riskAdj: bankroll * Math.pow(1 + riskRate, days),
+        realtime,
       };
-    }),
-    [bankroll, hourlyProfit, dailyRate],
-  );
+    });
+  }, [bankroll, hourlyProfit, dailyRate, closedTrades, firstTradeMs]);
 
   const dailyRatePct = (dailyRate * 100).toFixed(3);
   const hourlyRatePct = ((Math.pow(1 + dailyRate, 1 / 24) - 1) * 100).toFixed(4);
@@ -508,6 +538,7 @@ export function GrowthProjection() {
               <thead>
                 <tr className="border-b border-zinc-800 text-zinc-500">
                   <th className="py-2 text-left">Period</th>
+                  <th className="py-2 text-right text-emerald-400">Realtime</th>
                   <th className="py-2 text-right">Flat</th>
                   <th className="py-2 text-right text-amber-400">Compounded</th>
                   <th className="py-2 text-right text-orange-400">Risk-adj</th>
@@ -515,9 +546,19 @@ export function GrowthProjection() {
                 </tr>
               </thead>
               <tbody>
-                {projRows.map(({ label, flat: f, compound, conservative: cons, riskAdj }) => (
+                {projRows.map(({ label, flat: f, compound, conservative: cons, riskAdj, realtime, isPast }) => (
                   <tr key={label} className="border-b border-zinc-900">
                     <td className="py-1.5 text-zinc-300">{label}</td>
+                    <td className="py-1.5 text-right font-semibold">
+                      {realtime !== null ? (
+                        <span className={realtime >= bankroll ? 'text-emerald-400' : 'text-red-400'}>
+                          {FMT(realtime)}
+                          {!isPast && <span className="ml-1 text-[10px] text-zinc-600">proj</span>}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-700">—</span>
+                      )}
+                    </td>
                     <td className="py-1.5 text-right text-zinc-500">{FMT(f)}</td>
                     <td className="py-1.5 text-right text-amber-400">{FMT(compound)}</td>
                     <td className="py-1.5 text-right text-orange-400">{FMT(riskAdj)}</td>
