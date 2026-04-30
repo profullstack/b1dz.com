@@ -67,10 +67,34 @@ export function InstallButton({ entry, loggedIn, installed, coinpayConfigured }:
     }
   }
 
-  // Free / revshare: simple Install button (or Installed badge).
+  // Free / revshare: simple Install button (or Installed badge + uninstall).
   if (isFree || isRevshare) {
     if (installed) {
-      return <span className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300">Installed ✓</span>;
+      return (
+        <div className="flex items-center gap-2">
+          <span className="whitespace-nowrap rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-300">Installed ✓</span>
+          <button
+            onClick={async () => {
+              setBusy(true); setError(null);
+              try {
+                const res = await fetch('/api/store/uninstall', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ pluginId: entry.manifest.id }),
+                });
+                if (!res.ok) throw new Error(`${res.status}`);
+                router.refresh();
+              } catch (e) { setError((e as Error).message); }
+              finally { setBusy(false); }
+            }}
+            disabled={busy}
+            className="text-xs text-zinc-600 hover:text-red-400 transition disabled:opacity-40"
+          >
+            {busy ? '…' : 'uninstall'}
+          </button>
+          {error && <span className="text-xs text-red-400">{error}</span>}
+        </div>
+      );
     }
     return (
       <div className="flex items-center gap-2">
