@@ -15,8 +15,6 @@ const ANALYSIS_CACHE_TTL_MS = 24 * 60 * 60_000;
 // instead of sitting on `loading…` forever. Strip only the fat/noisy live fields.
 const LIVE_SOURCE_STATE_FIELDS = new Set([
   'activityLog',
-  'binanceBalance',
-  'coinbaseBalance',
   'openOrders',
   'opportunities',
   'prices',
@@ -25,7 +23,6 @@ const LIVE_SOURCE_STATE_FIELDS = new Set([
   'signals',
   'spreads',
   'tradeState',
-  'krakenBalance',
 ]);
 
 interface CacheEnvelope<T> {

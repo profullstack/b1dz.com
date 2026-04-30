@@ -35,11 +35,16 @@ export function HoldingsPanel({ arb }: Props) {
     .sort((a, b) => b.usdValue - a.usdValue);
 
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
-  const totalValue =
-    sumValue(krakenHoldings) +
-    sumValue(binanceDetailed.length ? binanceDetailed : binanceHoldings) +
-    sumValue(coinbaseHoldings) +
-    sumValue(geminiHoldings);
+
+  const exchangeSummaries = [
+    { key: 'kraken', label: 'Kraken', color: 'text-cyan-400', value: sumValue(krakenHoldings) },
+    { key: 'binance', label: 'Binance', color: 'text-yellow-400', value: sumValue(binanceDetailed.length ? binanceDetailed : binanceHoldings) },
+    { key: 'coinbase', label: 'Coinbase', color: 'text-fuchsia-400', value: sumValue(coinbaseHoldings) },
+    { key: 'gemini', label: 'Gemini', color: 'text-blue-400', value: sumValue(geminiHoldings) },
+  ];
+
+  const totalValue = exchangeSummaries.reduce((s, x) => s + x.value, 0);
+  const errors = arb?.exchangeErrors ?? {};
 
   const showByDust = (h: { isStable: boolean; usdValue: number }) => h.isStable || h.usdValue >= DUST;
   const byUsdDesc = (a: { usdValue: number }, b: { usdValue: number }) => b.usdValue - a.usdValue;
@@ -50,6 +55,23 @@ export function HoldingsPanel({ arb }: Props) {
         <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Holdings</span>
         <span className="font-mono text-xs text-zinc-300">total: <span className="text-zinc-100">${totalValue.toFixed(2)}</span></span>
       </header>
+      <div className="grid grid-cols-2 gap-2 border-b border-zinc-800 p-3 sm:grid-cols-4">
+        {exchangeSummaries.map(({ key, label, color, value }) => {
+          const err = errors[key];
+          return (
+            <div key={key} className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+              <div className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>{label}</div>
+              <div className="mt-1 font-mono text-sm text-zinc-100">${value.toFixed(2)}</div>
+              {err && (
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+                  <span className="truncate text-[10px] text-red-400" title={err}>{err}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left font-mono text-xs">
           <thead className="text-zinc-500">

@@ -20,6 +20,7 @@ export interface ArbState {
   binanceBalance?: Record<string, string>;
   coinbaseBalance?: Record<string, string>;
   geminiBalance?: Record<string, string>;
+  exchangeErrors?: Record<string, string | null>;
   binanceDetailedBalance?: { asset: string; free: string; locked: string }[];
   binanceOpenOrders?: {
     symbol: string;

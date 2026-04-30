@@ -45,6 +45,7 @@ let cachedKrakenBalance: Record<string, string> = {};
 let cachedBinanceBalance: Record<string, string> = {};
 let cachedCoinbaseBalance: Record<string, string> = {};
 let cachedGeminiBalance: Record<string, string> = {};
+let cachedExchangeErrors: Record<string, string | null> = { kraken: null, binance: null, coinbase: null, gemini: null };
 let cachedBinanceDetailedBalance: BinanceAssetBalance[] = [];
 let cachedBinanceOpenOrders: unknown[] = [];
 let cachedRecentTrades: unknown[] = [];
@@ -150,6 +151,7 @@ export const cryptoArbWorker: SourceWorker = {
       const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
       try {
         cachedKrakenBalance = await getBalance();
+        cachedExchangeErrors.kraken = null;
         krakenLockoutBackoffMs = KRAKEN_LOCKOUT_BACKOFF_MS;
         logRaw(`[kraken] balance: ${Object.entries(cachedKrakenBalance).filter(([, v]) => parseFloat(v) > 0.0001).map(([k, v]) => `${k}=${v}`).join(' ')}`, 'crypto-arb');
         await wait(2000);
@@ -171,15 +173,19 @@ export const cryptoArbWorker: SourceWorker = {
           if (isLockout) {
             krakenLockoutBackoffMs = Math.min(krakenLockoutBackoffMs * 2, KRAKEN_LOCKOUT_BACKOFF_MAX_MS);
           }
+          cachedExchangeErrors.kraken = `Rate limited (${Math.round(backoffMs / 1000)}s backoff)`;
         } else {
           logRaw(`[kraken] ✗ Unable to connect: ${msg}`, 'crypto-arb');
+          cachedExchangeErrors.kraken = msg;
         }
       }
       try {
         cachedBinanceBalance = await getBinanceBalance();
+        cachedExchangeErrors.binance = null;
         logRaw(`[binance] balance: ${Object.entries(cachedBinanceBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`, 'crypto-arb');
       } catch (e) {
         cachedBinanceBalance = {};
+        cachedExchangeErrors.binance = (e as Error).message;
         logRaw(`[binance] ✗ Unable to connect: ${(e as Error).message}`, 'crypto-arb');
       }
       try {
@@ -200,18 +206,22 @@ export const cryptoArbWorker: SourceWorker = {
           logRaw(`[coinbase] auth debug: hasKeyName=${coinbaseAuth.hasKeyName} keyNameLooksValid=${coinbaseAuth.keyNameLooksValid} hasPem=${coinbaseAuth.hasPem}`, 'crypto-arb');
         }
         cachedCoinbaseBalance = await getCoinbaseBalance();
+        cachedExchangeErrors.coinbase = null;
         logRaw(`[coinbase] balance: ${Object.entries(cachedCoinbaseBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`, 'crypto-arb');
       } catch (e) {
         cachedCoinbaseBalance = {};
         const err = e as Error & { cause?: Error };
         const detail = err.cause ? ` (${err.cause.message})` : '';
+        cachedExchangeErrors.coinbase = `${err.message}${detail}`;
         logRaw(`[coinbase] ✗ Unable to connect: ${err.message}${detail}`, 'crypto-arb');
       }
       try {
         cachedGeminiBalance = await getGeminiBalance();
+        cachedExchangeErrors.gemini = null;
         logRaw(`[gemini] balance: ${Object.entries(cachedGeminiBalance).map(([k, v]) => `${k}=${v}`).join(' ') || '(empty)'}`, 'crypto-arb');
       } catch (e) {
         cachedGeminiBalance = {};
+        cachedExchangeErrors.gemini = (e as Error).message;
         logRaw(`[gemini] ✗ Unable to connect: ${(e as Error).message}`, 'crypto-arb');
       }
       }
@@ -530,6 +540,7 @@ export const cryptoArbWorker: SourceWorker = {
       binanceBalance: cachedBinanceBalance,
       coinbaseBalance: cachedCoinbaseBalance,
       geminiBalance: cachedGeminiBalance,
+      exchangeErrors: cachedExchangeErrors,
       binanceDetailedBalance: cachedBinanceDetailedBalance,
       binanceOpenOrders: cachedBinanceOpenOrders,
       recentTrades: cachedRecentTrades,
