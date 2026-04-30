@@ -11,19 +11,21 @@ import {
   type SettingsResponse,
 } from '../shared';
 
-interface NumField { field: string; label: string; hint?: string }
+interface NumField { field: string; label: string; hint?: string; placeholder?: string }
 
 const RISK: NumField[] = [
-  { field: 'DAILY_LOSS_LIMIT_PCT', label: 'Daily loss limit %', hint: 'Halts trading once realized PnL drops by this %' },
-  { field: 'HARD_STOP_PCT', label: 'Hard stop %', hint: 'Per-position stop-loss as % of entry' },
-  { field: 'TAKE_PROFIT_PCT', label: 'Take profit %', hint: 'Target gain per trade (e.g. 0.015 = 1.5%)' },
-  { field: 'MIN_NET_PROFIT_PCT', label: 'Min net profit %', hint: 'Minimum profit after all fees required to enter (default 0.003 = 0.3%)' },
-  { field: 'ROTATE_ADVERSE_PCT', label: 'Rotate adverse %' },
-  { field: 'ROTATE_MIN_HOLD_MS', label: 'Rotate min hold (ms)' },
+  { field: 'DAILY_LOSS_LIMIT_PCT', label: 'Daily loss limit %',   placeholder: '5',      hint: 'Halts all new entries once daily realized loss exceeds this % of equity' },
+  { field: 'HARD_STOP_PCT',        label: 'Hard stop %',          placeholder: '0.02',   hint: 'Exit immediately if position drops this fraction (0.02 = 2%)' },
+  { field: 'TAKE_PROFIT_PCT',      label: 'Take profit %',        placeholder: '0.015',  hint: 'Close position when gain reaches this fraction (0.015 = 1.5%)' },
+  { field: 'MIN_NET_PROFIT_PCT',   label: 'Min net profit %',     placeholder: '0.003',  hint: 'Skip entry unless take-profit minus round-trip fees clears this margin (0.003 = 0.3%)' },
+  { field: 'ENTRY_MIN_SCORE',      label: 'Entry min score',      placeholder: '85',     hint: 'Signal strength 0–100 required to open a position (default 85)' },
+  { field: 'MIN_HOLD_SECS',        label: 'Min hold (secs)',      placeholder: '300',    hint: 'Suppress trailing-stop exits for this many seconds after entry' },
+  { field: 'ROTATE_ADVERSE_PCT',   label: 'Rotate adverse %',     placeholder: '0.003',  hint: 'Rotate to a better pair if current position is down this fraction' },
+  { field: 'ROTATE_MIN_HOLD_MS',   label: 'Rotate min hold (ms)', placeholder: '300000', hint: 'Minimum ms to hold before rotating' },
 ];
 const SLIPPAGE: NumField[] = [
-  { field: 'BUY_SLIPPAGE_BPS', label: 'CEX buy slippage (bps)' },
-  { field: 'DEX_TRADE_BUDGET_USD', label: 'DEX trade budget USD' },
+  { field: 'BUY_SLIPPAGE_BPS',      label: 'CEX buy slippage (bps)', placeholder: '50',  hint: 'Walk up to this many bps above ask when submitting IOC buy orders' },
+  { field: 'DEX_TRADE_BUDGET_USD',  label: 'DEX trade budget USD',   placeholder: '20',  hint: 'Max USD to allocate per DEX trade' },
 ];
 const AUTO_SEED: NumField[] = [
   { field: 'ARB_AUTO_SEED_MIN_USD', label: 'Min seed USD' },
@@ -95,6 +97,7 @@ export function ThresholdsSection({
         value={vals[f.field] ?? ''}
         onChange={setField(f.field)}
         hint={f.hint}
+        placeholder={f.placeholder}
       />
     ));
 
@@ -148,7 +151,8 @@ export function ThresholdsSection({
           label="DEX pair list (comma-separated)"
           value={dexPairs}
           onChange={setDexPairs}
-          hint='e.g. "ETH-USD,SOL-USD"'
+          placeholder="WETH-USDC,cbBTC-USDC,WIF-USDC,BONK-USDC,JUP-USDC"
+          hint="Optional — leave blank to use the built-in default list above"
         />
       </SectionShell>
     </div>

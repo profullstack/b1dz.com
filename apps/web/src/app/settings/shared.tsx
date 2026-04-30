@@ -114,6 +114,7 @@ export function PlainTextRow({
   onChange,
   hint,
   type = 'text',
+  placeholder,
 }: {
   field: string;
   label: string;
@@ -121,6 +122,7 @@ export function PlainTextRow({
   onChange: (v: string) => void;
   hint?: string;
   type?: 'text' | 'url';
+  placeholder?: string;
 }) {
   return (
     <div>
@@ -128,8 +130,9 @@ export function PlainTextRow({
       <input
         type={type}
         value={value}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-orange-500"
+        className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-orange-500"
       />
       {hint && <p className="mt-1 text-[11px] text-zinc-600">{hint}</p>}
     </div>
@@ -142,12 +145,14 @@ export function NumberRow({
   value,
   onChange,
   hint,
+  placeholder,
 }: {
   field: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
   hint?: string;
+  placeholder?: string;
 }) {
   return (
     <div>
@@ -156,8 +161,9 @@ export function NumberRow({
         type="number"
         step="any"
         value={value}
+        placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-orange-500"
+        className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 outline-none focus:border-orange-500"
       />
       {hint && <p className="mt-1 text-[11px] text-zinc-600">{hint}</p>}
     </div>
