@@ -33,6 +33,7 @@ import {
 } from '@b1dz/adapters-evm';
 import { WalletService } from '@b1dz/wallet-service';
 import { DirectEvmWalletProvider } from '@b1dz/wallet-direct';
+import { loadUserConfig, applyEnvOverlay } from '../src/user-config.js';
 
 void UNISWAP_V3_FEE_TIERS;
 
@@ -43,6 +44,22 @@ async function main() {
   const execute = args.has('--execute');
   const unlimited = args.has('--unlimited');
 
+  // If EVM_PRIVATE_KEY is not in env, try loading it from user_settings
+  // (same decryption path the daemon uses). Requires USER_ID env var.
+  if (!process.env.EVM_PRIVATE_KEY) {
+    const userId = process.env.USER_ID;
+    if (!userId) throw new Error('EVM_PRIVATE_KEY missing and USER_ID not set — cannot load from user_settings');
+    const cfg = await loadUserConfig(userId);
+    await applyEnvOverlay(cfg, async () => {
+      await runApproval(execute, unlimited);
+    });
+    return;
+  }
+
+  await runApproval(execute, unlimited);
+}
+
+async function runApproval(execute: boolean, unlimited: boolean) {
   const privateKey = process.env.EVM_PRIVATE_KEY;
   const rpcUrl = process.env.BASE_RPC_URL;
   if (!privateKey) throw new Error('EVM_PRIVATE_KEY missing');
