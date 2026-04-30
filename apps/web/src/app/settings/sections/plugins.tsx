@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { PLUGIN_CATALOG } from '@b1dz/core';
+import { PLUGIN_CATALOG } from '@b1dz/core/catalog';
 
 interface InstalledRow {
   plugin_id: string;

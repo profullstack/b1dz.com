@@ -10,6 +10,10 @@
       "import": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./catalog": {
+      "import": "./src/plugin-catalog.ts",
+      "default": "./src/plugin-catalog.ts"
+    },
     "./storage-contract": {
       "import": "./src/storage-contract.ts",
       "default": "./src/storage-contract.ts"
