@@ -24,6 +24,7 @@ import {
 } from '@b1dz/core';
 import type { SourceWorker, UserContext } from './types.js';
 import { SOURCES } from './registry.js';
+import { loadUserConfig, applyEnvOverlay } from './user-config.js';
 
 interface ScheduledTick {
   userId: string;
@@ -160,7 +161,16 @@ export class DaemonRuntime {
             version: getB1dzVersion(),
           },
         });
-        await source.tick(ctx);
+        // Per-user env overlay: temporarily expose the user's
+        // user_settings (decrypted secrets + plain overrides) on
+        // process.env for the duration of the tick. Adapter code that
+        // reads process.env.X (Coinbase / Kraken / Binance.US / Gemini
+        // / EVM / Solana) transparently sees the user's values, with
+        // env as the fallback if the user has nothing set. Concurrent
+        // ticks for different users serialize at the overlay boundary;
+        // see apps/daemon/src/user-config.ts for context.
+        const userConfig = await loadUserConfig(userId);
+        await applyEnvOverlay(userConfig, () => source.tick(ctx!));
       } catch (e) {
         if (ctx) {
           await ctx.savePayload({
