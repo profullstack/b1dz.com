@@ -2,7 +2,7 @@ import type { SourceWorker, UserContext } from '../types.js';
 import {
   cryptoArbSource,
   evaluateArbStrategies,
-  KrakenFeed, BinanceUsFeed, CoinbaseFeed,
+  KrakenFeed, BinanceUsFeed, CoinbaseFeed, GeminiFeed,
   getBalance, getBinanceBalance, getCoinbaseBalance, getCoinbaseAuthDebug,
   getBinanceDetailedBalance, getBinanceOpenOrders,
   getGeminiBalance,
@@ -37,7 +37,7 @@ import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
 import type { MarketSnapshot } from '@b1dz/core';
 
-const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed()];
+const FEEDS = [new KrakenFeed(), new BinanceUsFeed(), new CoinbaseFeed(), new GeminiFeed()];
 
 // Private API state — refreshed periodically, but never allowed to linger
 // invisibly after a failed fetch.
