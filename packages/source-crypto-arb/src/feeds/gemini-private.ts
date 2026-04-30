@@ -94,6 +94,7 @@ async function geminiPrivate<T>(
           'X-GEMINI-SIGNATURE': signature,
           'Cache-Control': 'no-cache',
         },
+        signal: AbortSignal.timeout(15_000),
       });
       const data = (await res.json()) as T & { result?: string; reason?: string; message?: string };
       if (!res.ok || data.result === 'error') {

@@ -94,6 +94,7 @@ async function coinbasePrivate<T>(
           'Content-Type': 'application/json',
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!res.ok) {
@@ -310,7 +311,7 @@ export async function placeOrder(opts: OrderOpts): Promise<OrderResponse> {
 
   const orderConfig = normalized.limitPrice
     ? (normalized.ioc
-        ? { limit_limit_ioc: { base_size: normalized.size, limit_price: normalized.limitPrice } }
+        ? { sor_limit_ioc: { base_size: normalized.size, limit_price: normalized.limitPrice } }
         : { limit_limit_gtc: { base_size: normalized.size, limit_price: normalized.limitPrice } })
     : { market_market_ioc: { base_size: normalized.size } };
 

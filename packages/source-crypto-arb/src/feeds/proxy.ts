@@ -36,7 +36,7 @@ export function shouldProxy(url: string): boolean {
  * since Node's built-in fetch + undici ProxyAgent have version conflicts.
  */
 export async function proxyFetch(url: string, init?: RequestInit): Promise<Response> {
-  if (!shouldProxy(url)) return fetch(url, init);
+  if (!shouldProxy(url)) return fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(15_000) });
 
   const proxyUrl = getProxyUrl();
   if (!proxyUrl) return fetch(url, init);

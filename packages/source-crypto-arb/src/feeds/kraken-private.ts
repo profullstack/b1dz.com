@@ -82,6 +82,7 @@ async function krakenPrivate<T>(path: string, params: Record<string, string> = {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body,
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!res.ok) throw new Error(`Kraken ${path}: ${res.status} ${res.statusText}`);
@@ -103,7 +104,7 @@ async function krakenPrivate<T>(path: string, params: Record<string, string> = {
 
 async function syncAssetPairs(force = false): Promise<void> {
   if (!force && Date.now() - assetPairsFetchedAt < ASSET_PAIR_CACHE_TTL_MS && tradablePairs.size > 0) return;
-  const res = await fetch(`${BASE}/0/public/AssetPairs`);
+  const res = await fetch(`${BASE}/0/public/AssetPairs`, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`Kraken /0/public/AssetPairs: ${res.status} ${res.statusText}`);
   const data = (await res.json()) as { error: string[]; result: Record<string, { altname?: string; status?: string; ordermin?: string }> };
   if (data.error?.length) throw new Error(`Kraken /0/public/AssetPairs: ${data.error.join(', ')}`);
