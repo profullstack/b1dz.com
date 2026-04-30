@@ -2,17 +2,14 @@ import { createServerSupabase } from '@/lib/supabase';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { TradingChart } from './trading-chart';
-import { DashboardSummary } from './dashboard-summary';
-import { GrowthProjection } from './growth-projection';
-import { RenewalBanner } from '@/components/renewal-banner';
+import { ProjectionsClient } from './projections-client';
 
 export const dynamic = 'force-dynamic';
 
-export default async function DashboardPage() {
+export default async function ProjectionsPage() {
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect('/login?next=/dashboard');
+  if (!user) redirect('/login?next=/dashboard/projections');
 
   return (
     <main className="min-h-screen">
@@ -21,10 +18,10 @@ export default async function DashboardPage() {
           <Link href="/" aria-label="b1dz home" className="inline-flex items-center">
             <Image src="/favicon.svg" alt="b1dz" width={40} height={40} className="block hover:opacity-80 transition" />
           </Link>
-          <span className="text-base leading-none pb-1 text-zinc-300">&gt; dashboard</span>
+          <span className="text-base leading-none pb-1 text-zinc-300">&gt; <Link href="/dashboard" className="hover:text-zinc-100">dashboard</Link> &gt; projections</span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200">Store</Link>
+          <Link href="/dashboard" className="text-sm text-zinc-400 hover:text-zinc-200">Dashboard</Link>
           <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200">Console →</Link>
           <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-sm text-zinc-400">{user.email}</span>
@@ -34,17 +31,12 @@ export default async function DashboardPage() {
         </div>
       </nav>
 
-      <RenewalBanner userId={user.id} />
-
       <div className="max-w-6xl mx-auto px-6 py-8">
-        <h1 className="text-2xl font-bold mb-2">Dashboard</h1>
-        <p className="text-zinc-400 mb-8">Realtime summary of daemon PnL, positions, and arb pipeline. Open the Console for the full operator view.</p>
-
-        <div className="space-y-8">
-          <DashboardSummary />
-          <TradingChart />
-          <GrowthProjection />
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold">Compounding Growth Projection</h1>
+          <p className="mt-1 text-zinc-400">Visualize how a profitable bot&apos;s bankroll could grow under different compounding scenarios. Inputs auto-seed from live bot data.</p>
         </div>
+        <ProjectionsClient />
       </div>
     </main>
   );

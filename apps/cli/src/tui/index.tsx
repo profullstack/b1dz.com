@@ -40,6 +40,14 @@ export function startTui() {
     tuiEvents.emit('set-log-tab', 'news');
   });
 
+  screen.key(['g'], () => {
+    tuiEvents.emit('set-page', 'growth');
+  });
+
+  screen.key(['escape'], () => {
+    tuiEvents.emit('set-page', 'main');
+  });
+
   // Indicator overlays on both charts
   screen.key(['e'], () => tuiEvents.emit('toggle-chart-indicator', 'ema'));
   screen.key(['m'], () => tuiEvents.emit('toggle-chart-indicator', 'sma'));

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { calculateProjection } from '@b1dz/projection-engine';
 import { tuiEvents } from './events.js';
 import { computeStatusFreshness } from './statusFreshness.js';
 import { loadCredentials } from '../auth.js';
@@ -351,6 +352,7 @@ function DashboardInner() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [daemonOnline, setDaemonOnline] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [page, setPage] = useState<'main' | 'growth'>('main');
   const [logTab, setLogTab] = useState<'activity' | 'logs' | 'news' | 'arb'>('arb');
   const [activityPage, setActivityPage] = useState(0);
   const [rawPage, setRawPage] = useState(0);
@@ -449,6 +451,7 @@ function DashboardInner() {
       });
     };
     const tabHandler = (tab: 'activity' | 'logs' | 'news') => setLogTab(tab);
+    const pageNav = (p: 'main' | 'growth') => setPage(p);
     const pageHandler = (delta: number) => {
       if (logTab === 'activity') setActivityPage((prev) => Math.max(0, prev + delta));
       else if (logTab === 'logs') setRawPage((prev) => Math.max(0, prev + delta));
@@ -499,6 +502,7 @@ function DashboardInner() {
     };
     tuiEvents.on('toggle-auto-trade', handler);
     tuiEvents.on('set-log-tab', tabHandler);
+    tuiEvents.on('set-page', pageNav);
     tuiEvents.on('page-log', pageHandler);
     tuiEvents.on('set-chart-timeframe', timeframeHandler);
     tuiEvents.on('cycle-chart-pair', pairCycleHandler);
@@ -507,6 +511,7 @@ function DashboardInner() {
     return () => {
       tuiEvents.off('toggle-auto-trade', handler);
       tuiEvents.off('set-log-tab', tabHandler);
+      tuiEvents.off('set-page', pageNav);
       tuiEvents.off('page-log', pageHandler);
       tuiEvents.off('set-chart-timeframe', timeframeHandler);
       tuiEvents.off('cycle-chart-pair', pairCycleHandler);
@@ -1400,6 +1405,252 @@ function DashboardInner() {
   })();
   const pagedArbPipe = paginateNewestFirst(arbPipeLines, arbPage);
 
+  const allClosed = [...(tradeState?.tradeState?.closedTrades ?? [])].sort((a, b) => b.exitTime - a.exitTime);
+
+  const growthLines: string[] = (() => {
+    const closed = tradeState?.tradeState?.closedTrades ?? [];
+    const dailyPnlVal = tradeState?.tradeStatus?.dailyPnl ?? 0;
+
+    // ── Derive hourly profit from trade history ────────────────────
+    let hourlyProfit = 0.5;
+    if (closed.length >= 2) {
+      const total = closed.reduce((s, t) => s + t.netPnl, 0);
+      let oldest = Infinity, newest = -Infinity;
+      for (const t of closed) {
+        if (t.exitTime < oldest) oldest = t.exitTime;
+        if (t.exitTime > newest) newest = t.exitTime;
+      }
+      const hours = (newest - oldest) / 3_600_000;
+      if (hours > 0) hourlyProfit = Math.max(0, total / hours);
+    } else if (dailyPnlVal !== 0) {
+      hourlyProfit = Math.abs(dailyPnlVal) / 24;
+    }
+    const bankroll = totalValue > 0 ? totalValue : 300;
+
+    // ── Run all 4 projection modes via the engine ──────────────────
+    const projDays = 90;
+    const result = calculateProjection({
+      startingBankroll: bankroll,
+      hourlyProfit,
+      days: projDays,
+      reinvestmentRate: 1,
+      scalingFactor: 0.5,
+      feeRate: 0.001,
+      slippageRate: 0.001,
+      failureRate: 0.02,
+      drawdownHaircut: 0.05,
+      maxHourlyProfit: hourlyProfit * 3,
+      liquidityCap: bankroll * 50,
+    });
+    const { derived } = result;
+
+    const lines: string[] = [];
+
+    // ── Summary header (mirrors web summary cards) ─────────────────
+    const hrPct = (derived.hourlyReturnRate * 100).toFixed(4);
+    const dailyPct = (derived.dailyCompoundedReturn * 100).toFixed(3);
+    const naive1y = result.series.naiveCompounded[result.series.naiveCompounded.length - 1]?.bankroll ?? bankroll;
+    const naiveMult = naive1y / bankroll;
+    lines.push(
+      ` {bold}Bankroll:{/bold} $${bankroll.toFixed(2)}  ` +
+      `{bold}Hourly:{/bold} $${hourlyProfit.toFixed(4)}/hr  ` +
+      `{bold}Hourly%:{/bold} ${hrPct}%  ` +
+      `{bold}Daily compound:{/bold} ${dailyPct}%`,
+    );
+    lines.push(
+      `   {bold}Flat 1d:{/bold} $${(bankroll + hourlyProfit * 24).toFixed(2)}  ` +
+      `{bold}Flat 7d:{/bold} $${(bankroll + hourlyProfit * 168).toFixed(2)}  ` +
+      `{bold}Flat 30d:{/bold} $${(bankroll + hourlyProfit * 720).toFixed(2)}  ` +
+      `{bold}Naive 1y:{/bold} {yellow-fg}$${naive1y >= 1e9 ? (naive1y / 1e9).toFixed(2) + 'B' : naive1y >= 1e6 ? (naive1y / 1e6).toFixed(2) + 'M' : naive1y.toFixed(2)}{/}` +
+      ` ({yellow-fg}${naiveMult >= 1000 ? naiveMult.toFixed(0) + 'K×' : naiveMult.toFixed(1) + '×'}{/})`,
+    );
+
+    // ── Risk warnings from engine ──────────────────────────────────
+    for (const w of result.warnings) {
+      const color = w.severity === 'critical' ? '{red-fg}' : '{yellow-fg}';
+      lines.push(` ${color}⚠ ${w.message}{/}`);
+    }
+    lines.push('');
+
+    // ── ASCII chart — all 4 series + actual ───────────────────────
+    const colWidth = Math.min(90, Math.max(50, (process.stdout.columns ?? 120) - 14));
+    const rowCount = Math.max(12, Math.min(22, (process.stdout.rows ?? 40) - 28));
+
+    const sortedClosed = [...closed].sort((a, b) => a.exitTime - b.exitTime);
+    const firstMs = sortedClosed.length > 0 ? sortedClosed[0].exitTime : Date.now() - projDays * 86_400_000;
+    const nowMs = Date.now();
+
+    // sample each series at colWidth+1 points
+    const linearSeries = result.series.linear;
+    const naiveSeries = result.series.naiveCompounded;
+    const conservSeries = result.series.conservative;
+    const riskSeries = result.series.riskAdjusted;
+
+    const getVal = (series: { day: number; bankroll: number }[], dayIdx: number) => {
+      const day = (projDays / colWidth) * dayIdx;
+      const pt = series[Math.min(Math.round((day / projDays) * (series.length - 1)), series.length - 1)];
+      return pt?.bankroll ?? bankroll;
+    };
+
+    type GrowthPt = { linear: number; naive: number; conserv: number; risk: number; actual: number | null };
+    const pts: GrowthPt[] = [];
+    for (let i = 0; i <= colWidth; i++) {
+      const d = (projDays / colWidth) * i;
+      const ms = firstMs + d * 86_400_000;
+      let actual: number | null = null;
+      if (ms <= nowMs && sortedClosed.length > 0) {
+        let cum = 0;
+        for (const t of sortedClosed) if (t.exitTime <= ms) cum += t.netPnl;
+        actual = bankroll + cum;
+      }
+      pts.push({
+        linear: getVal(linearSeries, i),
+        naive: getVal(naiveSeries, i),
+        conserv: getVal(conservSeries, i),
+        risk: getVal(riskSeries, i),
+        actual,
+      });
+    }
+
+    // y-range: cap naive at 3× conservative max to keep chart readable
+    const conservMax = Math.max(...pts.map((p) => p.conserv));
+    const capY = conservMax * 3;
+    let yMin = Infinity, yMax = -Infinity;
+    for (const p of pts) {
+      const vals = [p.linear, Math.min(p.naive, capY), p.conserv, p.risk];
+      if (p.actual !== null) vals.push(p.actual);
+      for (const v of vals) {
+        if (v < yMin) yMin = v;
+        if (v > yMax) yMax = v;
+      }
+    }
+    if (!isFinite(yMin)) { yMin = bankroll; yMax = bankroll * 2; }
+    const yRange = yMax - yMin || 1;
+    const toRow = (y: number) => Math.round(((yMax - Math.min(y, yMax)) / yRange) * (rowCount - 1));
+
+    // 5-char priority per cell: actual > naive > conserv > risk > linear
+    const yLabelW = 10;
+    const grid: string[][] = Array.from({ length: rowCount }, () => Array(colWidth + 1).fill(' '));
+    for (let i = 0; i <= colWidth; i++) {
+      const p = pts[i];
+      if (!p) continue;
+      const setIfEmpty = (r: number, ch: string) => { if (r >= 0 && r < rowCount && grid[r][i] === ' ') grid[r][i] = ch; };
+      setIfEmpty(toRow(p.linear), '─');
+      setIfEmpty(toRow(Math.min(p.naive, capY)), '▲');
+      setIfEmpty(toRow(p.conserv), '◆');
+      setIfEmpty(toRow(p.risk), '·');
+      if (p.actual !== null) grid[toRow(p.actual)][i] = '●'; // actual always wins
+    }
+
+    for (let r = 0; r < rowCount; r++) {
+      const y = yMin + ((rowCount - 1 - r) / (rowCount - 1)) * yRange;
+      const lbl = `$${y >= 1e6 ? (y / 1e6).toFixed(1) + 'M' : y >= 1e3 ? (y / 1e3).toFixed(1) + 'K' : y.toFixed(0)}`.padStart(yLabelW - 1) + '│';
+      let row = lbl;
+      for (let c = 0; c <= colWidth; c++) {
+        const ch = grid[r][c];
+        if (ch === '●') row += '{green-fg}●{/}';
+        else if (ch === '▲') row += '{yellow-fg}▲{/}';
+        else if (ch === '◆') row += '{cyan-fg}◆{/}';
+        else if (ch === '·') row += '{blue-fg}·{/}';
+        else row += ch;
+      }
+      lines.push(row);
+    }
+    lines.push(' '.repeat(yLabelW) + '─'.repeat(colWidth + 1));
+    const mid = Math.floor(colWidth / 2);
+    lines.push(
+      ' '.repeat(yLabelW) + 'Now' +
+      ' '.repeat(Math.max(0, mid - 5)) + `+${projDays / 2}d` +
+      ' '.repeat(Math.max(0, colWidth - mid - 5)) + `+${projDays}d`,
+    );
+    lines.push('');
+    lines.push(
+      ` {green-fg}●{/} Actual  ─ Linear  {yellow-fg}▲{/} Naive compound  {blue-fg}·{/} Risk-adjusted  {cyan-fg}◆{/} Conservative` +
+      (naive1y > capY ? `  {yellow-fg}(naive capped at ${(capY / 1e3).toFixed(0)}K for scale){/}` : ''),
+    );
+    lines.push('');
+
+    // ── Checkpoint table — all 4 modes ────────────────────────────
+    lines.push(' {bold}Projections{/bold}');
+    lines.push(' Period         Linear          Naive           Risk-adj        Conservative');
+    lines.push(' ' + '─'.repeat(78));
+    for (const cp of result.checkpoints) {
+      if (cp.day === 0) continue;
+      const label =
+        cp.day === 7 ? '1 week' : cp.day === 14 ? '2 weeks' : cp.day === 30 ? '1 month' :
+        cp.day === 60 ? '2 months' : cp.day === 90 ? '3 months' : cp.day === 180 ? '6 months' :
+        cp.day === 365 ? '1 year' : `${cp.day}d`;
+      const fmtV = (v: number) => {
+        const s = v >= 1e9 ? `$${(v / 1e9).toFixed(2)}B` : v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `$${(v / 1e3).toFixed(1)}K` : `$${v.toFixed(2)}`;
+        return s.padStart(14);
+      };
+      lines.push(
+        ` ${label.padEnd(15)} ${fmtV(cp.linearBankroll)}  {yellow-fg}${fmtV(cp.naiveCompoundedBankroll)}{/}  ${fmtV(cp.riskAdjustedBankroll)}  {cyan-fg}${fmtV(cp.conservativeBankroll)}{/}`,
+      );
+    }
+
+    // ── Trade history ──────────────────────────────────────────────
+    lines.push('');
+    lines.push(' ' + '═'.repeat(78));
+    const allClosedInner = [...closed].sort((a, b) => b.exitTime - a.exitTime);
+    const wins = allClosedInner.filter((t) => t.netPnl > 0);
+    const losses = allClosedInner.filter((t) => t.netPnl <= 0);
+    const totalNet = allClosedInner.reduce((s, t) => s + t.netPnl, 0);
+    const totalFees = allClosedInner.reduce((s, t) => s + t.fee, 0);
+    const totalGross = allClosedInner.reduce((s, t) => s + t.grossPnl, 0);
+    const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.netPnl, 0) / wins.length : 0;
+    const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + t.netPnl, 0) / losses.length : 0;
+    const bestTrade = allClosedInner.length > 0 ? allClosedInner.reduce((b, t) => t.netPnl > b.netPnl ? t : b) : null;
+    const worstTrade = allClosedInner.length > 0 ? allClosedInner.reduce((w, t) => t.netPnl < w.netPnl ? t : w) : null;
+    const winRate = allClosedInner.length > 0 ? (wins.length / allClosedInner.length) * 100 : 0;
+    const netColor = totalNet >= 0 ? '{green-fg}' : '{red-fg}';
+    const wrColor = winRate >= 50 ? '{green-fg}' : '{red-fg}';
+    lines.push(` {bold}Trade History{/bold}  (${allClosedInner.length} total)`);
+    lines.push('');
+    lines.push(
+      ` Wins: {green-fg}${wins.length}{/}  Losses: {red-fg}${losses.length}{/}  ` +
+      `Win rate: ${wrColor}${winRate.toFixed(0)}%{/}  ` +
+      `Net PnL: ${netColor}${totalNet >= 0 ? '+' : ''}$${totalNet.toFixed(2)}{/}  ` +
+      `Gross: ${totalGross >= 0 ? '{green-fg}' : '{red-fg}'}${totalGross >= 0 ? '+' : ''}$${totalGross.toFixed(2)}{/}  ` +
+      `Fees: {yellow-fg}-$${totalFees.toFixed(2)}{/}`,
+    );
+    if (wins.length > 0 || losses.length > 0) {
+      const bestStr = bestTrade ? `{green-fg}+$${bestTrade.netPnl.toFixed(2)}{/} ${bestTrade.pair}@${bestTrade.exchange}` : '—';
+      const worstStr = worstTrade ? `{red-fg}$${worstTrade.netPnl.toFixed(2)}{/} ${worstTrade.pair}@${worstTrade.exchange}` : '—';
+      lines.push(
+        ` Avg win: {green-fg}+$${avgWin.toFixed(2)}{/}  Avg loss: {red-fg}$${avgLoss.toFixed(2)}{/}  ` +
+        `Best: ${bestStr}  Worst: ${worstStr}`,
+      );
+    }
+    if (totalNet < -10) {
+      lines.push('');
+      lines.push(
+        ` {bold}{red-fg}⚠ Significant drawdown{/}{/bold}: net loss $${Math.abs(totalNet).toFixed(2)} across ${losses.length} losing trades.` +
+        (worstTrade ? ` Largest: $${worstTrade.netPnl.toFixed(2)} (${worstTrade.pair}).` : '') +
+        ` Fees consumed $${totalFees.toFixed(2)}.`,
+      );
+    }
+    lines.push('');
+    lines.push(' ' + '─'.repeat(78));
+    lines.push(' Time                Exchange   Pair         Volume       Entry          Exit          Gross        Fee       Net');
+    lines.push(' ' + '─'.repeat(78));
+    for (const t of allClosedInner) {
+      const d2 = new Date(t.exitTime);
+      const ts = `${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')} ${String(d2.getHours()).padStart(2, '0')}:${String(d2.getMinutes()).padStart(2, '0')}`;
+      const netColor2 = t.netPnl >= 0 ? '{green-fg}' : '{red-fg}';
+      const grossColor = t.grossPnl >= 0 ? '{green-fg}' : '{red-fg}';
+      const net = `${t.netPnl >= 0 ? '+' : ''}$${t.netPnl.toFixed(2)}`;
+      const gross = `${t.grossPnl >= 0 ? '+' : ''}$${t.grossPnl.toFixed(2)}`;
+      lines.push(
+        ` ${ts}  ${t.exchange.padEnd(10)} ${t.pair.padEnd(12)} ` +
+        `${t.volume.toFixed(6).padStart(12)}  ` +
+        `$${t.entryPrice.toFixed(2).padStart(12)}  $${t.exitPrice.toFixed(2).padStart(12)}  ` +
+        `${grossColor}${gross.padStart(12)}{/}  -$${t.fee.toFixed(2).padStart(7)}  ${netColor2}${net.padStart(9)}{/}`,
+      );
+    }
+
+    return lines;
+  })();
   if (logTab === 'activity') {
     footerLines = pagedActivity.pageLines;
     footerPage = pagedActivity.page;
@@ -1422,6 +1673,33 @@ function DashboardInner() {
     footerTabLabel = 'News';
   }
   const footerLabel = `${footerTabLabel}  page ${footerPage + 1}/${footerPages}  ([ ] or PgUp/PgDn, C-b/C-f)`;
+
+  if (page === 'growth') {
+    return (
+      <>
+        <box
+          top={0} left={0} width="100%" height={1}
+          tags={true}
+          style={{ bg: 'cyan', fg: 'black' }}
+          content={` {bold}Growth & Trade History{/bold}   Esc: back to dashboard   [/] PgUp/PgDn: scroll   ${allClosed.length} trades`}
+        />
+        <box
+          top={1} left={0} width="100%"
+          height={'100%-1' as any}
+          border={{ type: 'line' }}
+          tags={true}
+          scrollable={true}
+          mouse={true}
+          keys={true}
+          vi={true}
+          alwaysScroll={true}
+          scrollbar={{ ch: ' ', track: { bg: 'gray' }, style: { bg: 'cyan' } }}
+          style={{ border: { fg: 'cyan' }, bg: 'black', fg: 'white' }}
+          content={growthLines.join('\n')}
+        />
+      </>
+    );
+  }
 
   return (
     <>
@@ -1507,6 +1785,17 @@ function DashboardInner() {
         tags={true}
         style={{ bg: logTab === 'arb' ? 'yellow' : 'black', fg: logTab === 'arb' ? 'black' : 'white' }}
         content=" Arb " />
+      <box
+        top={1}
+        left={39}
+        width={12}
+        height={1}
+        mouse={true}
+        clickable={true}
+        onClick={() => setPage('growth')}
+        tags={true}
+        style={{ bg: 'black', fg: 'cyan' }}
+        content=" [g]rowth " />
 
       <box label=" Positions " top={2} left={0} width="100%" height={posH}
         border={{ type: 'line' }} tags={true} style={{ border: { fg: 'yellow' } }}
