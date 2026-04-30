@@ -55,6 +55,7 @@ import {
   COOLDOWN_MS,
   trailingStopPriceFor,
   trailPctFromEnv,
+  takeProfitPctFromEnv,
   buySlippageBpsFromEnv,
   entryMinScoreFromEnv,
   dailyLossLimitPctFromEnv,
@@ -197,6 +198,7 @@ interface Position {
   entryTime: number;
   highWaterMark: number; // highest price seen since entry
   strategyId?: string;
+  entryFee: number; // buy-side fee in USD — included in netPnl on close
 }
 const openPositions = new Map<string, Position>();
 interface PendingLiquidation {
@@ -382,6 +384,7 @@ function restorePosition(
     volume,
     entryTime,
     highWaterMark: entryPrice,
+    entryFee: 0, // unknown for externally-detected positions
   });
   pendingLiquidations.delete(`${exchange}:${pair}`);
   console.log(`[trade] RESTORED from exchange: ${exchange}:${pair} ${volume} @ $${entryPrice.toFixed(2)} (${reason})`);
@@ -1512,6 +1515,7 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
       entryTime: pos.entryTime,
       highWaterMark: Number.isFinite(pos.highWaterMark) ? pos.highWaterMark : pos.entryPrice,
       strategyId: pos.strategyId,
+      entryFee: Number.isFinite(pos.entryFee) ? pos.entryFee : 0,
     });
   }
   lastExitAt.clear();
@@ -1973,6 +1977,7 @@ async function actOnDex(args: {
       entryTime: Date.now(),
       highWaterMark: entryPrice,
       strategyId: meta.strategy ?? 'dex',
+      entryFee: 0, // DEX pool fees are baked into the fill price
     });
     const txPart = result.txId ? ` tx=${result.txId}` : '';
     console.log(`[trade] DEX BUY placed ${exchange}:${pair}${txPart} vol=${baseVolume.toFixed(8)} @ $${entryPrice.toFixed(6)}`);
@@ -2114,9 +2119,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
 
         if (exitReason) {
           attemptedExchangeActions.add(item.exchange);
-          const sellFee = item.snap.bid * pos.volume * KRAKEN_TAKER_FEE;
+          const sellFee = item.snap.bid * pos.volume * feeRateForExchange(item.exchange);
           const grossPnl = (item.snap.bid - pos.entryPrice) * pos.volume;
-          const netPnl = grossPnl - sellFee;
+          const netPnl = grossPnl - (pos.entryFee ?? 0) - sellFee;
           console.log(`[trade] EXIT ${item.pair}: ${exitReason} gross=$${grossPnl.toFixed(4)} net=$${netPnl.toFixed(4)}`);
           return publishExitSignal({
             strategyId,
@@ -2264,11 +2269,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       const minExecutableUsd = minExecutableUsdByMarket.get(`${tradeExchange}:${item.pair}`) ?? 0;
       if (minExecutableUsd > 0 && spendBudget < minExecutableUsd) return null;
 
-      // Check profitability: need to clear round-trip fees with take-profit
-      const roundTripFee = 2 * KRAKEN_TAKER_FEE; // 0.52%
-      const netTakeProfit = TAKE_PROFIT_PCT - roundTripFee;
-      if (netTakeProfit <= 0) {
-        console.log(`[trade] ${item.pair} take-profit ${(TAKE_PROFIT_PCT * 100).toFixed(1)}% won't cover fees ${(roundTripFee * 100).toFixed(2)}%`);
+      // Check profitability: take-profit must clear round-trip fees plus
+      // a minimum net margin (default 30bps). Tune via MIN_NET_PROFIT_PCT.
+      const roundTripFee = feeRateForExchange(tradeExchange) * 2;
+      const minNetProfitPct = Number.parseFloat(process.env.MIN_NET_PROFIT_PCT ?? '0.003');
+      const takeProfitPct = takeProfitPctFromEnv();
+      const netTakeProfit = takeProfitPct - roundTripFee;
+      if (netTakeProfit < minNetProfitPct) {
+        console.log(`[trade] ${item.pair} net take-profit ${(netTakeProfit * 100).toFixed(2)}% < min ${(minNetProfitPct * 100).toFixed(2)}% (fees=${(roundTripFee * 100).toFixed(2)}%)`);
         return null;
       }
 
@@ -2370,10 +2378,11 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
           }
           const feeRate = feeRateForExchange(exchange);
-          const fee = meta.snap.bid * sellVolume * feeRate;
+          const sellFee = meta.snap.bid * sellVolume * feeRate;
+          const fee = (pos.entryFee ?? 0) + sellFee; // both legs
           const grossPnl = (meta.snap.bid - pos.entryPrice) * sellVolume;
           const netPnl = grossPnl - fee;
-          recordDailyFee(fee);
+          recordDailyFee(sellFee); // entryFee already recorded on buy
           closedTrades.push({
             exchange,
             pair,
@@ -2542,6 +2551,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         // uses `Math.min(pos.volume, availableBase)` to sell only what
         // we actually hold.
         const posKey = `${exchange}:${pair}`;
+        const entryFeeUsd = aggressivePrice * volumeAtAggressive * feeRate;
         openPositions.set(posKey, {
           pair,
           exchange,
@@ -2550,8 +2560,9 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           entryTime: Date.now(),
           highWaterMark: aggressivePrice,
           strategyId: meta.strategy ?? 'composite',
+          entryFee: entryFeeUsd,
         });
-        recordDailyFee(aggressivePrice * volumeAtAggressive * feeRate);
+        recordDailyFee(entryFeeUsd);
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
         return { ok: true, message: `bought up to ${volumeAtAggressive.toFixed(8)} on ${exchange} @ ≤$${aggressivePrice.toFixed(6)}` };
       } catch (e) {
