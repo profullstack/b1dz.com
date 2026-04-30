@@ -76,6 +76,12 @@ export {
   type MultihopQuoteResult,
 } from './uniswap-v3-multihop.js';
 
+export {
+  fetchZeroExSwapTx,
+  fetchOneInchSwapTx,
+  type AggregatorSwapTx,
+} from './aggregator-api.js';
+
 // Re-export the thin slice of viem the daemon's executor factory needs.
 // Consumers should import these from `@b1dz/adapters-evm` rather than
 // adding a direct viem dependency, so the workspace stays on a single

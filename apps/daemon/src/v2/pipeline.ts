@@ -48,7 +48,7 @@ import {
 } from '@b1dz/trade-daemon';
 import type { VenueAdapter, Opportunity } from '@b1dz/venue-types';
 import { getActivePairs } from '@b1dz/source-crypto-arb';
-import { maybeBuildUniswapV3BaseExecutor, maybeBuildCexCexExecutor } from '../executors/factory.js';
+import { maybeBuildUniswapV3BaseExecutor, maybeBuildCexCexExecutor, maybeBuildAggregatorBaseExecutor } from '../executors/factory.js';
 
 interface DecisionLogEntry {
   queueId: string;
@@ -188,6 +188,13 @@ export async function initV2Pipeline(): Promise<PipelineState> {
     const cexCexExecutor = maybeBuildCexCexExecutor();
     if (cexCexExecutor && !executors.includes(cexCexExecutor)) {
       executors.push(cexCexExecutor);
+    }
+    const aggregatorExecutor = await maybeBuildAggregatorBaseExecutor().catch((e: unknown) => {
+      console.error(`[arb] aggregator executor init failed: ${(e as Error).message}`);
+      return null;
+    });
+    if (aggregatorExecutor && !executors.includes(aggregatorExecutor)) {
+      executors.push(aggregatorExecutor);
     }
 
     const adapters = buildAdapters();

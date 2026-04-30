@@ -27,6 +27,7 @@ import { WalletService } from '@b1dz/wallet-service';
 import { DirectEvmWalletProvider } from '@b1dz/wallet-direct';
 import { UniswapV3BaseExecutor } from './uniswap-v3-base.js';
 import { CexCexExecutor } from './cex-cex.js';
+import { AggregatorBaseExecutor } from './aggregator-base.js';
 
 function floatEnv(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -121,4 +122,52 @@ export function maybeBuildCexCexExecutor(): Executor | null {
   const slippageBps = floatEnv('ARB_CEX_CEX_SLIPPAGE_BPS', 200);
   console.log(`[arb] CexCexExecutor armed  maxTradeUsd=$${maxTradeUsd}  slippageBps=${slippageBps}`);
   return new CexCexExecutor({ maxTradeUsd, slippageBps });
+}
+
+/**
+ * DEX aggregator executor (0x allowance-holder + 1inch swap API).
+ * Auto-arms in live mode when EVM_PRIVATE_KEY + BASE_RPC_URL + at least one
+ * of ZEROX_API_KEY / ONEINCH_API_KEY are present. Opt out with
+ * ARB_EXECUTOR_AGGREGATOR=false.
+ */
+export async function maybeBuildAggregatorBaseExecutor(): Promise<Executor | null> {
+  if (envFlagDisabled('ARB_EXECUTOR_AGGREGATOR')) return null;
+  const mode = (process.env.ARB_MODE ?? process.env.V2_MODE ?? '').toLowerCase();
+  if (mode !== 'live') return null;
+
+  const privateKey = process.env.EVM_PRIVATE_KEY;
+  if (!privateKey) return null;
+  const rpcUrl = process.env.BASE_RPC_URL;
+  if (!rpcUrl) return null;
+
+  const zeroxApiKey = process.env.ZEROX_API_KEY || undefined;
+  const oneinchApiKey = process.env.ONEINCH_API_KEY || undefined;
+  if (!zeroxApiKey && !oneinchApiKey) return null;
+
+  const wallet = new DirectEvmWalletProvider({ privateKey: privateKey as `0x${string}` });
+  const address = wallet.getAddress ? await wallet.getAddress('base') : null;
+  if (!address) {
+    console.warn('[arb] AggregatorBaseExecutor: wallet returned no address for base — skipping');
+    return null;
+  }
+
+  const baseClient = createPublicClient({ chain: base, transport: http(rpcUrl) }) as unknown as PublicClient;
+  const gasOracle = new ViemGasOracle({ clients: { base: baseClient } });
+  const walletService = new WalletService({
+    clients: { base: baseClient },
+    walletProvider: wallet,
+    gasOracle,
+  });
+
+  const maxTradeUsd = floatEnv('ARB_MAX_TRADE_USD', floatEnv('V2_MAX_TRADE_USD', 5));
+  const venues = [zeroxApiKey && '0x', oneinchApiKey && '1inch'].filter(Boolean).join('+');
+  console.log(`[arb] AggregatorBaseExecutor armed  venues=${venues}  wallet=${address}  maxTradeUsd=$${maxTradeUsd}`);
+  return new AggregatorBaseExecutor({
+    walletService,
+    walletAddress: address as `0x${string}`,
+    publicClient: baseClient,
+    maxTradeUsd,
+    zeroxApiKey,
+    oneinchApiKey,
+  });
 }
