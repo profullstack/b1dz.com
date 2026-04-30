@@ -1,6 +1,15 @@
 import type { Metadata, Viewport } from 'next';
+import localFont from 'next/font/local';
 import './globals.css';
 import { ServiceWorkerRegister } from './sw-register';
+
+const datatype = localFont({
+  src: './fonts/Datatype.woff2',
+  variable: '--font-datatype',
+  display: 'swap',
+  weight: '100 900',
+  preload: true,
+});
 
 export const metadata: Metadata = {
   title: 'b1dz — AI Arbitrage Terminal',
@@ -43,7 +52,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={datatype.variable}>
       <body>
         <ServiceWorkerRegister />
         {children}
