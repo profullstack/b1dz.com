@@ -55,7 +55,9 @@ export function DashboardSummary() {
   });
 
   const arbLastMs = arb?.daemon?.lastTickAt ? new Date(arb.daemon.lastTickAt).getTime() : 0;
-  const daemonOnline = arbLastMs > 0 && Date.now() - arbLastMs < 10_000;
+  const tradeLastMs = trade?.daemon?.lastTickAt ? new Date(trade.daemon.lastTickAt).getTime() : 0;
+  const freshestMs = Math.max(arbLastMs, tradeLastMs);
+  const daemonOnline = freshestMs > 0 && Date.now() - freshestMs < 60_000;
   const profitableSpreads = (arb?.spreads ?? []).filter((s) => s.profitable).length;
 
   return (
