@@ -1734,9 +1734,9 @@ function DashboardInner() {
       );
     }
     lines.push('');
-    lines.push(' ' + '─'.repeat(78));
-    lines.push(' Time                Exchange   Pair         Volume       Entry          Exit          Gross        Fee       Net');
-    lines.push(' ' + '─'.repeat(78));
+    lines.push(' ' + '─'.repeat(92));
+    lines.push(' Time                Exchange   Pair         Volume       Entry          Exit          Gross        Fee       Net        Chart');
+    lines.push(' ' + '─'.repeat(92));
     for (const t of allClosedInner) {
       const d2 = new Date(t.exitTime);
       const ts = `${String(d2.getMonth() + 1).padStart(2, '0')}-${String(d2.getDate()).padStart(2, '0')} ${String(d2.getHours()).padStart(2, '0')}:${String(d2.getMinutes()).padStart(2, '0')}`;
@@ -1744,11 +1744,12 @@ function DashboardInner() {
       const grossColor = t.grossPnl >= 0 ? '{green-fg}' : '{red-fg}';
       const net = `${t.netPnl >= 0 ? '+' : ''}$${t.netPnl.toFixed(2)}`;
       const gross = `${t.grossPnl >= 0 ? '+' : ''}$${t.grossPnl.toFixed(2)}`;
+      const spark = unicodeSparkline(t.priceSamples, 12);
       lines.push(
         ` ${ts}  ${t.exchange.padEnd(10)} ${t.pair.padEnd(12)} ` +
         `${t.volume.toFixed(6).padStart(12)}  ` +
         `$${t.entryPrice.toFixed(2).padStart(12)}  $${t.exitPrice.toFixed(2).padStart(12)}  ` +
-        `${grossColor}${gross.padStart(12)}{/}  -$${t.fee.toFixed(2).padStart(7)}  ${netColor2}${net.padStart(9)}{/}`,
+        `${grossColor}${gross.padStart(12)}{/}  -$${t.fee.toFixed(2).padStart(7)}  ${netColor2}${net.padStart(9)}{/}  ${netColor2}${spark}{/}`,
       );
     }
 
