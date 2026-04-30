@@ -150,6 +150,7 @@ export function PluginsSection({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState<string | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
 
   // Shared secret state across all plugin panels
   const [decrypted, setDecrypted] = useState<Record<string, string> | null>(null);
@@ -215,6 +216,27 @@ export function PluginsSection({
 
   const toggleExpanded = (pluginId: string) =>
     setExpanded(e => ({ ...e, [pluginId]: !e[pluginId] }));
+
+  const togglePlugin = async (pluginId: string, currentlyDisabled: boolean) => {
+    setToggling(pluginId);
+    try {
+      const endpoint = currentlyDisabled ? '/api/store/enable' : '/api/store/disable';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pluginId }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        throw new Error(`${res.status}: ${t.slice(0, 100)}`);
+      }
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setToggling(null);
+    }
+  };
 
   // ── Per-plugin save ────────────────────────────────────────────────────────
 
@@ -372,8 +394,9 @@ export function PluginsSection({
               const name = entry?.manifest.name ?? row.plugin_id;
               const isFree = !row.paid_until;
               const expiresMs = row.paid_until ? new Date(row.paid_until).getTime() : null;
+              const isDisabled = row.status === 'disabled';
               const isActive = row.status === 'active' && (expiresMs == null || expiresMs > now);
-              const isExpired = expiresMs != null && expiresMs <= now;
+              const isExpired = !isDisabled && expiresMs != null && expiresMs <= now;
               const expiresLabel = expiresMs ? new Date(expiresMs).toLocaleDateString() : null;
               const installedLabel = new Date(row.installed_at).toLocaleDateString();
               const spec = PLUGIN_FIELDS[row.plugin_id];
@@ -417,13 +440,24 @@ export function PluginsSection({
                           {uninstalling === row.plugin_id ? 'removing…' : 'uninstall'}
                         </button>
                       )}
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${
-                        isActive
-                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                          : 'border-red-500/30 bg-red-500/10 text-red-300'
-                      }`}>
-                        {isActive ? 'active' : 'expired'}
-                      </span>
+                      <label className="flex items-center gap-1.5 cursor-pointer" title={isDisabled ? 'Enable plugin' : 'Disable plugin'}>
+                        <input
+                          type="checkbox"
+                          checked={!isDisabled}
+                          disabled={isExpired || toggling === row.plugin_id}
+                          onChange={() => void togglePlugin(row.plugin_id, isDisabled)}
+                          className="accent-orange-500 cursor-pointer disabled:opacity-40"
+                        />
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${
+                          isDisabled
+                            ? 'border-zinc-600/30 bg-zinc-800/50 text-zinc-500'
+                            : isActive
+                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                              : 'border-red-500/30 bg-red-500/10 text-red-300'
+                        }`}>
+                          {isDisabled ? 'disabled' : isActive ? 'active' : 'expired'}
+                        </span>
+                      </label>
                     </div>
                   </div>
 
