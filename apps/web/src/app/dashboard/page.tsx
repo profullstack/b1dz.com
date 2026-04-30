@@ -25,6 +25,7 @@ export default async function DashboardPage() {
         </div>
         <div className="flex items-center gap-4">
           <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200">Store</Link>
+          <Link href="/dashboard/projections" className="text-sm text-zinc-400 hover:text-zinc-200">Projections</Link>
           <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200">Console →</Link>
           <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-sm text-zinc-400">{user.email}</span>
@@ -38,7 +39,12 @@ export default async function DashboardPage() {
 
       <div className="max-w-6xl mx-auto px-6 py-8">
         <h1 className="text-2xl font-bold mb-2">Dashboard</h1>
-        <p className="text-zinc-400 mb-8">Realtime summary of daemon PnL, positions, and arb pipeline. Open the Console for the full operator view.</p>
+        <p className="text-zinc-400 mb-6">Realtime summary of daemon PnL, positions, and arb pipeline. Open the Console for the full operator view.</p>
+        <div className="flex gap-3 mb-8">
+          <Link href="/dashboard/projections" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-200 transition">
+            📈 Compounding Projections →
+          </Link>
+        </div>
 
         <div className="space-y-8">
           <DashboardSummary />
