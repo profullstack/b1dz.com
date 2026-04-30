@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PLUGIN_CATALOG } from '@b1dz/core/catalog';
 import {
   PlainTextRow,
@@ -163,6 +163,13 @@ export function PluginsSection({
   const [error, setError] = useState<string | null>(null);
   const [uninstalling, setUninstalling] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<{ pluginId: string; name: string } | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    if (confirmTarget) dialogRef.current?.showModal();
+    else dialogRef.current?.close();
+  }, [confirmTarget]);
 
   // Shared secret state across all plugin panels
   const [decrypted, setDecrypted] = useState<Record<string, string> | null>(null);
@@ -472,7 +479,7 @@ export function PluginsSection({
                       )}
                       {isFree && (
                         <button
-                          onClick={() => void uninstall(row.plugin_id)}
+                          onClick={() => setConfirmTarget({ pluginId: row.plugin_id, name })}
                           disabled={uninstalling === row.plugin_id}
                           className="text-xs text-zinc-600 hover:text-red-400 transition disabled:opacity-40"
                         >
@@ -520,6 +527,36 @@ export function PluginsSection({
           </div>
         )}
       </div>
+
+      {/* Uninstall confirmation dialog */}
+      <dialog
+        ref={dialogRef}
+        onClose={() => setConfirmTarget(null)}
+        className="rounded-xl border border-zinc-700 bg-zinc-900 p-6 text-zinc-100 shadow-2xl backdrop:bg-black/60 max-w-sm w-full"
+      >
+        <h3 className="text-base font-semibold mb-2">Uninstall {confirmTarget?.name}?</h3>
+        <p className="text-sm text-zinc-400 mb-5">
+          This will remove the plugin and <span className="text-red-400 font-medium">permanently delete all its saved settings</span>. You will need to re-enter any API keys or config if you reinstall.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setConfirmTarget(null)}
+            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:border-zinc-500 transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              const id = confirmTarget?.pluginId;
+              setConfirmTarget(null);
+              if (id) void uninstall(id);
+            }}
+            className="rounded-lg bg-red-600 hover:bg-red-500 px-4 py-2 text-sm font-medium text-white transition"
+          >
+            Uninstall
+          </button>
+        </div>
+      </dialog>
     </div>
   );
 }
