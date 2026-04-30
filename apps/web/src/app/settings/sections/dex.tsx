@@ -4,7 +4,6 @@ import { useState } from 'react';
 import {
   SecretRow,
   SectionShell,
-  fetchRevealed,
   readMasked,
   saveSettings,
   type SettingsResponse,
@@ -15,20 +14,12 @@ type SecretField = typeof SECRET_FIELDS[number];
 
 export function DexSection({ data, onSaved }: { data: SettingsResponse; onSaved: (next: SettingsResponse) => void }) {
   const [drafts, setDrafts] = useState<Partial<Record<SecretField, string>>>({});
-  const [revealed, setRevealed] = useState<Partial<Record<SecretField, string>>>({});
   const [pendingClear, setPendingClear] = useState<Partial<Record<SecretField, true>>>({});
 
   const setDraft = (k: SecretField) => (v: string) => setDrafts((d) => ({ ...d, [k]: v }));
   const clearField = (k: SecretField) => () => {
     setPendingClear((p) => ({ ...p, [k]: true }));
     setDrafts((d) => ({ ...d, [k]: '' }));
-    setRevealed((r) => ({ ...r, [k]: '' }));
-  };
-  const revealAll = async () => {
-    const all = await fetchRevealed();
-    const subset: Partial<Record<SecretField, string>> = {};
-    for (const f of SECRET_FIELDS) if (typeof all[f] === 'string') subset[f] = all[f];
-    setRevealed((r) => ({ ...r, ...subset }));
   };
 
   const onSave = async () => {
@@ -41,7 +32,6 @@ export function DexSection({ data, onSaved }: { data: SettingsResponse; onSaved:
     onSaved(next);
     setDrafts({});
     setPendingClear({});
-    setRevealed({});
   };
 
   const secretRow = (field: SecretField, label: string, hint?: string) => (
@@ -50,11 +40,9 @@ export function DexSection({ data, onSaved }: { data: SettingsResponse; onSaved:
       field={field}
       label={label}
       masked={readMasked(data, field)}
-      revealed={revealed[field]}
       draft={drafts[field] ?? ''}
       onDraft={setDraft(field)}
       onClear={clearField(field)}
-      onReveal={revealAll}
       hint={hint}
     />
   );

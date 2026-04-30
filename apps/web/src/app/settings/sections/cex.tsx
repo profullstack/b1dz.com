@@ -5,7 +5,6 @@ import {
   PlainTextRow,
   SecretRow,
   SectionShell,
-  fetchRevealed,
   readMasked,
   readPlainString,
   saveSettings,
@@ -29,20 +28,12 @@ export function CexSection({ data, onSaved }: { data: SettingsResponse; onSaved:
   const [coinbaseName, setCoinbaseName] = useState(readPlainString(data, 'COINBASE_API_KEY_NAME'));
   const [geminiAccount, setGeminiAccount] = useState(readPlainString(data, 'GEMINI_ACCOUNT'));
   const [drafts, setDrafts] = useState<Partial<Record<SecretField, string>>>({});
-  const [revealed, setRevealed] = useState<Partial<Record<SecretField, string>>>({});
   const [pendingClear, setPendingClear] = useState<Partial<Record<SecretField, true>>>({});
 
   const setDraft = (k: SecretField) => (v: string) => setDrafts((d) => ({ ...d, [k]: v }));
   const clearField = (k: SecretField) => () => {
     setPendingClear((p) => ({ ...p, [k]: true }));
     setDrafts((d) => ({ ...d, [k]: '' }));
-    setRevealed((r) => ({ ...r, [k]: '' }));
-  };
-  const revealAll = async () => {
-    const all = await fetchRevealed();
-    const subset: Partial<Record<SecretField, string>> = {};
-    for (const f of SECRET_FIELDS) if (typeof all[f] === 'string') subset[f] = all[f];
-    setRevealed((r) => ({ ...r, ...subset }));
   };
 
   const onSave = async () => {
@@ -61,7 +52,6 @@ export function CexSection({ data, onSaved }: { data: SettingsResponse; onSaved:
     onSaved(next);
     setDrafts({});
     setPendingClear({});
-    setRevealed({});
   };
 
   const secretRow = (field: SecretField, label: string, multiline = false, hint?: string) => (
@@ -70,11 +60,9 @@ export function CexSection({ data, onSaved }: { data: SettingsResponse; onSaved:
       field={field}
       label={label}
       masked={readMasked(data, field)}
-      revealed={revealed[field]}
       draft={drafts[field] ?? ''}
       onDraft={setDraft(field)}
       onClear={clearField(field)}
-      onReveal={revealAll}
       multiline={multiline}
       hint={hint}
     />

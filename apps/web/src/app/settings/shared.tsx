@@ -29,13 +29,6 @@ export async function saveSettings(body: SaveBody): Promise<SettingsResponse> {
   return (await res.json()) as SettingsResponse;
 }
 
-export async function fetchRevealed(): Promise<Record<string, string | undefined>> {
-  const res = await fetch('/api/settings?reveal=1', { cache: 'no-store' });
-  if (!res.ok) throw new Error(`reveal failed (${res.status})`);
-  const body = (await res.json()) as { secret?: Record<string, string | null | undefined> };
-  return (body.secret ?? {}) as Record<string, string | undefined>;
-}
-
 interface SectionShellProps {
   title: string;
   description?: string;
@@ -167,31 +160,25 @@ export function SecretRow({
   field,
   label,
   masked,
-  revealed,
   draft,
   onDraft,
   onClear,
-  onReveal,
   hint,
   multiline = false,
 }: {
   field: string;
   label: string;
   masked: MaskedSecret | undefined;
-  revealed: string | undefined;
   draft: string;
   onDraft: (v: string) => void;
   onClear: () => void;
-  onReveal: () => Promise<void>;
   hint?: string;
   multiline?: boolean;
 }) {
-  const [revealBusy, setRevealBusy] = useState(false);
   const isSet = !!masked?.set;
   const placeholder = isSet
     ? `••••••••• (set, ${masked?.length ?? '?'} chars) — type to overwrite`
     : 'unset';
-  const hasReveal = revealed !== undefined && revealed !== '';
 
   return (
     <div>
@@ -202,44 +189,30 @@ export function SecretRow({
         <textarea
           value={draft}
           onChange={(e) => onDraft(e.target.value)}
-          placeholder={hasReveal ? revealed : placeholder}
+          placeholder={placeholder}
           rows={4}
           className="mt-1 w-full resize-y rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-orange-500"
         />
       ) : (
         <input
-          type={hasReveal ? 'text' : 'password'}
+          type="password"
           value={draft}
           onChange={(e) => onDraft(e.target.value)}
-          placeholder={hasReveal ? revealed : placeholder}
+          placeholder={placeholder}
           className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-orange-500"
         />
       )}
       <div className="mt-1 flex items-center gap-3 text-[11px]">
         {hint && <span className="text-zinc-600">{hint}</span>}
-        <span className="ml-auto flex items-center gap-3">
-          {isSet && (
-            <button
-              type="button"
-              onClick={async () => {
-                setRevealBusy(true);
-                try { await onReveal(); } finally { setRevealBusy(false); }
-              }}
-              className="text-zinc-500 hover:text-zinc-300"
-            >
-              {revealBusy ? 'revealing…' : hasReveal ? 'hide' : 'reveal'}
-            </button>
-          )}
-          {isSet && (
-            <button
-              type="button"
-              onClick={onClear}
-              className="text-red-400 hover:text-red-300"
-            >
-              clear
-            </button>
-          )}
-        </span>
+        {isSet && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="ml-auto text-red-400 hover:text-red-300"
+          >
+            clear
+          </button>
+        )}
       </div>
     </div>
   );

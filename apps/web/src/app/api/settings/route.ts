@@ -1,7 +1,10 @@
 /**
- * GET    /api/settings           → masked plain + masked secret status
- * GET    /api/settings?reveal=1  → plaintext secrets (owner-only via RLS)
+ * GET    /api/settings           → plain + masked secret status (set/unset + length)
  * PUT    /api/settings           → merge { plain?, secret? }; null deletes a key
+ *
+ * Secrets are NEVER returned in plaintext over the wire. The web UI shows
+ * masked indicators only. The TUI and daemon decrypt locally using the
+ * shared SETTINGS_ENCRYPTION_KEY (env-supplied to those processes).
  */
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
@@ -59,7 +62,6 @@ export async function GET(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const reveal = new URL(req.url).searchParams.get('reveal') === '1';
   const cryptoOk = secretCryptoConfigured();
 
   let row: SettingsRow | null;
@@ -70,15 +72,15 @@ export async function GET(req: NextRequest) {
   }
 
   const plain = sanitizePlain(row?.payload_plain ?? {});
+  // Decrypt only to mask — plaintext never leaves this function.
   const secret: SecretPayload = cryptoOk ? decryptOrEmpty(row) : {};
 
-  const body: Record<string, unknown> = {
+  return Response.json({
     plain,
+    secret: maskSecrets(secret),
     lastUpdatedAt: row?.updated_at ?? null,
     cryptoConfigured: cryptoOk,
-  };
-  body.secret = reveal ? secret : maskSecrets(secret);
-  return Response.json(body);
+  });
 }
 
 export async function PUT(req: NextRequest) {
