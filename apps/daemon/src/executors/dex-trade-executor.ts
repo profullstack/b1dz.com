@@ -279,6 +279,11 @@ async function maybeBuildUniswapLeg(warnOnMissingEnv = false): Promise<VenueLeg 
 
 // ─── Jupiter on Solana ────────────────────────────────────────────
 
+/** Translate CEX-style "X-USD" to "X-USDC" for Jupiter (USD is not an SPL token). */
+function solanaPair(pair: string): string {
+  return pair.replace(/-USD$/, '-USDC');
+}
+
 function maybeBuildJupiterLeg(warnOnMissingEnv = false): VenueLeg | null {
   const secret = process.env.SOLANA_PRIVATE_KEY;
   const rpcUrl = process.env.SOLANA_RPC_URL;
@@ -388,7 +393,7 @@ function maybeBuildJupiterLeg(warnOnMissingEnv = false): VenueLeg | null {
     async buy(args) {
       const pubkey = await userPublicKey();
       const result = await adapter.swap({
-        pair: args.pair,
+        pair: solanaPair(args.pair),
         side: 'buy',
         amountIn: args.amountUsd.toString(),
         walletProvider: wallet,
@@ -411,7 +416,7 @@ function maybeBuildJupiterLeg(warnOnMissingEnv = false): VenueLeg | null {
     async sell(args) {
       const pubkey = await userPublicKey();
       const result = await adapter.swap({
-        pair: args.pair,
+        pair: solanaPair(args.pair),
         side: 'sell',
         amountIn: args.baseVolume.toString(),
         walletProvider: wallet,
