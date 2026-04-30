@@ -166,6 +166,6 @@ function buildCheckpoints(args: {
       naiveCompoundedBankroll: naiveCompounded[d]!.bankroll,
       conservativeBankroll: conservative[d]!.bankroll,
       riskAdjustedBankroll: riskAdjusted[d]!.bankroll,
-      hourlyProfitAtSize: naiveCompounded[d]!.bankroll * hourlyReturnRate,
+      conservativeHourlyProfit: conservative[d]!.bankroll * hourlyReturnRate,
     }));
 }

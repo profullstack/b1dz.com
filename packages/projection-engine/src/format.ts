@@ -27,9 +27,9 @@ export function exportToCsv(checkpoints: {
   naiveCompoundedBankroll: number;
   conservativeBankroll: number;
   riskAdjustedBankroll: number;
-  hourlyProfitAtSize: number;
+  conservativeHourlyProfit: number;
 }[]): string {
-  const header = 'Day,Linear,Naive Compounded,Conservative,Risk-Adjusted,Hourly Profit at Size';
+  const header = 'Day,Linear,Naive Compounded,Conservative,Risk-Adjusted,Conservative $/hr';
   const rows = checkpoints.map((c) =>
     [
       c.day,
@@ -37,7 +37,7 @@ export function exportToCsv(checkpoints: {
       c.naiveCompoundedBankroll.toFixed(2),
       c.conservativeBankroll.toFixed(2),
       c.riskAdjustedBankroll.toFixed(2),
-      c.hourlyProfitAtSize.toFixed(4),
+      c.conservativeHourlyProfit.toFixed(4),
     ].join(','),
   );
   return [header, ...rows].join('\n');

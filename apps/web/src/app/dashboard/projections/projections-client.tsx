@@ -374,7 +374,7 @@ export function ProjectionsClient() {
                 <th className="py-2 text-right text-amber-400">Naive Compound</th>
                 <th className="py-2 text-right text-blue-400">Conservative</th>
                 <th className="py-2 text-right text-green-400">Risk-Adjusted</th>
-                <th className="py-2 text-right text-zinc-500">Hourly profit at size</th>
+                <th className="py-2 text-right text-zinc-500">Conservative $/hr</th>
               </tr>
             </thead>
             <tbody>
@@ -385,7 +385,7 @@ export function ProjectionsClient() {
                   <td className="py-1.5 text-right text-amber-400">{fmtUsd(c.naiveCompoundedBankroll)}</td>
                   <td className="py-1.5 text-right text-blue-400">{fmtUsd(c.conservativeBankroll)}</td>
                   <td className="py-1.5 text-right text-green-400">{fmtUsd(c.riskAdjustedBankroll)}</td>
-                  <td className="py-1.5 text-right text-zinc-500">{fmtUsd(c.hourlyProfitAtSize, 4)}/hr</td>
+                  <td className="py-1.5 text-right text-zinc-500">{fmtUsd(c.conservativeHourlyProfit, 4)}/hr</td>
                 </tr>
               ))}
             </tbody>

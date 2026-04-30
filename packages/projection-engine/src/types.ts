@@ -47,7 +47,7 @@ export interface ProjectionCheckpoint {
   naiveCompoundedBankroll: number;
   conservativeBankroll: number;
   riskAdjustedBankroll: number;
-  hourlyProfitAtSize: number;
+  conservativeHourlyProfit: number;
 }
 
 export interface ProjectionSeries {
