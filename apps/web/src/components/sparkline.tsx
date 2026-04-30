@@ -1,3 +1,5 @@
+import { datatypeFont } from '@/lib/datatype-font';
+
 /**
  * Inline price sparkline rendered via the Datatype variable font.
  * Syntax: `{l:v1,v2,...}` where each v is 0–100. The font ligatures
@@ -29,8 +31,15 @@ export function Sparkline({
   const colorClass = isWin ? 'text-emerald-400' : 'text-red-400';
   return (
     <span
-      className={`datatype-chart ${colorClass} inline-block`}
-      style={{ minWidth: width, fontSize: '1.4em', lineHeight: 1 }}
+      className={`${datatypeFont.className} ${colorClass} inline-block`}
+      style={{
+        minWidth: width,
+        fontSize: '1.4em',
+        lineHeight: 1,
+        fontVariationSettings: "'wdth' 75, 'wght' 500",
+        fontFeatureSettings: "'calt' 1, 'liga' 1, 'dlig' 1",
+        WebkitFontFeatureSettings: "'calt' 1, 'liga' 1, 'dlig' 1",
+      }}
     >
       {`{l:${normalized.join(',')}}`}
     </span>
