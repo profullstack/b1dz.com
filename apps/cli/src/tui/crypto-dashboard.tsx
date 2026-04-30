@@ -213,18 +213,54 @@ function padRight(value: string, width: number): string {
   return value.length >= width ? value : `${value}${' '.repeat(width - value.length)}`;
 }
 
-const SPARK_BLOCKS = '▁▂▃▄▅▆▇█';
+/** Braille line sparkline. Each cell is a 2×4 dot grid (U+2800 + bits),
+ *  so 2 samples-per-cell horizontally with 4 vertical levels. Adjacent
+ *  samples are connected vertically so the result reads as a line, not
+ *  a column of bars. */
+const BRAILLE_DOT_BITS = [
+  [1, 8],    // y=0 (top):    x=0 → 1, x=1 → 8
+  [2, 16],   // y=1
+  [4, 32],   // y=2
+  [64, 128], // y=3 (bottom)
+];
 function unicodeSparkline(samples: number[] | undefined, width = 10): string {
-  if (!samples || samples.length < 2) return ''.padEnd(width, ' ');
+  if (!samples || samples.length < 2) return ' '.repeat(width);
+  const cols = width * 2;
   const min = Math.min(...samples);
   const max = Math.max(...samples);
   const range = max - min;
-  const out = range === 0
-    ? '▄'.repeat(samples.length)
-    : samples
-        .map((v) => SPARK_BLOCKS[Math.min(7, Math.round(((v - min) / range) * 7))])
-        .join('');
-  return out.length >= width ? out.slice(-width) : ' '.repeat(width - out.length) + out;
+  const ys: number[] = [];
+  for (let i = 0; i < cols; i++) {
+    const t = (i / (cols - 1)) * (samples.length - 1);
+    const lo = Math.floor(t);
+    const hi = Math.min(samples.length - 1, lo + 1);
+    const frac = t - lo;
+    const v = samples[lo] * (1 - frac) + samples[hi] * frac;
+    ys.push(range === 0 ? 1 : 3 - Math.round(((v - min) / range) * 3));
+  }
+  // Fill in vertical between adjacent samples so the line is continuous.
+  const grid: boolean[][] = Array.from({ length: cols }, () => [false, false, false, false]);
+  for (let x = 0; x < cols; x++) {
+    grid[x][ys[x]] = true;
+    if (x > 0) {
+      const lo = Math.min(ys[x - 1], ys[x]);
+      const hi = Math.max(ys[x - 1], ys[x]);
+      for (let y = lo; y <= hi; y++) grid[x - 1][y] = true;
+    }
+  }
+  let out = '';
+  for (let c = 0; c < width; c++) {
+    let bits = 0;
+    for (let xc = 0; xc < 2; xc++) {
+      const x = c * 2 + xc;
+      if (x >= cols) break;
+      for (let y = 0; y < 4; y++) {
+        if (grid[x][y]) bits |= BRAILLE_DOT_BITS[y][xc];
+      }
+    }
+    out += String.fromCodePoint(0x2800 + bits);
+  }
+  return out;
 }
 
 const CHART_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const;
