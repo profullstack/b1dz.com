@@ -112,7 +112,7 @@ export function SettingsClient() {
       {loading && !data && <p className="text-sm text-zinc-500">loading…</p>}
       {error && <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
 
-      {tab === 'plugins' && <PluginsSection />}
+      {tab === 'plugins' && <PluginsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
 
       {data && tab !== 'plugins' && (
         <div>
