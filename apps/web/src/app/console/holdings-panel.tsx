@@ -2,6 +2,7 @@
 
 import { formatUsdPrice, fmtAmount, parseBalances, buildPriceOf, KRAKEN_NAME_MAP, STABLECOINS } from './format';
 import type { ArbState } from '@/lib/source-state-types';
+import { pinPair } from '@/lib/chart-pinner';
 
 interface Props {
   arb: ArbState | null;
@@ -188,11 +189,17 @@ function Row(props: {
   lockedUsd?: number;
 }) {
   const { exchange, color, asset, free, freeUsd, isStable, unitPrice, locked, lockedUsd } = props;
+  const canPin = !isStable && asset.length > 0;
+  const onClick = canPin ? () => pinPair(`${asset}-USD`, exchange) : undefined;
   return (
-    <tr className="border-t border-zinc-800/60">
+    <tr
+      className={`border-t border-zinc-800/60 ${canPin ? 'cursor-pointer hover:bg-zinc-800/40' : ''}`}
+      onClick={onClick}
+      title={canPin ? 'Open in chart' : undefined}
+    >
       <td className={`px-3 py-1.5 ${color}`}>{exchange}</td>
       <td className="px-3 py-1.5 text-zinc-200">
-        {asset}
+        <span className={canPin ? 'underline decoration-dotted decoration-zinc-700' : ''}>{asset}</span>
         {!isStable && unitPrice > 0 && (
           <span className="ml-2 text-zinc-500">@ ${formatUsdPrice(unitPrice)}</span>
         )}

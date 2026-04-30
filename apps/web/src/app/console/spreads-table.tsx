@@ -1,6 +1,7 @@
 'use client';
 
 import type { ArbState } from '@/lib/source-state-types';
+import { pinPair } from '@/lib/chart-pinner';
 
 interface Props {
   arb: ArbState | null;
@@ -68,11 +69,26 @@ export function SpreadsTable({ arb }: Props) {
               const status = spreadStatus(s);
               const spread = s.spread ?? 0;
               return (
-                <tr key={`${s.pair}-${i}`} className="border-t border-zinc-800/60">
-                  <td className="px-3 py-1.5 text-zinc-200">{s.pair}</td>
+                <tr
+                  key={`${s.pair}-${i}`}
+                  className="border-t border-zinc-800/60 cursor-pointer hover:bg-zinc-800/40"
+                  onClick={() => pinPair(s.pair, s.buyExchange ?? null)}
+                  title="Open in chart"
+                >
+                  <td className="px-3 py-1.5 text-zinc-200 underline decoration-dotted decoration-zinc-700">{s.pair}</td>
                   <td className={`px-3 py-1.5 text-right ${s.profitable ? 'text-emerald-400' : 'text-zinc-300'}`}>{spread.toFixed(4)}%</td>
-                  <td className="px-3 py-1.5 text-zinc-400">{s.buyExchange ?? '-'}</td>
-                  <td className="px-3 py-1.5 text-zinc-400">{s.sellExchange ?? '-'}</td>
+                  <td
+                    className="px-3 py-1.5 text-zinc-400 hover:text-zinc-200"
+                    onClick={(e) => { e.stopPropagation(); if (s.buyExchange) pinPair(s.pair, s.buyExchange); }}
+                  >
+                    {s.buyExchange ?? '-'}
+                  </td>
+                  <td
+                    className="px-3 py-1.5 text-zinc-400 hover:text-zinc-200"
+                    onClick={(e) => { e.stopPropagation(); if (s.sellExchange) pinPair(s.pair, s.sellExchange); }}
+                  >
+                    {s.sellExchange ?? '-'}
+                  </td>
                   <td className={`px-3 py-1.5 ${status.className}`}>{status.text}</td>
                 </tr>
               );

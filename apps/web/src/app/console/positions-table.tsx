@@ -3,6 +3,7 @@
 import { formatUsdPrice } from './format';
 import type { TradeState } from '@/lib/source-state-types';
 import { Sparkline } from '@/components/sparkline';
+import { pinPair } from '@/lib/chart-pinner';
 
 interface Props {
   trade: TradeState | null;
@@ -55,9 +56,14 @@ export function PositionsTable({ trade }: Props) {
                 : p.exchange === 'gemini' ? 'text-blue-400'
                 : 'text-yellow-400';
               return (
-                <tr key={`${p.exchange}-${p.pair}-${i}`} className="border-t border-zinc-800/60">
+                <tr
+                  key={`${p.exchange}-${p.pair}-${i}`}
+                  className="border-t border-zinc-800/60 cursor-pointer hover:bg-zinc-800/40"
+                  onClick={() => pinPair(p.pair, p.exchange)}
+                  title="Open in chart"
+                >
                   <td className={`px-3 py-1.5 ${exClass}`}>{p.exchange}</td>
-                  <td className="px-3 py-1.5 text-zinc-200">{p.pair}</td>
+                  <td className="px-3 py-1.5 text-zinc-200 underline decoration-dotted decoration-zinc-700">{p.pair}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{volume.toFixed(6)}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">${value.toFixed(2)}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{entry > 0 ? `$${formatUsdPrice(entry)}` : '-'}</td>

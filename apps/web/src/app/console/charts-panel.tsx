@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ArbState } from '@/lib/source-state-types';
 import { PairChart } from './pair-chart';
+import { useChartPin } from '@/lib/chart-pinner';
 
 const CYCLE_MS = 30_000;
 
@@ -31,6 +32,26 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
   const [pausedB, setPausedB] = useState(false);
   const [timeframeA, setTimeframeA] = useState('1m');
   const [timeframeB, setTimeframeB] = useState('1m');
+
+  // Honor external pins from clickable cells elsewhere on the page.
+  // Each pin event flips which chart slot is updated and pauses auto-cycle
+  // for that slot (manual control wins).
+  const pin = useChartPin();
+  const lastSeqRef = useRef(0);
+  useEffect(() => {
+    if (pin.pinSeq === 0 || pin.pinSeq === lastSeqRef.current) return;
+    lastSeqRef.current = pin.pinSeq;
+    if (pin.pairA) {
+      setPairA(pin.pairA);
+      if (pin.exchangeA) setExchangeA(pin.exchangeA);
+      setPausedA(true);
+    }
+    if (pin.pairB) {
+      setPairB(pin.pairB);
+      if (pin.exchangeB) setExchangeB(pin.exchangeB);
+      setPausedB(true);
+    }
+  }, [pin]);
 
   const pickExchange = (pair: string, avoidExchange: string | null = null): string | null => {
     const supported = prices.find(
