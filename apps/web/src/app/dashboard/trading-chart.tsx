@@ -95,40 +95,38 @@ function normalizeSourceState(value: unknown): SourceState {
   return { prices, spreads, daemon };
 }
 
-function mid(row: PriceRow) {
-  return (row.bid + row.ask) / 2;
+interface RawBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
-function buildCandles(rows: PriceRow[], pair: string): CandlestickData<UTCTimestamp>[] {
-  const pairRows = rows.filter((row) => row.pair === pair);
-  const base = pairRows.length
-    ? pairRows.reduce((sum, row) => sum + mid(row), 0) / pairRows.length
-    : mid(rows[0] ?? FALLBACK_PRICES[0]);
-  const now = Math.floor(Date.now() / 1000);
-  const start = now - 95 * 300;
+const OHLC_EXCHANGES = new Set(['coinbase', 'kraken', 'binance-us', 'binanceus', 'gemini']);
 
-  return Array.from({ length: 96 }, (_, i) => {
-    const wave = Math.sin(i / 6) * base * 0.0025;
-    const drift = (i - 48) * base * 0.000015;
-    const open = base + wave + drift;
-    const close = base + Math.sin((i + 1) / 6) * base * 0.0025 + drift + Math.cos(i / 4) * base * 0.0007;
-    const high = Math.max(open, close) + base * (0.0008 + (i % 5) * 0.00008);
-    const low = Math.min(open, close) - base * (0.0008 + (i % 7) * 0.00006);
-    return {
-      time: (start + i * 300) as UTCTimestamp,
-      open,
-      high,
-      low,
-      close,
-    };
-  });
+function pickOhlcExchange(rows: PriceRow[], pair: string): string | null {
+  const supported = rows.find((row) => row.pair === pair && OHLC_EXCHANGES.has(row.exchange));
+  if (supported) return supported.exchange;
+  return rows.find((row) => row.pair === pair)?.exchange ?? null;
 }
 
-function buildVolume(candles: CandlestickData<UTCTimestamp>[]): HistogramData<UTCTimestamp>[] {
-  return candles.map((candle, i) => ({
-    time: candle.time,
-    value: 100 + Math.abs(candle.close - candle.open) * 0.05 + (i % 9) * 12,
-    color: candle.close >= candle.open ? 'rgba(34, 197, 94, 0.45)' : 'rgba(248, 113, 113, 0.45)',
+function toCandleData(bars: RawBar[]): CandlestickData<UTCTimestamp>[] {
+  return bars.map((b) => ({
+    time: Math.floor(b.time / 1000) as UTCTimestamp,
+    open: b.open,
+    high: b.high,
+    low: b.low,
+    close: b.close,
+  }));
+}
+
+function toVolumeData(bars: RawBar[]): HistogramData<UTCTimestamp>[] {
+  return bars.map((b) => ({
+    time: Math.floor(b.time / 1000) as UTCTimestamp,
+    value: b.volume,
+    color: b.close >= b.open ? 'rgba(34, 197, 94, 0.45)' : 'rgba(248, 113, 113, 0.45)',
   }));
 }
 
@@ -144,6 +142,8 @@ export function TradingChart() {
   const [sourceState, setSourceState] = useState<SourceState>({ prices: FALLBACK_PRICES });
   const [selectedPair, setSelectedPair] = useState('BTC-USD');
   const [isLive, setIsLive] = useState(false);
+  const [bars, setBars] = useState<RawBar[]>([]);
+  const [feedStatus, setFeedStatus] = useState<'idle' | 'live' | 'error'>('idle');
 
   useEffect(() => {
     let cancelled = false;
@@ -174,11 +174,41 @@ export function TradingChart() {
   const topSpread = sourceState.spreads?.find((row) => row.pair === selectedPair) ?? null;
   const bestBid = selectedPrices.length ? Math.max(...selectedPrices.map((row) => row.bid)) : null;
   const bestAsk = selectedPrices.length ? Math.min(...selectedPrices.map((row) => row.ask)) : null;
-  const candles = useMemo(() => buildCandles(prices, selectedPair), [prices, selectedPair]);
+  const ohlcExchange = useMemo(() => pickOhlcExchange(prices, selectedPair), [prices, selectedPair]);
 
   useEffect(() => {
     if (!pairs.includes(selectedPair) && pairs[0]) setSelectedPair(pairs[0]);
   }, [pairs, selectedPair]);
+
+  // Fetch real OHLC for the selected pair from a supported exchange.
+  useEffect(() => {
+    if (!ohlcExchange) {
+      setBars([]);
+      setFeedStatus('idle');
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const url = `/api/candles?pair=${encodeURIComponent(selectedPair)}&exchange=${encodeURIComponent(ohlcExchange)}&timeframe=5m&limit=120`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('http');
+        const body = (await res.json()) as { candles?: RawBar[] };
+        if (cancelled) return;
+        const next = Array.isArray(body.candles) ? body.candles : [];
+        setBars(next);
+        setFeedStatus(next.length ? 'live' : 'error');
+      } catch {
+        if (!cancelled) setFeedStatus('error');
+      }
+    };
+    void load();
+    const id = window.setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [selectedPair, ohlcExchange]);
 
   useEffect(() => {
     if (!chartEl.current) return;
@@ -228,10 +258,13 @@ export function TradingChart() {
   }, []);
 
   useEffect(() => {
-    candleSeriesRef.current?.setData(candles);
-    volumeSeriesRef.current?.setData(buildVolume(candles));
+    candleSeriesRef.current?.setData(toCandleData(bars));
+    volumeSeriesRef.current?.setData(toVolumeData(bars));
     chartRef.current?.timeScale().fitContent();
-  }, [candles]);
+  }, [bars]);
+
+  const liveLabel = feedStatus === 'live' ? `Live ${ohlcExchange ?? ''}`.trim() : isLive ? 'Daemon prices' : 'Demo data';
+  const liveDot = feedStatus === 'live' ? 'bg-emerald-400' : isLive ? 'bg-amber-400' : 'bg-zinc-500';
 
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 shadow-2xl shadow-black/20">
@@ -239,12 +272,12 @@ export function TradingChart() {
         <div>
           <h2 className="text-xl font-semibold text-zinc-100">Live market chart</h2>
           <p className="mt-1 text-sm text-zinc-400">
-            Candles render from daemon source-state when available, with a demo fallback when the trading daemon is offline.
+            5-minute candles fetched from {ohlcExchange ?? 'an exchange'} every 10 seconds; bid/ask come from the daemon&apos;s live tick stream.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <span className={`h-2.5 w-2.5 rounded-full ${isLive ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-          <span className="text-xs uppercase tracking-wider text-zinc-400">{isLive ? 'Live daemon' : 'Demo data'}</span>
+          <span className={`h-2.5 w-2.5 rounded-full ${liveDot}`} />
+          <span className="text-xs uppercase tracking-wider text-zinc-400">{liveLabel}</span>
           <select
             value={selectedPair}
             onChange={(event) => setSelectedPair(event.target.value)}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CandlestickSeries,
   ColorType,
@@ -17,41 +17,34 @@ import type { ArbState } from '@/lib/source-state-types';
 
 type PriceRow = NonNullable<ArbState['prices']>[number];
 
-function mid(row: PriceRow) {
-  return (row.bid + row.ask) / 2;
+interface RawBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
-function buildCandles(rows: PriceRow[], pair: string, exchange: string | null): CandlestickData<UTCTimestamp>[] {
-  const matching = rows.filter((row) => row.pair === pair && (exchange ? row.exchange === exchange : true));
-  const fallback = rows.filter((row) => row.pair === pair);
-  const sample = matching.length ? matching : fallback;
-  if (!sample.length) return [];
-  const base = sample.reduce((sum, row) => sum + mid(row), 0) / sample.length;
-  const now = Math.floor(Date.now() / 1000);
-  const start = now - 95 * 60;
+const REFRESH_MS = 10_000;
 
-  return Array.from({ length: 96 }, (_, i) => {
-    const wave = Math.sin(i / 6) * base * 0.0025;
-    const drift = (i - 48) * base * 0.000015;
-    const open = base + wave + drift;
-    const close = base + Math.sin((i + 1) / 6) * base * 0.0025 + drift + Math.cos(i / 4) * base * 0.0007;
-    const high = Math.max(open, close) + base * (0.0008 + (i % 5) * 0.00008);
-    const low = Math.min(open, close) - base * (0.0008 + (i % 7) * 0.00006);
-    return {
-      time: (start + i * 60) as UTCTimestamp,
-      open,
-      high,
-      low,
-      close,
-    };
-  });
+const SUPPORTED_EXCHANGES = new Set(['coinbase', 'kraken', 'binance-us', 'binanceus', 'gemini']);
+
+function toCandleData(bars: RawBar[]): CandlestickData<UTCTimestamp>[] {
+  return bars.map((b) => ({
+    time: Math.floor(b.time / 1000) as UTCTimestamp,
+    open: b.open,
+    high: b.high,
+    low: b.low,
+    close: b.close,
+  }));
 }
 
-function buildVolume(candles: CandlestickData<UTCTimestamp>[]): HistogramData<UTCTimestamp>[] {
-  return candles.map((candle, i) => ({
-    time: candle.time,
-    value: 100 + Math.abs(candle.close - candle.open) * 0.05 + (i % 9) * 12,
-    color: candle.close >= candle.open ? 'rgba(34, 197, 94, 0.45)' : 'rgba(248, 113, 113, 0.45)',
+function toVolumeData(bars: RawBar[]): HistogramData<UTCTimestamp>[] {
+  return bars.map((b) => ({
+    time: Math.floor(b.time / 1000) as UTCTimestamp,
+    value: b.volume,
+    color: b.close >= b.open ? 'rgba(34, 197, 94, 0.45)' : 'rgba(248, 113, 113, 0.45)',
   }));
 }
 
@@ -63,10 +56,14 @@ interface PairChartProps {
   pairs: string[];
   exchanges: string[];
   paused: boolean;
+  timeframe: string;
   onPair: (pair: string) => void;
   onExchange: (exchange: string) => void;
   onTogglePause: () => void;
+  onTimeframe: (tf: string) => void;
 }
+
+const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
 export function PairChart({
   label,
@@ -76,20 +73,25 @@ export function PairChart({
   pairs,
   exchanges,
   paused,
+  timeframe,
   onPair,
   onExchange,
   onTogglePause,
+  onTimeframe,
 }: PairChartProps) {
   const chartEl = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
 
-  const candles = useMemo(() => buildCandles(prices, pair, exchange), [prices, pair, exchange]);
+  const [bars, setBars] = useState<RawBar[]>([]);
+  const [feedStatus, setFeedStatus] = useState<'idle' | 'loading' | 'live' | 'error' | 'unsupported'>('idle');
+
   const matching = prices.filter((row) => row.pair === pair && (exchange ? row.exchange === exchange : true));
   const bestBid = matching.length ? Math.max(...matching.map((row) => row.bid)) : null;
   const bestAsk = matching.length ? Math.min(...matching.map((row) => row.ask)) : null;
 
+  // Set up the chart once.
   useEffect(() => {
     if (!chartEl.current) return;
     const chart = createChart(chartEl.current, {
@@ -133,11 +135,61 @@ export function PairChart({
     };
   }, []);
 
+  // Fetch real OHLC from /api/candles. Refreshes every REFRESH_MS so the latest bar updates.
   useEffect(() => {
-    candleSeriesRef.current?.setData(candles);
-    volumeSeriesRef.current?.setData(buildVolume(candles));
+    if (!pair || !exchange) {
+      setBars([]);
+      setFeedStatus('idle');
+      return;
+    }
+    if (!SUPPORTED_EXCHANGES.has(exchange)) {
+      setBars([]);
+      setFeedStatus('unsupported');
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setFeedStatus((s) => (s === 'live' ? 'live' : 'loading'));
+      try {
+        const url = `/api/candles?pair=${encodeURIComponent(pair)}&exchange=${encodeURIComponent(exchange)}&timeframe=${encodeURIComponent(timeframe)}&limit=120`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`http ${res.status}`);
+        const body = (await res.json()) as { candles?: RawBar[] };
+        if (cancelled) return;
+        const next = Array.isArray(body.candles) ? body.candles : [];
+        setBars(next);
+        setFeedStatus(next.length ? 'live' : 'error');
+      } catch {
+        if (!cancelled) setFeedStatus('error');
+      }
+    };
+    void load();
+    const id = window.setInterval(load, REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [pair, exchange, timeframe]);
+
+  // Push bars to chart.
+  useEffect(() => {
+    candleSeriesRef.current?.setData(toCandleData(bars));
+    volumeSeriesRef.current?.setData(toVolumeData(bars));
     chartRef.current?.timeScale().fitContent();
-  }, [candles]);
+  }, [bars]);
+
+  const statusDot =
+    feedStatus === 'live' ? 'bg-emerald-400'
+    : feedStatus === 'loading' ? 'bg-amber-400'
+    : feedStatus === 'unsupported' ? 'bg-zinc-500'
+    : feedStatus === 'error' ? 'bg-red-400'
+    : 'bg-zinc-600';
+  const statusLabel =
+    feedStatus === 'live' ? 'live'
+    : feedStatus === 'loading' ? 'loading'
+    : feedStatus === 'unsupported' ? `${exchange} no OHLC`
+    : feedStatus === 'error' ? 'feed err'
+    : 'idle';
 
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
@@ -146,8 +198,19 @@ export function PairChart({
           <span className="text-xs uppercase tracking-[0.2em] text-orange-400">{label}</span>
           <span className="text-sm font-semibold text-zinc-100">{pair}</span>
           <span className="text-xs text-zinc-500">@ {exchange ?? '—'}</span>
+          <span className="ml-1 inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
+            <span className={`h-2 w-2 rounded-full ${statusDot}`} />
+            {statusLabel}
+          </span>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            value={timeframe}
+            onChange={(e) => onTimeframe(e.target.value)}
+            className="rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-100"
+          >
+            {TIMEFRAMES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
           <select
             value={pair}
             onChange={(e) => onPair(e.target.value)}

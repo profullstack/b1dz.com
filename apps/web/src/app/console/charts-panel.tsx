@@ -6,6 +6,8 @@ import { PairChart } from './pair-chart';
 
 const CYCLE_MS = 30_000;
 
+const OHLC_EXCHANGES = new Set(['coinbase', 'kraken', 'binance-us', 'binanceus', 'gemini']);
+
 interface ChartsPanelProps {
   arb: ArbState | null;
 }
@@ -27,6 +29,19 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
   const [exchangeB, setExchangeB] = useState<string | null>(null);
   const [pausedA, setPausedA] = useState(false);
   const [pausedB, setPausedB] = useState(false);
+  const [timeframeA, setTimeframeA] = useState('1m');
+  const [timeframeB, setTimeframeB] = useState('1m');
+
+  const pickExchange = (pair: string, avoidExchange: string | null = null): string | null => {
+    const supported = prices.find(
+      (row) => row.pair === pair && OHLC_EXCHANGES.has(row.exchange) && row.exchange !== avoidExchange,
+    );
+    if (supported) return supported.exchange;
+    const anySupported = prices.find((row) => row.pair === pair && OHLC_EXCHANGES.has(row.exchange));
+    if (anySupported) return anySupported.exchange;
+    const any = prices.find((row) => row.pair === pair);
+    return any?.exchange ?? null;
+  };
 
   // Seed initial selection.
   useEffect(() => {
@@ -38,17 +53,20 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
     }
   }, [pairs, pairA, pairB]);
 
-  // Default exchange = first exchange that quotes the chosen pair.
+  // Default / repair exchange selection — prefer supported OHLC venues.
   useEffect(() => {
-    if (!pairA || exchangeA) return;
-    const found = prices.find((row) => row.pair === pairA);
-    if (found) setExchangeA(found.exchange);
+    if (!pairA) return;
+    const stillValid = exchangeA && prices.some((row) => row.pair === pairA && row.exchange === exchangeA);
+    if (stillValid) return;
+    const next = pickExchange(pairA);
+    if (next) setExchangeA(next);
   }, [pairA, exchangeA, prices]);
   useEffect(() => {
-    if (!pairB || exchangeB) return;
-    const found = prices.find((row) => row.pair === pairB && row.exchange !== exchangeA)
-      ?? prices.find((row) => row.pair === pairB);
-    if (found) setExchangeB(found.exchange);
+    if (!pairB) return;
+    const stillValid = exchangeB && prices.some((row) => row.pair === pairB && row.exchange === exchangeB);
+    if (stillValid) return;
+    const next = pickExchange(pairB, exchangeA);
+    if (next) setExchangeB(next);
   }, [pairB, exchangeB, exchangeA, prices]);
 
   // Auto-cycle every CYCLE_MS, skipping paused panes and avoiding duplicate pair on both panes.
@@ -81,22 +99,6 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
     return () => window.clearInterval(id);
   }, [pairs, pausedA, pausedB, pairA, pairB]);
 
-  // When pair changes via rotation or user, reset exchange to a sensible default for the new pair.
-  useEffect(() => {
-    if (!pairA) return;
-    const stillValid = exchangeA && prices.some((row) => row.pair === pairA && row.exchange === exchangeA);
-    if (stillValid) return;
-    const found = prices.find((row) => row.pair === pairA);
-    if (found) setExchangeA(found.exchange);
-  }, [pairA, exchangeA, prices]);
-  useEffect(() => {
-    if (!pairB) return;
-    const stillValid = exchangeB && prices.some((row) => row.pair === pairB && row.exchange === exchangeB);
-    if (stillValid) return;
-    const found = prices.find((row) => row.pair === pairB);
-    if (found) setExchangeB(found.exchange);
-  }, [pairB, exchangeB, prices]);
-
   if (!pairs.length || !pairA || !pairB) {
     return (
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 text-sm text-zinc-500">
@@ -115,9 +117,11 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
         pairs={pairs}
         exchanges={exchanges}
         paused={pausedA}
+        timeframe={timeframeA}
         onPair={(p) => { setPairA(p); setPausedA(true); }}
         onExchange={(x) => { setExchangeA(x); setPausedA(true); }}
         onTogglePause={() => setPausedA((v) => !v)}
+        onTimeframe={setTimeframeA}
       />
       <PairChart
         label="Chart B"
@@ -127,9 +131,11 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
         pairs={pairs}
         exchanges={exchanges}
         paused={pausedB}
+        timeframe={timeframeB}
         onPair={(p) => { setPairB(p); setPausedB(true); }}
         onExchange={(x) => { setExchangeB(x); setPausedB(true); }}
         onTogglePause={() => setPausedB((v) => !v)}
+        onTimeframe={setTimeframeB}
       />
     </div>
   );
