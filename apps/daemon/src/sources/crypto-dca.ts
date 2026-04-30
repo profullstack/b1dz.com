@@ -71,10 +71,6 @@ interface DcaPayload {
 }
 
 async function fetchEquityUsd(): Promise<number> {
-  // Sum USD-asset balances across all 4 CEXes; non-USD holdings are
-  // ignored for sizing (we don't want to DCA proportional to speculative
-  // positions we already hold).
-  let equity = 0;
   const tasks = [
     getKrakenBalance().then((b) => parseFloat(b.ZUSD ?? b.USD ?? '0')).catch(() => 0),
     getCoinbaseBalance().then((b) => parseFloat(b.USD ?? '0')).catch(() => 0),
@@ -82,8 +78,21 @@ async function fetchEquityUsd(): Promise<number> {
     getGeminiBalance().then((b) => parseFloat(b.USD ?? '0')).catch(() => 0),
   ];
   const results = await Promise.all(tasks);
+  let equity = 0;
   for (const v of results) if (Number.isFinite(v) && v > 0) equity += v;
   return equity;
+}
+
+// Per-exchange available USD — used to size buys against each exchange's
+// own balance rather than slicing total equity evenly.
+async function fetchPerExchangeUsd(): Promise<Record<string, number>> {
+  const [kraken, coinbase, binance, gemini] = await Promise.all([
+    getKrakenBalance().then((b) => parseFloat(b.ZUSD ?? b.USD ?? '0')).catch(() => 0),
+    getCoinbaseBalance().then((b) => parseFloat(b.USD ?? '0')).catch(() => 0),
+    getBinanceBalance().then((b) => parseFloat(b.USD ?? '0')).catch(() => 0),
+    getGeminiBalance().then((b) => parseFloat(b.USD ?? '0')).catch(() => 0),
+  ]);
+  return { kraken, coinbase, 'binance-us': binance, gemini };
 }
 
 async function executeDcaBuy(buy: DcaBuy): Promise<{ ok: true; orderId: string; filled: number } | { ok: false; message: string }> {
@@ -183,20 +192,35 @@ export const cryptoDcaWorker: SourceWorker = {
         return;
       }
 
-      const equityUsd = await fetchEquityUsd();
-      const currentHoldings = new Map<string, Set<string>>(); // empty — we don't gate on held coins for DCA (we want to top them up)
+      const [equityUsd, perExchangeUsd] = await Promise.all([fetchEquityUsd(), fetchPerExchangeUsd()]);
+      const currentHoldings = new Map<string, Set<string>>();
 
-      // isEligible: for v1, just pass config.coins through. The planner
-      // already filters to config.coins; we defer venue-listing checks to
-      // the actual order call which errors out if the symbol isn't traded.
-      const buys = decideDcaBuys({
-        config,
-        now: Date.now(),
-        equityUsd,
-        currentHoldings,
-        lastBuyAt,
-        isEligible: () => true,
-      });
+      // Size each exchange's buys against its own available USD (not a
+      // pro-rata slice of total equity). This way an exchange with $70
+      // gets $70 worth of buys; one with $0.01 skips below-minimum checks.
+      // DCA_TOTAL_ALLOCATION_PCT still acts as a cap — default 80% so we
+      // keep a small reserve and don't overdraft on fees.
+      const allocPct = Math.min(100, Math.max(0, config.totalAllocationPct > 10
+        ? config.totalAllocationPct  // user overrode via env — respect it
+        : 80));                       // default: use 80% of each exchange's USD
+      const now = Date.now();
+      const buys: ReturnType<typeof decideDcaBuys> = [];
+      for (const exchange of config.exchanges) {
+        const available = perExchangeUsd[exchange] ?? 0;
+        if (!(available > 0)) continue;
+        // Feed the planner one exchange at a time with that exchange's own USD.
+        const perBuyUsd = available * (allocPct / 100) / config.maxCoins;
+        if (!(perBuyUsd > 0)) continue;
+        const exchangeBuys = decideDcaBuys({
+          config: { ...config, exchanges: [exchange], totalAllocationPct: 100 },
+          now,
+          equityUsd: available * config.maxCoins, // planner divides by maxCoins internally
+          currentHoldings,
+          lastBuyAt,
+          isEligible: () => true,
+        }).map((b) => ({ ...b, usdAmount: perBuyUsd }));
+        buys.push(...exchangeBuys);
+      }
 
       if (buys.length === 0) {
         await ctx.savePayload({
@@ -211,7 +235,8 @@ export const cryptoDcaWorker: SourceWorker = {
         return;
       }
 
-      logActivity(`[dca] planning ${buys.length} buy(s) — equity $${equityUsd.toFixed(2)}, per-buy ~$${buys[0]?.usdAmount.toFixed(2) ?? 0}`, 'crypto-dca');
+      const totalBuyUsd = buys.reduce((s, b) => s + b.usdAmount, 0);
+      logActivity(`[dca] planning ${buys.length} buy(s) — equity $${equityUsd.toFixed(2)}, total $${totalBuyUsd.toFixed(2)}, per-buy ~$${buys[0]?.usdAmount.toFixed(2) ?? 0}`, 'crypto-dca');
 
       for (const buy of buys) {
         const res = await executeDcaBuy(buy);

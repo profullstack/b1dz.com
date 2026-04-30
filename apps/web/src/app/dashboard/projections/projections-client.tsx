@@ -94,11 +94,11 @@ export function ProjectionsClient() {
   const [hourlyProfit, setHourlyProfit] = useState(0.5);
   const [days, setDays] = useState(365);
   const [reinvestmentRate, setReinvestmentRate] = useState(1);
-  const [scalingFactor, setScalingFactor] = useState(1);
-  const [feeRate, setFeeRate] = useState(0);
-  const [slippageRate, setSlippageRate] = useState(0);
-  const [failureRate, setFailureRate] = useState(0);
-  const [drawdownHaircut, setDrawdownHaircut] = useState(0);
+  const [scalingFactor, setScalingFactor] = useState(0.5);
+  const [feeRate, setFeeRate] = useState(0.001);
+  const [slippageRate, setSlippageRate] = useState(0.001);
+  const [failureRate, setFailureRate] = useState(0.02);
+  const [drawdownHaircut, setDrawdownHaircut] = useState(0.05);
   const [maxHourlyProfitEnabled, setMaxHourlyProfitEnabled] = useState(false);
   const [maxHourlyProfitVal, setMaxHourlyProfitVal] = useState(10);
   const [liquidityCapEnabled, setLiquidityCapEnabled] = useState(false);
