@@ -13,6 +13,12 @@ export function DashboardSummary() {
   const realizedPnl = ts?.dailyPnl ?? 0;
   const realizedPnlPct = ts?.dailyPnlPct ?? 0;
   const closedTrades = trade?.tradeState?.closedTrades ?? [];
+  const cumPnl = typeof ts?.cumulativePnl === 'number' && Number.isFinite(ts.cumulativePnl)
+    ? ts.cumulativePnl
+    : closedTrades.reduce((s, t) => s + (Number.isFinite(t.netPnl) ? t.netPnl : 0), 0);
+  const cumFees = typeof ts?.cumulativeFees === 'number' && Number.isFinite(ts.cumulativeFees)
+    ? ts.cumulativeFees
+    : closedTrades.reduce((s, t) => s + (Number.isFinite(t.fee) ? t.fee : 0), 0);
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayMs = todayStart.getTime();
@@ -91,6 +97,14 @@ export function DashboardSummary() {
       </Card>
       <Card label="Profitable spreads">
         <span className="text-zinc-100">{profitableSpreads}</span>
+      </Card>
+      <Card label="Lifetime PnL">
+        <span className={cumPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+          {cumPnl >= 0 ? '+' : ''}${cumPnl.toFixed(2)}
+        </span>
+      </Card>
+      <Card label="Lifetime fees">
+        <span className="text-zinc-100">${cumFees.toFixed(2)}</span>
       </Card>
       <Card label="Daemon">
         <span className={`flex items-center gap-2 ${daemonOnline ? (daemonStale ? 'text-amber-400' : 'text-emerald-400') : 'text-red-400'}`}>

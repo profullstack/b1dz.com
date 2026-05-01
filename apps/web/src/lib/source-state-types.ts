@@ -72,6 +72,8 @@ export interface TradeStatusData {
   dailyPnl?: number;
   dailyPnlPct?: number;
   dailyFees?: number;
+  cumulativePnl?: number;
+  cumulativeFees?: number;
   dailyLossLimitHit?: boolean;
   dailyLossLimitPct?: number;
   cooldowns?: { pair: string; remainingSec: number }[];

@@ -106,6 +106,8 @@ interface TradeStatusData {
   dailyPnl: number;
   dailyPnlPct: number;
   dailyFees?: number;
+  cumulativePnl?: number;
+  cumulativeFees?: number;
   dailyLossLimitHit: boolean;
   dailyLossLimitPct: number;
   cooldowns: { pair: string; remainingSec: number }[];
@@ -1717,6 +1719,20 @@ function DashboardInner() {
       `Gross: ${totalGross >= 0 ? '{green-fg}' : '{red-fg}'}${totalGross >= 0 ? '+' : ''}$${totalGross.toFixed(2)}{/}  ` +
       `Fees: {yellow-fg}-$${totalFees.toFixed(2)}{/}`,
     );
+    // Lifetime totals survive the closedTrades 100-trade ring buffer and
+    // the daily reset, so they're often more accurate than re-summing
+    // closedTrades. Show them when available.
+    const cumPnlVal = ts?.cumulativePnl;
+    const cumFeesVal = ts?.cumulativeFees;
+    if (typeof cumPnlVal === 'number' && Number.isFinite(cumPnlVal)) {
+      const cumColor = cumPnlVal >= 0 ? '{green-fg}' : '{red-fg}';
+      const feesPart = typeof cumFeesVal === 'number' && Number.isFinite(cumFeesVal)
+        ? `  Lifetime fees: {yellow-fg}-$${cumFeesVal.toFixed(2)}{/}`
+        : '';
+      lines.push(
+        ` Lifetime PnL: ${cumColor}${cumPnlVal >= 0 ? '+' : ''}$${cumPnlVal.toFixed(2)}{/}${feesPart}`,
+      );
+    }
     if (wins.length > 0 || losses.length > 0) {
       const bestStr = bestTrade ? `{green-fg}+$${bestTrade.netPnl.toFixed(2)}{/} ${bestTrade.pair}@${bestTrade.exchange}` : '—';
       const worstStr = worstTrade ? `{red-fg}$${worstTrade.netPnl.toFixed(2)}{/} ${worstTrade.pair}@${worstTrade.exchange}` : '—';
