@@ -2039,15 +2039,28 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       await refreshPerExchangeVolumesIfStale();
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
-      for (const { feed, exchange } of TRADE_FEEDS) {
-        for (const pair of PAIRS) {
-          const posKeyForVenueCheck = `${exchange}:${pair}`;
-          const hasOpenPosition = openPositions.has(posKeyForVenueCheck);
-          // Skip thin venues for new entries, but keep polling if we're already in.
-          // We need the price feed to manage an existing position's exit.
-          if (!hasOpenPosition && isVenueThin(exchange, pair)) continue;
-          const snap = await feed.snapshot(pair);
-          if (!snap) continue;
+      // Parallel snapshot fanout per pair (6 feeds in flight at once instead of
+      // 6 × 52 sequential awaits — cut a ~60s tick down to ~10s, fixed daemon
+      // showing as stale in the UI). Per-pair concurrency keeps any single
+      // exchange's request rate at ~1 per round, well under rate limits.
+      for (const pair of PAIRS) {
+        const fanout = await Promise.all(
+          TRADE_FEEDS.map(async ({ feed, exchange }) => {
+            const posKey = `${exchange}:${pair}`;
+            const hasOpenPosition = openPositions.has(posKey);
+            if (!hasOpenPosition && isVenueThin(exchange, pair)) return null;
+            try {
+              const snap = await feed.snapshot(pair);
+              return snap ? { exchange, snap } : null;
+            } catch {
+              return null;
+            }
+          }),
+        );
+
+        for (const result of fanout) {
+          if (!result) continue;
+          const { exchange, snap } = result;
           if (!isFinite(snap.bid) || !isFinite(snap.ask) || snap.bid <= 0 || snap.ask <= 0) continue;
           ensureAnalysisBootstrap(exchange, pair);
           updateAnalysisState(exchange, pair, snap);
@@ -2061,7 +2074,6 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           item.analysis = getAnalysisForItem(item, cooldownActive);
           items.push(item);
 
-          // Update high water mark and price samples for open positions
           const posKey = `${exchange}:${pair}`;
           const pos = openPositions.get(posKey);
           if (pos) {
@@ -2070,9 +2082,6 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
             if (pos.priceSamples.length > 20) pos.priceSamples.shift();
           }
 
-          // Keep raw logs useful: positions every tick, warmup checkpoints,
-          // and occasional readiness markers. Strategy-specific [multi]/[scalp]
-          // logs carry the actual assessment feed.
           if (pos) {
             const pnlPct = ((snap.bid - pos.entryPrice) / pos.entryPrice) * 100;
             const stopPct = ((trailingStopPrice(pos) - pos.entryPrice) / pos.entryPrice) * 100;
