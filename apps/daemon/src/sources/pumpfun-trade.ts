@@ -357,15 +357,15 @@ async function runTick(ctx: UserContext): Promise<void> {
             continue;
           }
           if (tokenBalance > 0n) {
-            const sellQty = BigInt(Math.floor(Number(tokenBalance) * partialExitPct));
-            logActivity(`[pumpfun] PARTIAL ${position.symbol} +${(gainFraction * 100).toFixed(1)}% — selling ${(partialExitPct * 100).toFixed(0)}% of bag`, 'pumpfun-trade');
+            const partialPctStr = `${Math.max(1, Math.min(99, Math.round(partialExitPct * 100)))}%`;
+            logActivity(`[pumpfun] PARTIAL ${position.symbol} +${(gainFraction * 100).toFixed(1)}% — selling ${partialPctStr} of bag`, 'pumpfun-trade');
             try {
               const result = await executePumpFunTrade(
                 {
                   publicKey: walletAddress,
                   action: 'sell',
                   mint: position.mint,
-                  amountTokens: Number(sellQty),
+                  amountTokens: partialPctStr,
                 },
                 walletProvider,
                 rpcUrl,
@@ -374,7 +374,7 @@ async function runTick(ctx: UserContext): Promise<void> {
                 logActivity(`[pumpfun] partial ✓ ${position.symbol} sig=${result.signature.slice(0, 16)}…`, 'pumpfun-trade');
                 remainingPositions.push({
                   ...updatedPosition,
-                  tokenBalance: Number(tokenBalance - sellQty),
+                  tokenBalance: Math.floor(Number(tokenBalance) * (1 - partialExitPct)),
                   partialExitDone: true,
                 });
                 continue;
@@ -390,26 +390,10 @@ async function runTick(ctx: UserContext): Promise<void> {
         continue;
       }
 
-      // Determine sell quantity.
-      let tokenBalance: bigint;
-      if (position.tokenBalance && position.tokenBalance > 0) {
-        tokenBalance = BigInt(Math.floor(position.tokenBalance));
-      } else {
-        try {
-          tokenBalance = await getSolanaTokenBalance(walletAddress, position.mint, rpcUrl);
-        } catch (e) {
-          logRaw(`[pumpfun] balance fetch failed for ${position.symbol}: ${(e as Error).message}`, 'pumpfun-trade');
-          remainingPositions.push(updatedPosition);
-          continue;
-        }
-      }
-
-      if (tokenBalance === 0n) {
-        // Already sold or never confirmed — remove from list.
-        logActivity(`[pumpfun] ${position.symbol} has zero balance — removing position (${exitReason})`, 'pumpfun-trade');
-        continue;
-      }
-
+      // Full-exit sell: use pumpportal's "100%" syntax. This avoids the
+      // raw-vs-human-readable token amount footgun (we don't track decimals)
+      // and dodges the SPL-token RPC rate limit that was blocking exits
+      // from CLEMENTINE et al. on previous ticks.
       logActivity(`[pumpfun] EXIT ${position.symbol} reason=${exitReason} cap=$${currentMarketCapUsd.toFixed(0)} entry=$${position.entryMarketCapUsd.toFixed(0)}`, 'pumpfun-trade');
 
       try {
@@ -418,7 +402,7 @@ async function runTick(ctx: UserContext): Promise<void> {
             publicKey: walletAddress,
             action: 'sell',
             mint: position.mint,
-            amountTokens: Number(tokenBalance),
+            amountTokens: '100%',
           },
           walletProvider,
           rpcUrl,

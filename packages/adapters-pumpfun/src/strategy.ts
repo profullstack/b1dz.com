@@ -112,6 +112,22 @@ export interface ExitConfig {
 
 // ─── Default values ───────────────────────────────────────────────
 
+/** Merge `overrides` over `defaults`, but only for keys whose override
+ *  value is not undefined. The naive `{ ...defaults, ...overrides }`
+ *  spread overrides defaults with explicit `undefined` when the caller
+ *  builds `overrides` from optional env vars — that silently zeroed out
+ *  every threshold and made checkExit return null for every position. */
+function mergeDefined<T extends Record<string, unknown>>(defaults: T, overrides?: Partial<T>): T {
+  if (!overrides) return defaults;
+  const out = { ...defaults };
+  for (const k of Object.keys(overrides) as (keyof T)[]) {
+    const v = overrides[k];
+    if (v !== undefined) out[k] = v as T[keyof T];
+  }
+  return out;
+}
+
+
 const DEFAULT_ENTRY: Required<EntryConfig> = {
   // Slightly higher floor avoids the rugged-at-launch dust where price
   // discovery hasn't started; ceiling stays where late-stage bonding
@@ -167,7 +183,7 @@ export function shouldEnter(
   config?: EntryConfig,
   nowMs?: number,
 ): boolean {
-  const cfg = { ...DEFAULT_ENTRY, ...config };
+  const cfg = mergeDefined(DEFAULT_ENTRY, config);
   const now = nowMs ?? Date.now();
 
   // Max concurrent positions.
@@ -223,7 +239,7 @@ export function checkExit(
   config?: ExitConfig,
   nowMs?: number,
 ): ExitReason | null {
-  const cfg = { ...DEFAULT_EXIT, ...config };
+  const cfg = mergeDefined(DEFAULT_EXIT, config);
   const now = nowMs ?? Date.now();
 
   // Graduation: market cap above graduation threshold — exit before migration.

@@ -33,8 +33,12 @@ export interface PumpFunTradeParams {
   mint: string;
   /** SOL amount for buys (denominatedInSol=true). */
   amountSol?: number;
-  /** Raw token units for sells (denominatedInSol=false). */
-  amountTokens?: number;
+  /** Token amount for sells (denominatedInSol=false). pumpportal accepts
+   *  either a human-readable token count (e.g. 1000 = 1000 tokens) OR a
+   *  percentage string (e.g. "100%", "50%"). NEVER pass raw lamport-style
+   *  units (with decimals applied) — the API does not expect those and
+   *  will reject with 400 Bad Request. */
+  amountTokens?: number | string;
   /** Slippage tolerance in percent. Default: 10. */
   slippagePct?: number;
   /** Priority fee in SOL. Default: 0.0001. */
@@ -82,7 +86,7 @@ export async function executePumpFunTrade(
     pool,
     ...(action === 'buy'
       ? { denominatedInSol: 'true', amount: amountSol ?? 0.01 }
-      : { denominatedInSol: 'false', amount: amountTokens ?? 0 }),
+      : { denominatedInSol: 'false', amount: amountTokens ?? '100%' }),
   };
 
   // Fetch the raw serialized transaction bytes.
