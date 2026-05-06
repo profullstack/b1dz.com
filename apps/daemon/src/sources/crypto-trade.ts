@@ -2,6 +2,7 @@ import type { SourceWorker, UserContext } from '../types.js';
 import {
   cryptoTradeSource,
   getTradeStatus,
+  getLastPollPhaseTimings,
   restoreAnalysisCache,
   serializeAnalysisCache,
   serializeTradeState,
@@ -150,22 +151,58 @@ export const cryptoTradeWorker: SourceWorker = {
           .finally(() => { dexExecutorAttemptInFlight = false; });
       }
 
+      // Per-phase tick latency tracking. The TUI's 30s "stale" threshold
+      // is unforgiving — when ops sees `stale 52s` we want to know which
+      // phase ran long without grepping every log line. Threshold-gated
+      // so quiet ticks don't spam.
+      const tickStart = Date.now();
       const items = await cryptoTradeSource.poll(sourceCtx);
+      const pollMs = Date.now() - tickStart;
+      const evalStart = Date.now();
       const signals: unknown[] = (ctx.payload?.signals as unknown[]) ?? [];
 
+      let signalCount = 0;
+      let executedCount = 0;
       for (const item of items) {
         const opp = cryptoTradeSource.evaluate(item, sourceCtx);
         if (!opp) continue;
         signals.push(opp);
+        signalCount += 1;
         logActivity(`⚡ SIGNAL: ${opp.title} confidence=${opp.confidence.toFixed(2)}`, 'crypto-trade');
         if (cryptoTradeSource.act) {
           const result = await cryptoTradeSource.act(opp, sourceCtx);
           if (result.ok) {
+            executedCount += 1;
             logActivity(`✓ EXECUTED: ${result.message}`, 'crypto-trade');
           } else {
             logActivity(`✗ SKIPPED: ${result.message}`, 'crypto-trade');
           }
         }
+      }
+      const evalMs = Date.now() - evalStart;
+      const tickTotalMs = Date.now() - tickStart;
+
+      // One line per slow tick → searchable as `[trade] tick latency`.
+      // Threshold = pollIntervalMs × 4 (= 20s for the default 5s tick)
+      // so we only print when something's notably off, not on the happy
+      // path. Includes the per-phase breakdown from
+      // getLastPollPhaseTimings() so ops can pinpoint the culprit
+      // without grepping (cold-start hydration, balance refresh,
+      // per-pair scan, market-mins refresh) instead of guessing.
+      const slowTickThresholdMs = cryptoTradeWorker.pollIntervalMs * 4;
+      if (tickTotalMs >= slowTickThresholdMs || tickTotalMs >= 30_000) {
+        const phases = getLastPollPhaseTimings();
+        const phaseStr = phases
+          ? ` hydrate=${phases.hydrateMs}ms balances=${phases.balancesMs}ms `
+            + `discover=${phases.discoverMs}ms scan=${phases.scanMs}ms `
+            + `marketMins=${phases.marketMinsMs}ms pairs=${phases.pairs}`
+          : '';
+        logRaw(
+          `[trade] tick latency total=${tickTotalMs}ms poll=${pollMs}ms `
+          + `evaluate+act=${evalMs}ms items=${items.length} `
+          + `signals=${signalCount} executed=${executedCount}${phaseStr}`,
+          'crypto-trade',
+        );
       }
 
       while (signals.length > 100) signals.shift();

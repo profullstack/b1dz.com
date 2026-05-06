@@ -101,8 +101,8 @@ interface ArbPipelineState {
 }
 
 interface TradeStatusData {
-  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples?: number[] }[];
-  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples?: number[] } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples?: number[]; restoredFromHydration?: boolean }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples?: number[]; restoredFromHydration?: boolean } | null;
   dailyPnl: number;
   dailyPnlPct: number;
   dailyFees?: number;
@@ -119,6 +119,9 @@ interface TradeStatusData {
   lastSignal: string | null;
   dexExecutionEnabled?: boolean;
   dexExecutorArmed?: boolean;
+  /** Wallet USDC balance per DEX venue. Surfaced in the Holdings panel
+   *  so operators can see at a glance whether the DEX legs have funds. */
+  dexBalances?: { venue: string; usdc: number }[];
 }
 
 interface TradeState {
@@ -1295,7 +1298,14 @@ function DashboardInner() {
 
   // Balances — simple per-exchange summary
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
-  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings) + sumValue(geminiHoldings);
+  // DEX wallet USDC balances surfaced by the trade daemon (uniswap-v3
+  // on Base, jupiter on Solana). Shown alongside CEX holdings so the
+  // operator can see at a glance whether the DEX legs have funds —
+  // previously the only signal was greppping `[trade] DEX-BUY SKIPPED`
+  // log lines.
+  const dexBalances = ts?.dexBalances ?? [];
+  const dexUsdcTotal = dexBalances.reduce((sum, d) => sum + (Number.isFinite(d.usdc) ? d.usdc : 0), 0);
+  const totalValue = sumValue(krakenHoldings) + sumValue(binanceHoldings) + sumValue(coinbaseHoldings) + sumValue(geminiHoldings) + dexUsdcTotal;
 
   function fmtHoldings(holdings: { asset: string; amount: number; isStable: boolean; unitPrice: number; usdValue: number }[]): string {
     if (holdings.length === 0) return '{white-fg}no data{/}';
@@ -1307,14 +1317,31 @@ function DashboardInner() {
     }).join(' + ');
   }
 
+  function fmtDexBalance(d: { venue: string; usdc: number }): string {
+    if (!(d.usdc > 0)) {
+      return ts?.dexExecutorArmed
+        ? '{white-fg}no USDC in wallet{/}'
+        : '{white-fg}executor not armed{/}';
+    }
+    return `${d.usdc.toFixed(2)} USDC ($${d.usdc.toFixed(2)})`;
+  }
+
   const balLines: string[] = [];
-  balLines.push(` {cyan-fg}Kraken{/}    ${fmtHoldings(krakenHoldings)}`);
-  balLines.push(` {yellow-fg}Binance{/}   ${fmtHoldings(binanceHoldings)}`);
-  balLines.push(` {magenta-fg}Coinbase{/}  ${fmtHoldings(coinbaseHoldings)}`);
-  balLines.push(` {blue-fg}Gemini{/}    ${fmtHoldings(geminiHoldings)}`);
+  balLines.push(` {cyan-fg}Kraken{/}     ${fmtHoldings(krakenHoldings)}`);
+  balLines.push(` {yellow-fg}Binance{/}    ${fmtHoldings(binanceHoldings)}`);
+  balLines.push(` {magenta-fg}Coinbase{/}   ${fmtHoldings(coinbaseHoldings)}`);
+  balLines.push(` {blue-fg}Gemini{/}     ${fmtHoldings(geminiHoldings)}`);
+  // DEX rows — only shown when the executor has been armed at least
+  // once. Suppresses noise on CEX-only deployments.
+  if (ts?.dexExecutorArmed || dexBalances.some((d) => d.usdc > 0)) {
+    const uni = dexBalances.find((d) => d.venue === 'uniswap-v3');
+    const jup = dexBalances.find((d) => d.venue === 'jupiter');
+    if (uni) balLines.push(` {green-fg}Uniswap{/}    ${fmtDexBalance(uni)}`);
+    if (jup) balLines.push(` {green-fg}Jupiter{/}    ${fmtDexBalance(jup)}`);
+  }
   // Total
   balLines.push(' ─────────────────────────');
-  balLines.push(` {bold}Total:    $${totalValue.toFixed(2)}{/bold}`);
+  balLines.push(` {bold}Total:     $${totalValue.toFixed(2)}{/bold}`);
 
   // Activity log — merge arb + trade logs, deduplicate, filter blanks
   const arbLog = ((arbState as unknown as Record<string, unknown>)?.activityLog ?? []) as { at: string; text: string }[];
