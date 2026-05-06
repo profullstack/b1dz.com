@@ -253,6 +253,12 @@ async function runTick(ctx: UserContext): Promise<void> {
   const volumeCollapsePct = num('PUMPFUN_VOLUME_COLLAPSE_PCT') ?? 20;
   const partialExitPct = num('PUMPFUN_PARTIAL_EXIT_PCT') ?? 0.5;
   const partialExitTriggerPct = num('PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT') ?? 0.5;
+  // Sell slippage tolerance (percent). Higher than buy slippage because
+  // priority on exit is to actually get out — for low-liquidity bag-hold
+  // tokens, the bonding curve's price impact when selling the entire
+  // bag dwarfs normal slippage. Default 50% accepts effectively any
+  // fill; pump.fun 6022 = TooLittleSolReceived (slippage exceeded).
+  const sellSlippagePct = num('PUMPFUN_SELL_SLIPPAGE_PCT') ?? 50;
   // Distribution gate: minimum unique holders required to enter. Cheap
   // filter that rejects tokens nobody has actually bought (genesis-only
   // bags, single-buyer rugs). Default 10.
@@ -366,6 +372,7 @@ async function runTick(ctx: UserContext): Promise<void> {
                   action: 'sell',
                   mint: position.mint,
                   amountTokens: partialPctStr,
+                  slippagePct: sellSlippagePct,
                 },
                 walletProvider,
                 rpcUrl,
@@ -403,6 +410,7 @@ async function runTick(ctx: UserContext): Promise<void> {
             action: 'sell',
             mint: position.mint,
             amountTokens: '100%',
+            slippagePct: sellSlippagePct,
           },
           walletProvider,
           rpcUrl,
