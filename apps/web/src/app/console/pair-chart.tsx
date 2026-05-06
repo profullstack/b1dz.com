@@ -17,6 +17,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import type { ArbState } from '@/lib/source-state-types';
+import { useTickerStream } from '@/lib/use-source-state';
 
 type PriceRow = NonNullable<ArbState['prices']>[number];
 
@@ -28,8 +29,6 @@ interface RawBar {
   close: number;
   volume: number;
 }
-
-const REFRESH_MS = 10_000;
 
 const SUPPORTED_EXCHANGES = new Set(['coinbase', 'kraken', 'binance-us', 'binanceus', 'gemini']);
 
@@ -95,14 +94,19 @@ export function PairChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
-  const markersPluginRef = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
+  // ISeriesMarkersPluginApi uses the generic Time type internally; the cast
+  // to UTCTimestamp is safe because we only supply UTCTimestamp values.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<any> | null>(null);
 
   const [bars, setBars] = useState<RawBar[]>([]);
   const [feedStatus, setFeedStatus] = useState<'idle' | 'loading' | 'live' | 'error' | 'unsupported'>('idle');
 
+  // SSE ticker — sub-second bid/ask updates from the daemon price cache.
+  const tick = useTickerStream(pair, exchange);
   const matching = prices.filter((row) => row.pair === pair && (exchange ? row.exchange === exchange : true));
-  const bestBid = matching.length ? Math.max(...matching.map((row) => row.bid)) : null;
-  const bestAsk = matching.length ? Math.min(...matching.map((row) => row.ask)) : null;
+  const bestBid = tick?.bid ?? (matching.length ? Math.max(...matching.map((row) => row.bid)) : null);
+  const bestAsk = tick?.ask ?? (matching.length ? Math.min(...matching.map((row) => row.ask)) : null);
 
   // Set up the chart once.
   useEffect(() => {
@@ -150,7 +154,8 @@ export function PairChart({
     };
   }, []);
 
-  // Fetch real OHLC from /api/candles. Refreshes every REFRESH_MS so the latest bar updates.
+  // Fetch historical OHLC once on mount (or when pair/exchange/timeframe changes).
+  // Current candle is updated from SSE ticks below — no polling needed.
   useEffect(() => {
     if (!pair || !exchange) {
       setBars([]);
@@ -164,7 +169,7 @@ export function PairChart({
     }
     let cancelled = false;
     const load = async () => {
-      setFeedStatus((s) => (s === 'live' ? 'live' : 'loading'));
+      setFeedStatus('loading');
       try {
         const url = `/api/candles?pair=${encodeURIComponent(pair)}&exchange=${encodeURIComponent(exchange)}&timeframe=${encodeURIComponent(timeframe)}&limit=120`;
         const res = await fetch(url, { cache: 'no-store' });
@@ -179,12 +184,30 @@ export function PairChart({
       }
     };
     void load();
-    const id = window.setInterval(load, REFRESH_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
+    return () => { cancelled = true; };
   }, [pair, exchange, timeframe]);
+
+  // Update the current (rightmost) candle's close from SSE ticks — gives
+  // realtime price movement without re-fetching the full bar history.
+  useEffect(() => {
+    if (!tick || !candleSeriesRef.current || bars.length === 0) return;
+    const mid = (tick.bid + tick.ask) / 2;
+    const lastBar = bars[bars.length - 1];
+    if (!lastBar) return;
+    const updatedBar: CandlestickData<UTCTimestamp> = {
+      time: Math.floor(lastBar.time / 1000) as UTCTimestamp,
+      open: lastBar.open,
+      high: Math.max(lastBar.high, mid),
+      low: Math.min(lastBar.low, mid),
+      close: mid,
+    };
+    try {
+      candleSeriesRef.current.update(updatedBar);
+      setFeedStatus('live');
+    } catch {
+      // Chart removed during pair/exchange transition — safe to ignore.
+    }
+  }, [tick, bars]);
 
   // Push bars to chart.
   useEffect(() => {

@@ -12,6 +12,14 @@
 
 export interface Tokens { accessToken: string; refreshToken: string; }
 
+/** A single event yielded by B1dzClient.stream(). */
+export type StreamEvent =
+  | { kind: 'state:arb'; data: unknown }
+  | { kind: 'state:trade'; data: unknown }
+  | { kind: 'state:pipeline'; data: unknown }
+  | { kind: 'state:settings'; data: unknown }
+  | { kind: 'ticker'; data: unknown };
+
 export interface B1dzClientOptions {
   baseUrl: string;
   tokens: Tokens;
@@ -191,6 +199,86 @@ export class B1dzClient {
       throw new Error(`${method} ${path} → ${res.status}: ${text.slice(0, 200)}`);
     }
     return res.json() as Promise<T>;
+  }
+
+  /**
+   * Open an SSE stream to /api/stream. Returns an async generator that
+   * yields typed events. Runs until the caller breaks or the server closes.
+   *
+   * Usage (TUI):
+   *   for await (const ev of client.stream()) {
+   *     if (ev.kind === 'state:arb') setArbState(ev.data as ArbState);
+   *     if (ev.kind === 'ticker')    updateChart(ev.data);
+   *   }
+   */
+  async *stream(opts?: { ticker?: string }): AsyncGenerator<StreamEvent> {
+    if (this.accessTokenExpiresSoon()) await this.refresh();
+
+    const url = new URL(`${this.baseUrl}/api/stream`);
+    url.searchParams.set('token', this.tokens.accessToken);
+    if (opts?.ticker) url.searchParams.set('ticker', opts.ticker);
+
+    const controller = new AbortController();
+    let res: Response;
+    try {
+      res = await fetch(url.toString(), {
+        headers: { accept: 'text/event-stream' },
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        if (res.status === 401) {
+          await this.refresh();
+          throw new Error('stream: 401 — retry');
+        }
+        throw new Error(`stream: ${res.status}`);
+      }
+    } catch (e) {
+      controller.abort();
+      throw e;
+    }
+
+    const decoder = new TextDecoder();
+    const reader = res.body.getReader();
+    let buf = '';
+    let currentEvent = '';
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            const rawData = line.slice(6);
+            if (rawData && currentEvent && currentEvent !== 'ping') {
+              try {
+                const data = JSON.parse(rawData) as unknown;
+                if (
+                  currentEvent === 'state:arb'
+                  || currentEvent === 'state:trade'
+                  || currentEvent === 'state:pipeline'
+                  || currentEvent === 'state:settings'
+                  || currentEvent === 'ticker'
+                ) {
+                  yield { kind: currentEvent as StreamEvent['kind'], data };
+                }
+              } catch { /* malformed JSON — skip */ }
+              currentEvent = '';
+            }
+          } else if (line === '') {
+            currentEvent = '';
+          }
+        }
+      }
+    } finally {
+      controller.abort();
+      reader.releaseLock();
+    }
   }
 
   // ----- generic storage (mostly used by state-sync) -----
