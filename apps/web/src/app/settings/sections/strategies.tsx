@@ -64,6 +64,8 @@ export function StrategiesSection({
   const [pfVolumeCollapse, setPfVolumeCollapse] = useState(readPlainNumber(data, 'PUMPFUN_VOLUME_COLLAPSE_PCT'));
   const [pfPartialPct, setPfPartialPct] = useState(readPlainNumber(data, 'PUMPFUN_PARTIAL_EXIT_PCT'));
   const [pfPartialTrigger, setPfPartialTrigger] = useState(readPlainNumber(data, 'PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT'));
+  const [pfMinHolders, setPfMinHolders] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_HOLDERS'));
+  const [pfMaxTopHolderRatio, setPfMaxTopHolderRatio] = useState(readPlainNumber(data, 'PUMPFUN_MAX_TOP_HOLDER_RATIO'));
 
   const saveArb = async () => {
     const plain: Record<string, string | number | boolean | null> = {
@@ -123,6 +125,8 @@ export function StrategiesSection({
       PUMPFUN_VOLUME_COLLAPSE_PCT: pfVolumeCollapse !== '' ? Number(pfVolumeCollapse) : null,
       PUMPFUN_PARTIAL_EXIT_PCT: pfPartialPct !== '' ? Number(pfPartialPct) : null,
       PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT: pfPartialTrigger !== '' ? Number(pfPartialTrigger) : null,
+      PUMPFUN_ENTRY_MIN_HOLDERS: pfMinHolders !== '' ? Number(pfMinHolders) : null,
+      PUMPFUN_MAX_TOP_HOLDER_RATIO: pfMaxTopHolderRatio !== '' ? Number(pfMaxTopHolderRatio) : null,
     };
     const next = await saveSettings({ plain }, { cryptoKey });
     onSaved(next);
@@ -178,6 +182,8 @@ export function StrategiesSection({
         <NumberRow field="PUMPFUN_ENTRY_MIN_CURVE_PCT" label="Min bonding-curve %" value={pfMinCurvePct} onChange={setPfMinCurvePct} hint="Default 10. Skip the bot-dominated dust band (0–10%)." />
         <NumberRow field="PUMPFUN_ENTRY_MAX_CURVE_PCT" label="Max bonding-curve %" value={pfMaxCurvePct} onChange={setPfMaxCurvePct} hint="Default 80. Skip near-graduation crowding." />
         <NumberRow field="PUMPFUN_ENTRY_MIN_5M_PCT" label="Min 5-min momentum %" value={pfMin5mPct} onChange={setPfMin5mPct} hint="Default 0. Token must be flat-or-up over the last 5 min. Set negative to allow dips." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_HOLDERS" label="Min unique holders" value={pfMinHolders} onChange={setPfMinHolders} hint="Default 10. Filters dead-on-arrival tokens with no real distribution." />
+        <NumberRow field="PUMPFUN_MAX_TOP_HOLDER_RATIO" label="Max top/2nd holder ratio" value={pfMaxTopHolderRatio} onChange={setPfMaxTopHolderRatio} hint="Default 50. Skip tokens where the top wallet owns ≥50× more than the second holder (whale concentration)." />
         <NumberRow field="PUMPFUN_TAKE_PROFIT_PCT" label="Take profit (fraction)" value={pfTakeProfit} onChange={setPfTakeProfit} hint="0.5 = +50%. Default 0.5." />
         <NumberRow field="PUMPFUN_STOP_LOSS_PCT" label="Stop loss (fraction)" value={pfStopLoss} onChange={setPfStopLoss} hint="0.3 = −30%. Default 0.3." />
         <NumberRow field="PUMPFUN_VOLUME_COLLAPSE_PCT" label="Drawdown-from-peak exit %" value={pfVolumeCollapse} onChange={setPfVolumeCollapse} hint="Default 20. Trailing-stop: exit when mcap is this % below its post-entry peak." />

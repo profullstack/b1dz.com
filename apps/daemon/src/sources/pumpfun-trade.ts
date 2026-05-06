@@ -124,6 +124,44 @@ async function fetchCoinStatus(mint: string): Promise<PumpCoinStatus | null> {
   }
 }
 
+/** Holder distribution snapshot. Pump.fun's /coins/holders/{mint}
+ *  endpoint returns the top-N holders sorted by token amount. We use
+ *  it to gate entries on "real distribution exists." Tokens with
+ *  totalHolders < ~10 are typically dead-on-arrival. */
+interface PumpHolderSnapshot {
+  /** Total number of unique holders (the trustworthy signal — many tokens
+   *  return an empty `holders` array even when totalHolders > 0 because
+   *  pump.fun aggregates in batches). */
+  totalHolders: number;
+  /** Top holder's token amount, used for concentration ratio. May be
+   *  the bonding-curve PDA itself in early-stage tokens. */
+  topAmount: number;
+  /** Second holder's token amount, useful for "top is bonding curve, what
+   *  about real human holders" comparisons. */
+  secondAmount: number;
+}
+
+async function fetchHolderSnapshot(mint: string): Promise<PumpHolderSnapshot | null> {
+  try {
+    const res = await fetch(`${PUMP_API_BASE}/coins/holders/${mint}?limit=5`, {
+      headers: { accept: 'application/json' },
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      holders?: { address: string; amount: number }[];
+      totalHolders?: number;
+    };
+    const holders = Array.isArray(body.holders) ? body.holders : [];
+    return {
+      totalHolders: Number(body.totalHolders ?? holders.length),
+      topAmount: holders[0]?.amount ?? 0,
+      secondAmount: holders[1]?.amount ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Worker ───────────────────────────────────────────────────────
 
 export const pumpfunTradeWorker: SourceWorker = {
@@ -215,6 +253,16 @@ async function runTick(ctx: UserContext): Promise<void> {
   const volumeCollapsePct = num('PUMPFUN_VOLUME_COLLAPSE_PCT') ?? 20;
   const partialExitPct = num('PUMPFUN_PARTIAL_EXIT_PCT') ?? 0.5;
   const partialExitTriggerPct = num('PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT') ?? 0.5;
+  // Distribution gate: minimum unique holders required to enter. Cheap
+  // filter that rejects tokens nobody has actually bought (genesis-only
+  // bags, single-buyer rugs). Default 10.
+  const minHolders = num('PUMPFUN_ENTRY_MIN_HOLDERS') ?? 10;
+  // Concentration gate: ratio of top-1 to top-2 holder. When the top
+  // wallet (not necessarily the bonding curve) owns dramatically more
+  // than the next, that's a creator/whale concentration risk. Default
+  // 50 means top-1 may not exceed 50× the second holder. Set very
+  // high to disable.
+  const maxTopHolderRatio = num('PUMPFUN_MAX_TOP_HOLDER_RATIO') ?? 50;
 
   // ── Load open positions ───────────────────────────────────────
   const openPositions: PumpPosition[] = Array.isArray(ctx.payload.positions)
@@ -437,7 +485,28 @@ async function runTick(ctx: UserContext): Promise<void> {
       continue;
     }
 
-    logActivity(`[pumpfun] ENTER ${candidate.symbol} cap=$${candidate.marketCapUsd.toFixed(0)} 5m=${pct5m >= 0 ? '+' : ''}${pct5m.toFixed(1)}% sol=${tradeSol}`, 'pumpfun-trade');
+    // Holder-distribution gate: require real holders + reject extreme
+    // concentration. Empty holder data means the API didn't index this
+    // token yet — we treat that as "no proof of distribution" and
+    // defer (better safe than entering a bag).
+    const holders = await fetchHolderSnapshot(candidate.mint);
+    if (holders == null) {
+      logRaw(`[pumpfun] skip ${candidate.symbol}: holders fetch failed`, 'pumpfun-trade');
+      continue;
+    }
+    if (holders.totalHolders < minHolders) {
+      logRaw(`[pumpfun] skip ${candidate.symbol}: holders=${holders.totalHolders} < ${minHolders}`, 'pumpfun-trade');
+      continue;
+    }
+    if (holders.secondAmount > 0 && holders.topAmount > 0) {
+      const ratio = holders.topAmount / holders.secondAmount;
+      if (ratio > maxTopHolderRatio) {
+        logRaw(`[pumpfun] skip ${candidate.symbol}: top/2nd ratio ${ratio.toFixed(0)} > ${maxTopHolderRatio} (concentration)`, 'pumpfun-trade');
+        continue;
+      }
+    }
+
+    logActivity(`[pumpfun] ENTER ${candidate.symbol} cap=$${candidate.marketCapUsd.toFixed(0)} 5m=${pct5m >= 0 ? '+' : ''}${pct5m.toFixed(1)}% holders=${holders.totalHolders} creator=${candidate.creator?.slice(0, 8) ?? '?'} sol=${tradeSol}`, 'pumpfun-trade');
 
     try {
       const result = await executePumpFunTrade(
