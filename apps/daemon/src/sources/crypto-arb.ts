@@ -59,7 +59,6 @@ let krakenLockoutBackoffMs = KRAKEN_LOCKOUT_BACKOFF_MS;
 const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 'DOGE', XZEC: 'ZEC', XXRP: 'XRP', XXLM: 'XLM', XXMR: 'XMR' };
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
 let tickCount = 0;
-let wsInitialized = false;
 
 // ── Auto-seeder state ─────────────────────────────────────────────────
 // The seed ledger is persisted per-user via ctx.payload, but we also keep
@@ -226,14 +225,16 @@ export const cryptoArbWorker: SourceWorker = {
       }
       }
 
-      // ── Initialize WebSocket feeds on first tick ──
-      if (!wsInitialized) {
-        wsInitialized = true;
-        setWsLogger((msg) => logRaw(msg, 'crypto-arb'));
-        const discoveredPairs = await getActivePairs();
-        subscribeWs(discoveredPairs);
-        logRaw(`[ws] subscribed to ${discoveredPairs.length} pairs across 3 exchanges`, 'crypto-arb');
-      }
+      // ── Keep WebSocket subscriptions in sync with discovered pairs ──
+      // ws-bootstrap.ts already started the cache and subscribed a
+      // baseline at daemon boot. Here we just route this user's tick
+      // logger through the cache and (idempotently) add any pairs the
+      // periodic discovery has surfaced since the last tick. subscribeWs
+      // ref-counts internally so re-subscribing the same pairs is a
+      // no-op.
+      setWsLogger((msg) => logRaw(msg, 'crypto-arb'));
+      const discoveredPairs = await getActivePairs();
+      if (discoveredPairs.length > 0) subscribeWs(discoveredPairs);
 
       // ── Fetch prices every tick (WS cache → instant, REST fallback) ──
       const pairsToFetch = new Set(['BTC-USD', 'ETH-USD', 'SOL-USD']);

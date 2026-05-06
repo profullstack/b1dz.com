@@ -8,6 +8,21 @@
  * Each exchange pushes real-time ticker updates into a shared Map.
  * The PriceFeed.snapshot() methods read from this cache instead of
  * making HTTP requests.
+ *
+ * Reliability features:
+ *   1. Watchdog — every WATCHDOG_INTERVAL_MS we check `lastMessageAt` for
+ *      every connection. If a connection has gone silent for longer than
+ *      STALL_THRESHOLD_MS, we force-close it. The on('close') handler
+ *      then reconnects via the same path as a real disconnect. This is
+ *      the single most important reliability fix — TCP connections silently
+ *      stall behind NATs and load balancers all the time, leaving the
+ *      socket "open" but with no traffic flowing.
+ *   2. Exponential backoff with jitter — fixed-interval reconnects
+ *      hammer broken endpoints; we back off 1s → 60s with full jitter.
+ *      Successful 'open' resets the backoff.
+ *   3. Per-connection lastMessageAt — every inbound frame (including
+ *      heartbeats) updates this so the watchdog only triggers on real
+ *      silence, not "no ticker movement".
  */
 
 import { WebSocket } from 'ws';
@@ -35,6 +50,112 @@ function wsLog(msg: string) {
     return;
   }
   console.log(msg);
+}
+
+// ─── Reliability primitives: watchdog + exponential backoff ────
+
+/** Connections silent longer than this are considered stalled and
+ *  force-closed. CEX ticker streams emit something at least every few
+ *  seconds for liquid pairs (heartbeats + ticks). 45s of total silence
+ *  across all subscriptions is unambiguous: the TCP socket has been
+ *  evicted by an intermediate NAT/LB but the local kernel hasn't
+ *  noticed. Force-closing triggers our existing reconnect path. */
+const STALL_THRESHOLD_MS = 45_000;
+/** How often the watchdog ticks. Trades off detection latency for CPU. */
+const WATCHDOG_INTERVAL_MS = 10_000;
+
+const BACKOFF_INITIAL_MS = 1_000;
+const BACKOFF_MAX_MS = 60_000;
+
+interface ConnectionHealth {
+  /** Last inbound message wallclock — set by every on('message') handler
+   *  AND set fresh on every 'open' event. 0 means "never received". */
+  lastMessageAt: number;
+  /** Current reconnect delay floor. Doubled on each consecutive failure
+   *  (reset to BACKOFF_INITIAL_MS on a successful 'open'). Pre-jitter. */
+  backoffMs: number;
+  /** True while we're inside the reconnect setTimeout window. Prevents
+   *  the watchdog from queueing a second reconnect on top of one already
+   *  in flight. */
+  reconnectScheduled: boolean;
+}
+
+function newHealth(): ConnectionHealth {
+  return { lastMessageAt: 0, backoffMs: BACKOFF_INITIAL_MS, reconnectScheduled: false };
+}
+
+const krakenHealth = newHealth();
+const coinbaseHealth = newHealth();
+const binanceHealth = newHealth();
+/** Per-symbol health for Gemini — Gemini uses one socket per pair, so
+ *  there is no shared connection-level health. */
+const geminiHealth = new Map<string, ConnectionHealth>();
+
+function noteMessage(h: ConnectionHealth) {
+  h.lastMessageAt = Date.now();
+}
+
+function noteOpen(h: ConnectionHealth) {
+  h.lastMessageAt = Date.now();
+  h.backoffMs = BACKOFF_INITIAL_MS;
+}
+
+/** Compute the next reconnect delay with full jitter (AWS-style):
+ *  random uniform in [0, backoffMs], then double the floor for next
+ *  failure, capped at BACKOFF_MAX_MS. Returns the delay to use NOW. */
+function nextReconnectDelay(h: ConnectionHealth): number {
+  const cap = h.backoffMs;
+  const delay = Math.floor(Math.random() * cap);
+  // Pre-compute next failure's ceiling so consecutive failures grow.
+  h.backoffMs = Math.min(h.backoffMs * 2, BACKOFF_MAX_MS);
+  return Math.max(250, delay); // never zero — let the event loop breathe
+}
+
+function scheduleReconnect(h: ConnectionHealth, fn: () => void): void {
+  if (h.reconnectScheduled) return;
+  h.reconnectScheduled = true;
+  const delay = nextReconnectDelay(h);
+  setTimeout(() => {
+    h.reconnectScheduled = false;
+    fn();
+  }, delay);
+}
+
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+function startWatchdog() {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(() => {
+    const now = Date.now();
+    if (krakenWs && krakenHealth.lastMessageAt > 0 && now - krakenHealth.lastMessageAt > STALL_THRESHOLD_MS) {
+      wsLog(`[ws] ⚠ kraken stalled ${Math.floor((now - krakenHealth.lastMessageAt) / 1000)}s — force-closing`);
+      try { krakenWs.close(); } catch { /* socket already torn down */ }
+    }
+    if (coinbaseWs && coinbaseHealth.lastMessageAt > 0 && now - coinbaseHealth.lastMessageAt > STALL_THRESHOLD_MS) {
+      wsLog(`[ws] ⚠ coinbase stalled ${Math.floor((now - coinbaseHealth.lastMessageAt) / 1000)}s — force-closing`);
+      try { coinbaseWs.close(); } catch { /* socket already torn down */ }
+    }
+    if (binanceWs && binanceHealth.lastMessageAt > 0 && now - binanceHealth.lastMessageAt > STALL_THRESHOLD_MS) {
+      wsLog(`[ws] ⚠ binance.us stalled ${Math.floor((now - binanceHealth.lastMessageAt) / 1000)}s — force-closing`);
+      try { binanceWs.close(); } catch { /* socket already torn down */ }
+    }
+    for (const [symbol, ws] of geminiSockets) {
+      const h = geminiHealth.get(symbol);
+      if (!h || h.lastMessageAt === 0) continue;
+      if (now - h.lastMessageAt > STALL_THRESHOLD_MS) {
+        wsLog(`[ws] ⚠ gemini ${symbol} stalled ${Math.floor((now - h.lastMessageAt) / 1000)}s — force-closing`);
+        try { ws.close(); } catch { /* socket already torn down */ }
+      }
+    }
+  }, WATCHDOG_INTERVAL_MS).unref?.() as unknown as ReturnType<typeof setInterval> ?? null;
+  // Note: .unref() lets the process exit naturally if all other timers are gone.
+}
+
+function stopWatchdog() {
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer);
+    watchdogTimer = null;
+  }
 }
 
 function cacheKey(exchange: string, pair: string): string {
@@ -85,7 +206,8 @@ function prunePairCache(pair: string) {
   const ws = geminiSockets.get(symbol);
   if (ws) {
     geminiSockets.delete(symbol);
-    geminiTopBook.delete(symbol);
+    geminiBooks.delete(symbol);
+    geminiHealth.delete(symbol);
     try { ws.close(); } catch {}
   }
 }
@@ -124,7 +246,7 @@ function unsubscribeKrakenPairs(ws: WebSocket, pairs: string[]) {
   }));
 }
 
-function connectKraken(pairs: string[]) {
+function connectKraken(_pairs: string[]) {
   if (krakenWs) return;
   const ws = new WebSocket('wss://ws.kraken.com/v2');
   krakenWs = ws;
@@ -132,16 +254,19 @@ function connectKraken(pairs: string[]) {
   ws.on('open', () => {
     if (krakenWs !== ws) return;
     krakenSubscribedSymbols.clear();
+    noteOpen(krakenHealth);
     wsLog('[ws] kraken connected');
     subscribeKrakenPairs(ws, [...subscribedPairs]);
     // Keepalive ping every 30s
     const pingTimer = setInterval(() => {
-      if (krakenWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
-      else clearInterval(pingTimer);
+      if (krakenWs === ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.ping(); } catch { /* ping on closing socket — next tick will clear */ }
+      } else clearInterval(pingTimer);
     }, 30000);
   });
 
   ws.on('message', (raw) => {
+    noteMessage(krakenHealth);
     try {
       const msg = JSON.parse(raw.toString());
       if (msg.method === 'subscribe' && msg.success === false) {
@@ -162,13 +287,21 @@ function connectKraken(pairs: string[]) {
     } catch {}
   });
 
+  // Ping/pong frames count as activity — without this, a market in a
+  // dead spell looks "stalled" to the watchdog even though the socket
+  // is healthy.
+  ws.on('ping', () => noteMessage(krakenHealth));
+  ws.on('pong', () => noteMessage(krakenHealth));
+
   ws.on('close', () => {
-    wsLog('[ws] ✗ kraken disconnected, reconnecting in 5s...');
-    if (krakenWs === ws) {
-      krakenWs = null;
-      krakenSubscribedSymbols.clear();
-      setTimeout(() => connectKraken([...subscribedPairs]), 5000);
-    }
+    if (krakenWs !== ws) return;
+    krakenWs = null;
+    krakenSubscribedSymbols.clear();
+    if (subscribedPairs.size === 0) return;
+    scheduleReconnect(krakenHealth, () => {
+      wsLog(`[ws] kraken reconnecting (backoff ceiling=${krakenHealth.backoffMs}ms)`);
+      connectKraken([...subscribedPairs]);
+    });
   });
 
   ws.on('error', (e) => {
@@ -213,7 +346,7 @@ function unsubscribeCoinbasePairs(ws: WebSocket, pairs: string[]) {
   }));
 }
 
-function connectCoinbase(pairs: string[]) {
+function connectCoinbase(_pairs: string[]) {
   if (coinbaseWs) return;
   const ws = new WebSocket('wss://advanced-trade-ws.coinbase.com');
   coinbaseWs = ws;
@@ -221,15 +354,18 @@ function connectCoinbase(pairs: string[]) {
   ws.on('open', () => {
     if (coinbaseWs !== ws) return;
     coinbaseSubscribedPairs.clear();
+    noteOpen(coinbaseHealth);
     wsLog('[ws] coinbase connected');
     subscribeCoinbasePairs(ws, [...subscribedPairs]);
     const pingTimer = setInterval(() => {
-      if (coinbaseWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
-      else clearInterval(pingTimer);
+      if (coinbaseWs === ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.ping(); } catch { /* ping on closing socket — next tick will clear */ }
+      } else clearInterval(pingTimer);
     }, 30000);
   });
 
   ws.on('message', (raw) => {
+    noteMessage(coinbaseHealth);
     try {
       const msg = JSON.parse(raw.toString());
       if (msg.type === 'error') {
@@ -254,14 +390,23 @@ function connectCoinbase(pairs: string[]) {
     } catch {}
   });
 
+  ws.on('ping', () => noteMessage(coinbaseHealth));
+  ws.on('pong', () => noteMessage(coinbaseHealth));
+
   ws.on('close', (code, reason) => {
+    if (coinbaseWs !== ws) return;
     const why = reason?.toString()?.trim();
-    wsLog(`[ws] ✗ coinbase disconnected (${code}${why ? ` ${why}` : ''}), reconnecting in 5s...`);
-    if (coinbaseWs === ws) {
-      coinbaseWs = null;
-      coinbaseSubscribedPairs.clear();
-      setTimeout(() => connectCoinbase([...subscribedPairs]), 5000);
+    coinbaseWs = null;
+    coinbaseSubscribedPairs.clear();
+    if (subscribedPairs.size === 0) {
+      wsLog(`[ws] coinbase disconnected (${code}${why ? ` ${why}` : ''}) — no active pairs, not reconnecting`);
+      return;
     }
+    wsLog(`[ws] ✗ coinbase disconnected (${code}${why ? ` ${why}` : ''})`);
+    scheduleReconnect(coinbaseHealth, () => {
+      wsLog(`[ws] coinbase reconnecting (backoff ceiling=${coinbaseHealth.backoffMs}ms)`);
+      connectCoinbase([...subscribedPairs]);
+    });
   });
 
   ws.on('error', (e) => {
@@ -300,7 +445,7 @@ function unsubscribeBinancePairs(ws: WebSocket, pairs: string[]) {
   }));
 }
 
-function connectBinance(pairs: string[]) {
+function connectBinance(_pairs: string[]) {
   if (binanceWs) return;
   const url = 'wss://stream.binance.us:9443/ws';
   const ws = new WebSocket(url);
@@ -309,15 +454,18 @@ function connectBinance(pairs: string[]) {
   ws.on('open', () => {
     if (binanceWs !== ws) return;
     binanceSubscribedSymbols.clear();
+    noteOpen(binanceHealth);
     wsLog('[ws] binance.us connected');
     subscribeBinancePairs(ws, [...subscribedPairs]);
     const pingTimer = setInterval(() => {
-      if (binanceWs === ws && ws.readyState === WebSocket.OPEN) ws.ping();
-      else clearInterval(pingTimer);
+      if (binanceWs === ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.ping(); } catch { /* ping on closing socket — next tick will clear */ }
+      } else clearInterval(pingTimer);
     }, 30000);
   });
 
   ws.on('message', (raw) => {
+    noteMessage(binanceHealth);
     try {
       const msg = JSON.parse(raw.toString());
       if (msg.id && msg.result === null && msg.error) {
@@ -337,13 +485,19 @@ function connectBinance(pairs: string[]) {
     } catch {}
   });
 
+  ws.on('ping', () => noteMessage(binanceHealth));
+  ws.on('pong', () => noteMessage(binanceHealth));
+
   ws.on('close', () => {
-    wsLog('[ws] ✗ binance.us disconnected, reconnecting in 5s...');
-    if (binanceWs === ws) {
-      binanceWs = null;
-      binanceSubscribedSymbols.clear();
-      setTimeout(() => connectBinance([...subscribedPairs]), 5000);
-    }
+    if (binanceWs !== ws) return;
+    binanceWs = null;
+    binanceSubscribedSymbols.clear();
+    if (subscribedPairs.size === 0) return;
+    wsLog('[ws] ✗ binance.us disconnected');
+    scheduleReconnect(binanceHealth, () => {
+      wsLog(`[ws] binance.us reconnecting (backoff ceiling=${binanceHealth.backoffMs}ms)`);
+      connectBinance([...subscribedPairs]);
+    });
   });
 
   ws.on('error', (e) => {
@@ -355,11 +509,20 @@ function connectBinance(pairs: string[]) {
 // Gemini uses per-symbol URLs: wss://api.gemini.com/v1/marketdata/{symbol}
 // No subscribe message — connecting to the path IS the subscription. So
 // we track one socket per pair rather than one global socket like the
-// other venues. Gemini publishes L2 book updates (events[].type='change')
-// from which we synthesize top-of-book bid/ask.
+// other venues. Gemini publishes L2 book events (events[].type='change')
+// which we replay into a per-pair Map<priceString, remaining> for both
+// sides of the book. After applying every event in a frame we recompute
+// top bid (max key) and top ask (min key) and publish that. This is the
+// only correct way to track top-of-book from L2 deltas — the previous
+// "highest price ever seen" heuristic stuck on stale prices the moment
+// the original top moved away.
 
 const geminiSockets = new Map<string, WebSocket>();
-const geminiTopBook = new Map<string, { bid: number | null; ask: number | null }>();
+interface GeminiBook {
+  bids: Map<string, number>; // priceString → remaining
+  asks: Map<string, number>;
+}
+const geminiBooks = new Map<string, GeminiBook>();
 /** Pairs that returned a 400 on the ws handshake — meaning Gemini doesn't
  *  list that symbol. Stop retrying them to avoid the reconnect-storm that
  *  spammed hundreds of log lines per minute. Also used as a cache of the
@@ -403,6 +566,21 @@ interface GeminiChangeEvent {
   reason?: string;
 }
 
+/** Recompute top of a price-keyed level book. Returns null if no levels.
+ *  Bids: highest price wins. Asks: lowest price wins. Numeric-aware
+ *  comparison via parseFloat (price strings like "62354.10" must order
+ *  correctly even when string lengths differ). */
+function topOfBook(side: Map<string, number>, dir: 'bid' | 'ask'): number | null {
+  let best: number | null = null;
+  for (const priceStr of side.keys()) {
+    const price = parseFloat(priceStr);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    if (best === null) { best = price; continue; }
+    if (dir === 'bid' ? price > best : price < best) best = price;
+  }
+  return best;
+}
+
 function connectGeminiPair(pair: string): void {
   const symbol = websocketSymbol('gemini', pair).toLowerCase();
   if (geminiSockets.has(symbol)) return;
@@ -415,54 +593,71 @@ function connectGeminiPair(pair: string): void {
   }
   const ws = new WebSocket(`wss://api.gemini.com/v1/marketdata/${symbol}`);
   geminiSockets.set(symbol, ws);
-  geminiTopBook.set(symbol, { bid: null, ask: null });
+  geminiBooks.set(symbol, { bids: new Map(), asks: new Map() });
+  if (!geminiHealth.has(symbol)) geminiHealth.set(symbol, newHealth());
+  const health = geminiHealth.get(symbol)!;
   let opened = false;
 
   ws.on('open', () => {
     if (geminiSockets.get(symbol) !== ws) return;
     opened = true;
+    noteOpen(health);
     wsLog(`[ws] gemini connected ${symbol}`);
   });
 
   ws.on('message', (raw) => {
+    noteMessage(health);
     try {
       const msg = JSON.parse(raw.toString()) as { events?: GeminiChangeEvent[] };
       if (!Array.isArray(msg.events)) return;
-      const book = geminiTopBook.get(symbol);
+      const book = geminiBooks.get(symbol);
       if (!book) return;
       let touched = false;
       for (const ev of msg.events) {
         if (ev.type !== 'change') continue;
-        const price = parseFloat(ev.price);
         const remaining = parseFloat(ev.remaining);
-        if (!Number.isFinite(price) || price <= 0) continue;
-        if (ev.side === 'bid') {
-          if (remaining > 0 && (book.bid == null || price > book.bid)) { book.bid = price; touched = true; }
-          else if (remaining === 0 && book.bid === price) { book.bid = null; touched = true; }
-        } else {
-          if (remaining > 0 && (book.ask == null || price < book.ask)) { book.ask = price; touched = true; }
-          else if (remaining === 0 && book.ask === price) { book.ask = null; touched = true; }
-        }
+        const priceNum = parseFloat(ev.price);
+        if (!Number.isFinite(remaining) || !Number.isFinite(priceNum) || priceNum <= 0) continue;
+        const side = ev.side === 'bid' ? book.bids : ev.side === 'ask' ? book.asks : null;
+        if (!side) continue;
+        if (remaining > 0) side.set(ev.price, remaining);
+        else side.delete(ev.price);
+        touched = true;
       }
-      if (touched && book.bid != null && book.ask != null) {
-        setPrice('gemini', pair, book.bid, book.ask);
+      if (touched) {
+        const bid = topOfBook(book.bids, 'bid');
+        const ask = topOfBook(book.asks, 'ask');
+        if (bid !== null && ask !== null && bid > 0 && ask > 0) {
+          setPrice('gemini', pair, bid, ask);
+        }
       }
     } catch {}
   });
 
+  ws.on('ping', () => noteMessage(health));
+  ws.on('pong', () => noteMessage(health));
+
   ws.on('close', () => {
     if (geminiSockets.get(symbol) !== ws) return;
     geminiSockets.delete(symbol);
-    geminiTopBook.delete(symbol);
+    geminiBooks.delete(symbol);
     // If the socket never successfully opened, Gemini doesn't list this
     // symbol. Mark dead to prevent a reconnect storm.
     if (!opened) {
       geminiDeadSymbols.add(symbol);
+      geminiHealth.delete(symbol);
       wsLog(`[ws] gemini ${symbol} not listed — won't retry`);
       return;
     }
-    wsLog(`[ws] ✗ gemini disconnected ${symbol}, reconnecting in 5s...`);
-    if (subscribedPairs.has(pair)) setTimeout(() => connectGeminiPair(pair), 5000);
+    wsLog(`[ws] ✗ gemini disconnected ${symbol}`);
+    if (subscribedPairs.has(pair)) {
+      scheduleReconnect(health, () => {
+        wsLog(`[ws] gemini reconnecting ${symbol} (backoff ceiling=${health.backoffMs}ms)`);
+        connectGeminiPair(pair);
+      });
+    } else {
+      geminiHealth.delete(symbol);
+    }
   });
 
   ws.on('error', (e) => {
@@ -544,6 +739,7 @@ export function retain(pairs: string[]): () => void {
     connectCoinbase(allPairs);
     connectBinance(allPairs);
     connectGemini(allPairs);
+    startWatchdog();
     initialized = true;
     return () => release(pairs);
   }
@@ -580,7 +776,15 @@ export function __resetWsCacheForTests() {
   krakenSubscribedSymbols.clear();
   coinbaseSubscribedPairs.clear();
   binanceSubscribedSymbols.clear();
+  geminiBooks.clear();
+  geminiHealth.clear();
   initialized = false;
+  stopWatchdog();
+  // Reset health back to defaults so consecutive test cases start
+  // from a clean exponential-backoff state.
+  Object.assign(krakenHealth, newHealth());
+  Object.assign(coinbaseHealth, newHealth());
+  Object.assign(binanceHealth, newHealth());
 }
 
 export function __getWsCacheStateForTests() {
@@ -601,10 +805,34 @@ export function __releaseWsPairsForTests(pairs: string[]) {
   return released;
 }
 
+/** Test hook: feed a fake L2 frame into the Gemini path so unit tests
+ *  can verify book reconstruction without opening a real socket. */
+export function __injectGeminiFrameForTests(pair: string, events: GeminiChangeEvent[]): MarketSnapshot | null {
+  const symbol = websocketSymbol('gemini', pair).toLowerCase();
+  if (!geminiBooks.has(symbol)) geminiBooks.set(symbol, { bids: new Map(), asks: new Map() });
+  const book = geminiBooks.get(symbol)!;
+  for (const ev of events) {
+    if (ev.type !== 'change') continue;
+    const remaining = parseFloat(ev.remaining);
+    const priceNum = parseFloat(ev.price);
+    if (!Number.isFinite(remaining) || !Number.isFinite(priceNum) || priceNum <= 0) continue;
+    const side = ev.side === 'bid' ? book.bids : ev.side === 'ask' ? book.asks : null;
+    if (!side) continue;
+    if (remaining > 0) side.set(ev.price, remaining);
+    else side.delete(ev.price);
+  }
+  const bid = topOfBook(book.bids, 'bid');
+  const ask = topOfBook(book.asks, 'ask');
+  if (bid !== null && ask !== null && bid > 0 && ask > 0) {
+    setPrice('gemini', pair, bid, ask);
+  }
+  return cache.get(cacheKey('gemini', pair)) ?? null;
+}
+
 /** Get all cached snapshots for a pair across all exchanges. */
 export function getAllSnapshots(pair: string): MarketSnapshot[] {
   const result: MarketSnapshot[] = [];
-  for (const exchange of ['kraken', 'coinbase', 'binance-us']) {
+  for (const exchange of ['kraken', 'coinbase', 'binance-us', 'gemini']) {
     const snap = getSnapshot(exchange, pair);
     if (snap) result.push(snap);
   }
@@ -614,4 +842,26 @@ export function getAllSnapshots(pair: string): MarketSnapshot[] {
 /** How many prices are in the cache. */
 export function cacheSize(): number {
   return cache.size;
+}
+
+/** Health snapshot for diagnostics — surfaced via daemon logs / web /api
+ *  to make silent-stall debugging an order of magnitude faster than
+ *  squinting at WS reconnect lines. */
+export function healthSnapshot() {
+  const now = Date.now();
+  const ageOf = (h: ConnectionHealth): number => h.lastMessageAt > 0 ? now - h.lastMessageAt : -1;
+  return {
+    nowMs: now,
+    subscribedPairCount: subscribedPairs.size,
+    cacheSize: cache.size,
+    kraken: { connected: krakenWs?.readyState === WebSocket.OPEN, ageMs: ageOf(krakenHealth), backoffMs: krakenHealth.backoffMs },
+    coinbase: { connected: coinbaseWs?.readyState === WebSocket.OPEN, ageMs: ageOf(coinbaseHealth), backoffMs: coinbaseHealth.backoffMs },
+    binanceUs: { connected: binanceWs?.readyState === WebSocket.OPEN, ageMs: ageOf(binanceHealth), backoffMs: binanceHealth.backoffMs },
+    gemini: [...geminiSockets.entries()].map(([symbol, ws]) => ({
+      symbol,
+      connected: ws.readyState === WebSocket.OPEN,
+      ageMs: ageOf(geminiHealth.get(symbol) ?? newHealth()),
+      backoffMs: geminiHealth.get(symbol)?.backoffMs ?? BACKOFF_INITIAL_MS,
+    })),
+  };
 }

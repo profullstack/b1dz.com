@@ -10,7 +10,14 @@ import {
   loadUserConfig,
   refreshUserConfig,
   setSupabaseClientForTesting,
+  __getOverlayKeysForTesting,
 } from './user-config.js';
+import {
+  SECRET_FIELDS,
+  PLAIN_STRING_FIELDS,
+  PLAIN_NUMBER_FIELDS,
+  PLAIN_BOOL_FIELDS,
+} from '@b1dz/core';
 
 interface FakeRow {
   user_id: string;
@@ -243,5 +250,65 @@ describe('loadUserConfig — degraded mode (no encryption key)', () => {
 
     const cfg = await loadUserConfig('no-key');
     expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('env-only');
+  });
+});
+
+describe('OVERLAY_KEYS coverage', () => {
+  // This test guards against the silent-drift bug that caused only
+  // Gemini to execute trades in production. The daemon's per-tick env
+  // overlay must apply EVERY key the user can configure via the web
+  // settings UI — otherwise settings like BASE_RPC_URL get saved to
+  // user_settings.payload_plain but never reach process.env, and
+  // adapters that rely on them (Uniswap V3 / Jupiter / Pump.fun) silently
+  // fall through to "missing env" and never trade.
+  it('includes every catalog key from @b1dz/core/settings-fields', () => {
+    const overlay = new Set(__getOverlayKeysForTesting());
+    const allCatalogKeys = [
+      ...SECRET_FIELDS,
+      ...PLAIN_STRING_FIELDS,
+      ...PLAIN_NUMBER_FIELDS,
+      ...PLAIN_BOOL_FIELDS,
+    ];
+    const missing = allCatalogKeys.filter((k) => !overlay.has(k));
+    expect(missing).toEqual([]);
+  });
+
+  it('still includes the operationally-required RPC URL keys', () => {
+    // Specific regression guards — these were the smoking-gun keys
+    // missing from the original hand-maintained list. Without them
+    // every DEX adapter silently no-op'd.
+    const overlay = new Set(__getOverlayKeysForTesting());
+    expect(overlay.has('BASE_RPC_URL')).toBe(true);
+    expect(overlay.has('SOLANA_RPC_URL')).toBe(true);
+    expect(overlay.has('EVM_PRIVATE_KEY')).toBe(true);
+    expect(overlay.has('SOLANA_PRIVATE_KEY')).toBe(true);
+    expect(overlay.has('PUMPFUN_TRADE_EXECUTION')).toBe(true);
+    expect(overlay.has('DEX_TRADE_EXECUTION')).toBe(true);
+  });
+
+  it('overlays a user-saved BASE_RPC_URL onto process.env at tick time', async () => {
+    delete process.env.BASE_RPC_URL;
+    const { client } = fakeClient([{
+      user_id: 'rpc-user',
+      payload_plain: { BASE_RPC_URL: 'https://user-set-base-rpc.example' },
+      payload_secret_ciphertext: null,
+      payload_secret_iv: null,
+      payload_secret_tag: null,
+      updated_at: null,
+    }]);
+    setSupabaseClientForTesting(client as never);
+
+    const cfg = await loadUserConfig('rpc-user');
+    let observedInsideOverlay: string | undefined;
+    await applyEnvOverlay(cfg, async () => {
+      observedInsideOverlay = process.env.BASE_RPC_URL;
+    });
+
+    // The smoking-gun assertion: inside the overlay, the user's saved
+    // BASE_RPC_URL is on process.env. If this fails, every DEX adapter
+    // is going to silently fall back to "missing env" again.
+    expect(observedInsideOverlay).toBe('https://user-set-base-rpc.example');
+    // And it's restored (deleted) afterward.
+    expect(process.env.BASE_RPC_URL).toBeUndefined();
   });
 });

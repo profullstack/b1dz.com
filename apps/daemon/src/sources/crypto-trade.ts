@@ -14,11 +14,24 @@ import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
 import { maybeBuildDexTradeExecutor } from '../executors/dex-trade-executor.js';
 
-// DEX executor is armed lazily on the first tick so that applyEnvOverlay
-// has already injected the user's SOLANA_PRIVATE_KEY / EVM_PRIVATE_KEY
-// from user_settings before we read process.env. Module-level arming
-// would run before any env overlay and always see empty keys.
-let dexExecutorArmed = false;
+// DEX executor is armed lazily inside applyEnvOverlay so that the
+// user's SOLANA_PRIVATE_KEY / EVM_PRIVATE_KEY / BASE_RPC_URL /
+// SOLANA_RPC_URL from user_settings are visible on process.env before
+// we read them. Module-level arming would run before any overlay and
+// always see empty keys.
+//
+// The previous implementation flipped a single `dexExecutorArmed` flag
+// to true at the start of the first attempt — so a missing env var on
+// boot meant the executor never came up even after the user fixed
+// their settings (until daemon restart). Now we retry on every tick
+// until either an executor is built (success) OR the user-config
+// overlay is stable AND has none of the required env vars (no point
+// retrying — log once and stop). Operators who later fill in BASE_RPC_URL
+// in the web UI see the leg arm on the next tick without restart.
+let dexExecutorAttemptInFlight = false;
+let dexExecutorArmedAt: number | null = null;
+let dexExecutorLastAttemptLogAt = 0;
+const DEX_EXECUTOR_RETRY_LOG_INTERVAL_MS = 5 * 60_000;
 
 // Analysis-cache persistence. Candle history + indicators are multi-MB;
 // writing them into source_state.payload every 5s was blowing up Redis
@@ -105,13 +118,36 @@ export const cryptoTradeWorker: SourceWorker = {
           : null,
       );
 
-      // Arm the DEX executor on the first tick (inside applyEnvOverlay so
-      // process.env already has the user's SOLANA_PRIVATE_KEY / EVM_PRIVATE_KEY).
-      if (!dexExecutorArmed) {
-        dexExecutorArmed = true;
+      // Arm the DEX executor lazily, inside applyEnvOverlay, so the
+      // user's keys + RPC URLs are visible on process.env. We retry
+      // every tick until success — operators frequently add an RPC URL
+      // after first boot and we want the next tick to pick it up
+      // without forcing a daemon restart.
+      if (dexExecutorArmedAt === null && !dexExecutorAttemptInFlight) {
+        dexExecutorAttemptInFlight = true;
         maybeBuildDexTradeExecutor()
-          .then((exec) => { if (exec) setDexExecutor(exec); })
-          .catch((e) => logRaw(`[trade] DEX executor boot failed: ${(e as Error).message}`, 'crypto-trade'));
+          .then((exec) => {
+            if (exec) {
+              setDexExecutor(exec);
+              dexExecutorArmedAt = Date.now();
+              logActivity('[trade] DEX executor armed', 'crypto-trade');
+            } else {
+              // No leg armed — likely missing BASE_RPC_URL +/or
+              // SOLANA_RPC_URL +/or wallet keys. Throttle the log so
+              // we don't spam every tick. The next tick still retries.
+              const now = Date.now();
+              if (now - dexExecutorLastAttemptLogAt >= DEX_EXECUTOR_RETRY_LOG_INTERVAL_MS) {
+                dexExecutorLastAttemptLogAt = now;
+                logRaw(
+                  '[trade] DEX executor not armed (missing EVM_PRIVATE_KEY+BASE_RPC_URL or '
+                  + 'SOLANA_PRIVATE_KEY+SOLANA_RPC_URL) — will retry next tick',
+                  'crypto-trade',
+                );
+              }
+            }
+          })
+          .catch((e) => logRaw(`[trade] DEX executor boot failed: ${(e as Error).message}`, 'crypto-trade'))
+          .finally(() => { dexExecutorAttemptInFlight = false; });
       }
 
       const items = await cryptoTradeSource.poll(sourceCtx);

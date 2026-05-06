@@ -25,6 +25,7 @@ import {
 import type { SourceWorker, UserContext } from './types.js';
 import { SOURCES } from './registry.js';
 import { loadUserConfig, applyEnvOverlay } from './user-config.js';
+import { startWsBootstrap, stopWsBootstrap } from './ws-bootstrap.js';
 
 interface ScheduledTick {
   userId: string;
@@ -64,6 +65,14 @@ export class DaemonRuntime {
   async start(discoverIntervalMs = 60_000) {
     console.log(`b1dzd: version ${getB1dzVersion()}`);
     console.log(`b1dzd: starting with ${SOURCES.length} source(s) registered`);
+    // Bring up shared WS price-cache subscriptions before any worker
+    // tick runs. Workers (crypto-trade, crypto-arb, the v2 observer) all
+    // read from the same in-process cache, so initializing here means
+    // every worker — including ones that don't own WS init — sees fresh
+    // streaming prices instead of falling back to REST.
+    await startWsBootstrap().catch((e) => {
+      console.error(`b1dzd: ws-bootstrap failed: ${(e as Error).message}`);
+    });
     await this.discover();
     this.discoverTimer = setInterval(() => { void this.discover(); }, discoverIntervalMs);
     console.log('b1dzd: ready');
@@ -272,6 +281,7 @@ export class DaemonRuntime {
 
   async stop() {
     this.stopping = true;
+    stopWsBootstrap();
     if (this.discoverTimer) clearInterval(this.discoverTimer);
     for (const sched of this.scheduled.values()) clearInterval(sched.timer);
     // Mark every live (userId, sourceId) for a forced DB flush on its

@@ -32,6 +32,7 @@
  */
 import { createDecipheriv } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { ALL_OVERLAY_KEYS } from '@b1dz/core';
 
 const ALGORITHM = 'aes-256-gcm';
 const CACHE_TTL_MS = 60_000;
@@ -236,77 +237,48 @@ export function clearUserConfigCacheForTesting(): void {
 }
 
 /**
- * Keys we apply as env overlay during a tick. Listed explicitly to avoid
- * pulling in unrelated env vars and to make the migration surface easy
- * to audit. Add more as the daemon grows.
+ * Keys we apply as env overlay during a tick.
+ *
+ * Derived from the shared `@b1dz/core` settings catalog so this list
+ * stays in lockstep with what the web UI actually saves. Previously
+ * this was a hand-maintained list and drifted: BASE_RPC_URL,
+ * SOLANA_RPC_URL, ARB_TRIANGULAR_*, ARB_AUTO_SEED_*, ARB_LIQ_*,
+ * EVM_WALLET_ADDRESS, SOLANA_WALLET_ADDRESS, REQUIRE_CONFIRM_UPTREND,
+ * proxy creds and several other knobs were silently dropped. The
+ * resulting symptom in production: only Gemini executed trades because
+ * every DEX/Jupiter/Pump.fun adapter fell through to "missing env" and
+ * the v2/triangular engines never armed.
+ *
+ * `ALL_OVERLAY_KEYS` is the union of SECRET_FIELDS + PLAIN_STRING_FIELDS
+ * + PLAIN_NUMBER_FIELDS + PLAIN_BOOL_FIELDS — adding a new user-facing
+ * setting in the catalog is automatically picked up here.
+ *
+ * The handful of keys below are EXTRA — they're not user-saveable from
+ * the UI yet but are honored from process.env at runtime, so we want
+ * the per-tick overlay to NOT shadow them with a stale snapshot. They
+ * are listed explicitly so the audit surface stays clear.
  */
-const OVERLAY_KEYS: readonly string[] = [
-  // Secrets
-  'COINBASE_API_KEY_NAME',
-  'COINBASE_API_PRIVATE_KEY',
-  'COINBASE_API_PRIVATE_KEY_B',
-  'COINBASE_EC_KEY_B',
+const EXTRA_OVERLAY_KEYS: readonly string[] = [
+  // Coinbase: legacy *_B64 envs (some operators have them in env files
+  // even though the UI uses the non-_B64 names).
   'COINBASE_EC_KEY_B64',
   'COINBASE_API_PRIVATE_KEY_B64',
-  'KRAKEN_API_KEY',
-  'KRAKEN_API_SECRET',
-  'BINANCE_US_API_KEY',
-  'BINANCE_US_API_SECRET',
-  'GEMINI_API_KEY',
-  'GEMINI_API_SECRET',
-  'GEMINI_NONCE_OFFSET',
-  'GEMINI_ACCOUNT',
-  'EVM_PRIVATE_KEY',
-  'SOLANA_PRIVATE_KEY',
-  'ONEINCH_API_KEY',
-  // Plain user-overridable — risk
-  'DAILY_LOSS_LIMIT_PCT',
-  'DEX_SLIPPAGE_BPS',
-  'DEX_TRADE_BUDGET_USD',
-  'DEX_TRADE_MAX_USD',
-  'DEX_TRADE_EXECUTION',
-  'MARGIN_TRADING',
-  'BUY_SLIPPAGE_BPS',
-  'HARD_STOP_PCT',
-  'TAKE_PROFIT_PCT',
-  'MIN_NET_PROFIT_PCT',
-  'ENTRY_MIN_SCORE',
-  'MIN_HOLD_SECS',
-  'MIN_VOLUME_USD',
-  'MIN_PER_EXCHANGE_VOL_USD',
-  'ROTATE_ADVERSE_PCT',
-  'ROTATE_MIN_HOLD_MS',
-  // Strategy modes
-  'ARB_MODE',
-  'V2_MODE',
-  // CEX arb sizing
-  'ARB_MAX_TRADE_USD',
-  'ARB_SIZE_USD',
-  'ARB_MIN_NET_USD',
-  'ARB_MIN_NET_BPS',
-  'ARB_EXECUTOR_UNISWAP_BASE',
-  // DCA
-  'DCA_ENABLED',
-  'DCA_TOTAL_ALLOCATION_PCT',
-  'DCA_MAX_COINS',
-  'DCA_COINS',
-  'DCA_EXCHANGES',
-  'DCA_INTERVAL_MS',
-  // V2 pipeline
-  'V2_SIZE_USD',
-  'V2_MAX_PAIRS',
-  'V2_MIN_NET_USD',
-  'V2_MIN_NET_BPS',
-  'V2_MAX_TRADE_USD',
-  // 0x API
+  // Aggregator API keys not in the UI catalog yet.
   'ZEROX_API_KEY',
-  // Master switches
-  'TRADING_ENABLED',
-  'PUMPFUN_ENABLE_SCRAPE',
-  // Pump.fun live trading
-  'PUMPFUN_TRADE_EXECUTION',
+  // Pump.fun trade size knob (UI exposes the toggle but not the size).
   'PUMPFUN_TRADE_SOL',
-] as const;
+];
+
+const OVERLAY_KEYS: readonly string[] = [
+  ...new Set([...ALL_OVERLAY_KEYS, ...EXTRA_OVERLAY_KEYS]),
+];
+
+/** Exposed for tests — verifies the overlay covers every user-settable
+ *  catalog key plus the extras. The list itself is stable across
+ *  daemon lifetimes; tests guard against silent drift. */
+export function __getOverlayKeysForTesting(): readonly string[] {
+  return OVERLAY_KEYS;
+}
 
 let envOverlayMutex: Promise<void> = Promise.resolve();
 
