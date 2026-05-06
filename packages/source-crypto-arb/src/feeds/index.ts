@@ -15,5 +15,5 @@ export {
   healthSnapshot as wsHealthSnapshot,
   __resetWsCacheForTests,
   __getWsCacheStateForTests,
-  __injectGeminiFrameForTests,
+  __injectGeminiBookTickerForTests,
 } from './ws-price-cache.js';

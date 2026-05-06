@@ -30,7 +30,7 @@ export {
   wsHealthSnapshot,
   __resetWsCacheForTests,
   __getWsCacheStateForTests,
-  __injectGeminiFrameForTests,
+  __injectGeminiBookTickerForTests,
 } from './feeds/index.js';
 export { getBalance, placeOrder, getOpenOrders, cancelOrder as cancelKrakenOrder, getTradeHistory, getPairMinVolume as getKrakenPairMinVolume, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
 export { hasTradingPair as hasKrakenTradingPair } from './feeds/kraken-private.js';
