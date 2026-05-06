@@ -27,6 +27,9 @@ export function SolanaSection({
   const [pkDraft, setPkDraft] = useState('');
   const [pkRevealed, setPkRevealed] = useState(false);
   const [pkPendingClear, setPkPendingClear] = useState(false);
+  const [ppDraft, setPpDraft] = useState('');
+  const [ppRevealed, setPpRevealed] = useState(false);
+  const [ppPendingClear, setPpPendingClear] = useState(false);
 
   const cryptoUnavailable = !cryptoKey || data.cryptoConfigured === false;
 
@@ -48,6 +51,8 @@ export function SolanaSection({
     const merged: Record<string, string> = { ...(decrypted ?? {}) };
     if (pkPendingClear) delete merged.SOLANA_PRIVATE_KEY;
     else if (pkDraft.trim() !== '') merged.SOLANA_PRIVATE_KEY = pkDraft;
+    if (ppPendingClear) delete merged.PUMPPORTAL_API_KEY;
+    else if (ppDraft.trim() !== '') merged.PUMPPORTAL_API_KEY = ppDraft;
 
     const next = await saveSettings({
       plain: {
@@ -61,9 +66,13 @@ export function SolanaSection({
     setPkDraft('');
     setPkPendingClear(false);
     setPkRevealed(false);
+    setPpDraft('');
+    setPpPendingClear(false);
+    setPpRevealed(false);
   };
 
   const storedPk = decrypted?.SOLANA_PRIVATE_KEY;
+  const storedPp = decrypted?.PUMPPORTAL_API_KEY;
 
   return (
     <SectionShell
@@ -103,6 +112,27 @@ export function SolanaSection({
           if (!cryptoKey) throw new Error('encryption key not loaded');
           if (!decrypted && data.cipher) setDecrypted(await decryptSecretBlob(cryptoKey, data.cipher));
           setPkRevealed(true);
+        }}
+        disabled={!!cryptoUnavailable}
+      />
+      <SecretRow
+        field="PUMPPORTAL_API_KEY"
+        label="PumpPortal API key"
+        hint="auth token for the realtime data stream at wss://pumpportal.fun/api/data and the /trade-local endpoint used by the pump.fun executor."
+        isSet={!!storedPp}
+        length={storedPp ? storedPp.length : undefined}
+        revealed={ppRevealed ? storedPp : undefined}
+        draft={ppDraft}
+        onDraft={setPpDraft}
+        onClear={() => {
+          setPpPendingClear(true);
+          setPpDraft('');
+          setPpRevealed(false);
+        }}
+        onReveal={async () => {
+          if (!cryptoKey) throw new Error('encryption key not loaded');
+          if (!decrypted && data.cipher) setDecrypted(await decryptSecretBlob(cryptoKey, data.cipher));
+          setPpRevealed(true);
         }}
         disabled={!!cryptoUnavailable}
       />

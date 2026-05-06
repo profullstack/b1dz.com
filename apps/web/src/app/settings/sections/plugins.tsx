@@ -72,10 +72,9 @@ const PLUGIN_FIELDS: Record<string, PluginFieldSpec> = {
   // "Solana" tab — the same values are reused by every Solana-signing
   // plugin (jupiter, pumpfun) so we keep them in one place rather than
   // duplicating the field across plugins.
+  // PUMPPORTAL_API_KEY now lives in the Solana tab (always visible) so users
+  // don't need to install the pumpfun plugin first to set the credential.
   pumpfun: {
-    secrets: [
-      { key: 'PUMPPORTAL_API_KEY', label: 'PumpPortal API key', hint: 'auth token for the realtime data stream at wss://pumpportal.fun/api/data' },
-    ],
     bools: [{ key: 'PUMPFUN_ENABLE_SCRAPE', label: 'Enable scraper' }],
   },
   '0x': {
