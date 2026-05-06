@@ -2,16 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import { WalletsSection } from './sections/wallets';
+import { SolanaSection } from './sections/solana';
 import { ThresholdsSection } from './sections/thresholds';
 import { PluginsSection } from './sections/plugins';
 import type { SettingsResponse } from './shared';
 import { importKey } from '@/lib/browser-crypto';
 
-type Tab = 'plugins' | 'wallets' | 'thresholds';
+type Tab = 'plugins' | 'wallets' | 'solana' | 'thresholds';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'plugins', label: 'Plugins' },
   { id: 'wallets', label: 'Wallets' },
+  { id: 'solana', label: 'Solana' },
   { id: 'thresholds', label: 'Thresholds' },
 ];
 
@@ -105,6 +107,7 @@ export function SettingsClient() {
       {data && tab !== 'plugins' && (
         <div>
           {tab === 'wallets' && <WalletsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
+          {tab === 'solana' && <SolanaSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'thresholds' && <ThresholdsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
         </div>
       )}

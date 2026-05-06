@@ -68,12 +68,14 @@ const PLUGIN_FIELDS: Record<string, PluginFieldSpec> = {
       { key: 'EVM_PRIVATE_KEY', label: 'EVM hot wallet private key', hint: '0x… 64-hex' },
     ],
   },
-  jupiter: {
-    secrets: [{ key: 'SOLANA_PRIVATE_KEY', label: 'Solana hot wallet private key', hint: 'base58 secret key (88 chars)' }],
-    strings: [{ key: 'SOLANA_RPC_URL', label: 'Solana RPC URL' }],
-  },
+  // Note: Solana hot wallet + RPC are now configured under the dedicated
+  // "Solana" tab — the same values are reused by every Solana-signing
+  // plugin (jupiter, pumpfun) so we keep them in one place rather than
+  // duplicating the field across plugins.
   pumpfun: {
-    secrets: [{ key: 'SOLANA_PRIVATE_KEY', label: 'Solana hot wallet private key', hint: 'base58 secret key (88 chars)' }],
+    secrets: [
+      { key: 'PUMPPORTAL_API_KEY', label: 'PumpPortal API key', hint: 'auth token for the realtime data stream at wss://pumpportal.fun/api/data' },
+    ],
     bools: [{ key: 'PUMPFUN_ENABLE_SCRAPE', label: 'Enable scraper' }],
   },
   '0x': {

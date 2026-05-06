@@ -37,6 +37,8 @@ export const SECRET_FIELDS = [
   'GEMINI_API_SECRET',
   // DEX
   'ONEINCH_API_KEY',
+  // Pump.fun data stream (pumpportal.fun)
+  'PUMPPORTAL_API_KEY',
   // Hot wallets
   'EVM_PRIVATE_KEY',
   'SOLANA_PRIVATE_KEY',
