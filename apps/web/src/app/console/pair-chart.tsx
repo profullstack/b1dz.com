@@ -75,6 +75,15 @@ interface PairChartProps {
 
 const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
+const TIMEFRAME_TO_SEC: Record<string, number> = {
+  '1m': 60,
+  '5m': 5 * 60,
+  '15m': 15 * 60,
+  '1h': 60 * 60,
+  '4h': 4 * 60 * 60,
+  '1d': 24 * 60 * 60,
+};
+
 export function PairChart({
   label,
   pair,
@@ -219,9 +228,10 @@ export function PairChart({
   // Project entry/exit/open markers onto the chart. Buys render as a
   // white up-triangle below the bar; sells as a white down-triangle
   // above. Open positions get a labelled up-triangle. Marker times are
-  // clamped into the visible candle range so they always have an
-  // anchor — without this, markers timestamped outside the loaded bar
-  // window are silently dropped by lightweight-charts.
+  // bucketed to the timeframe boundary and matched against the loaded
+  // bar set — same approach the TUI uses (markerRenderer.js). A
+  // previous version clamped the time into [firstSec, lastSec], which
+  // pinned every recent trade onto the most recent candle.
   useEffect(() => {
     const plugin = markersPluginRef.current;
     if (!plugin) return;
@@ -229,28 +239,33 @@ export function PairChart({
       plugin.setMarkers([]);
       return;
     }
-    const firstSec = Math.floor(bars[0].time / 1000);
-    const lastSec = Math.floor(bars[bars.length - 1].time / 1000);
-    const seriesMarkers: SeriesMarker<UTCTimestamp>[] = markers.map((m) => {
-      const sec = Math.min(lastSec, Math.max(firstSec, Math.floor(m.time / 1000))) as UTCTimestamp;
+    const tfSec = TIMEFRAME_TO_SEC[timeframe] ?? 60;
+    const barTimes = new Set<number>();
+    for (const b of bars) barTimes.add(Math.floor(b.time / 1000));
+
+    const seriesMarkers: SeriesMarker<UTCTimestamp>[] = [];
+    for (const m of markers) {
+      const bucketSec = Math.floor(Math.floor(m.time / 1000) / tfSec) * tfSec;
+      if (!barTimes.has(bucketSec)) continue;
+      const t = bucketSec as UTCTimestamp;
       if (m.kind === 'entry') {
-        return { time: sec, position: 'belowBar', color: '#ffffff', shape: 'arrowUp', text: 'BUY' };
-      }
-      if (m.kind === 'exit') {
+        seriesMarkers.push({ time: t, position: 'belowBar', color: '#ffffff', shape: 'arrowUp', text: 'BUY' });
+      } else if (m.kind === 'exit') {
         const profitable = (m.netPnl ?? 0) >= 0;
-        return {
-          time: sec,
+        seriesMarkers.push({
+          time: t,
           position: 'aboveBar',
           color: '#ffffff',
           shape: 'arrowDown',
           text: profitable ? `SELL +$${m.netPnl?.toFixed(2)}` : `SELL ${m.netPnl?.toFixed(2)}`,
-        };
+        });
+      } else {
+        seriesMarkers.push({ time: t, position: 'belowBar', color: '#fbbf24', shape: 'arrowUp', text: 'OPEN' });
       }
-      return { time: sec, position: 'belowBar', color: '#fbbf24', shape: 'arrowUp', text: 'OPEN' };
-    });
+    }
     seriesMarkers.sort((a, b) => (a.time as number) - (b.time as number));
     plugin.setMarkers(seriesMarkers);
-  }, [markers, bars]);
+  }, [markers, bars, timeframe]);
 
   const statusDot =
     feedStatus === 'live' ? 'bg-emerald-400'
