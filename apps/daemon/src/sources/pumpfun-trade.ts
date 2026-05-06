@@ -28,6 +28,50 @@ import {
 } from '@b1dz/adapters-pumpfun';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
 
+/** Per-candidate mcap history for momentum gating. Keyed by mint, stores
+ *  (timestamp, usd_market_cap) pairs across recent ticks. Used to compute
+ *  a 5-minute mcap change so we can skip candidates that are already
+ *  dumping. Module-scope so it survives between ticks; pruned aggressively
+ *  by mint last-seen so unbounded growth isn't possible.
+ *
+ *  CANDIDATE_HISTORY_TTL_MS controls how long we keep mints we haven't
+ *  seen recently — once a candidate falls outside the discovery filter
+ *  it ages out. */
+const candidateMcapHistory = new Map<string, { at: number; mcap: number }[]>();
+const CANDIDATE_HISTORY_TTL_MS = 30 * 60_000; // 30 min
+const CANDIDATE_HISTORY_MAX_SAMPLES = 60;     // ~10 min at 10s ticks
+
+function recordCandidateMcap(mint: string, mcap: number, nowMs: number): void {
+  if (!Number.isFinite(mcap) || mcap <= 0) return;
+  const samples = candidateMcapHistory.get(mint) ?? [];
+  samples.push({ at: nowMs, mcap });
+  while (samples.length > CANDIDATE_HISTORY_MAX_SAMPLES) samples.shift();
+  candidateMcapHistory.set(mint, samples);
+}
+
+function pruneCandidateHistory(nowMs: number): void {
+  for (const [mint, samples] of candidateMcapHistory) {
+    const newest = samples[samples.length - 1]?.at ?? 0;
+    if (nowMs - newest > CANDIDATE_HISTORY_TTL_MS) candidateMcapHistory.delete(mint);
+  }
+}
+
+/** Returns the percentage change in mcap over the trailing `windowMs`,
+ *  or null when we don't have at least one sample older than the window
+ *  (i.e. we can't yet compute the change reliably). */
+function mcapPctChange(mint: string, windowMs: number, nowMs: number): number | null {
+  const samples = candidateMcapHistory.get(mint);
+  if (!samples || samples.length < 2) return null;
+  const cutoff = nowMs - windowMs;
+  // Find the oldest sample inside the window. If even our oldest sample
+  // is younger than the window, we don't have enough history yet.
+  const oldest = samples.find((s) => s.at >= cutoff) ?? samples[0];
+  if (!oldest || nowMs - oldest.at < windowMs * 0.5) return null;
+  const newest = samples[samples.length - 1];
+  if (!oldest.mcap || !newest.mcap) return null;
+  return ((newest.mcap - oldest.mcap) / oldest.mcap) * 100;
+}
+
 /** Pull a recent SOL/USD price from the crypto-arb worker's persisted prices
  *  array so the panel can show USD P&L on pump.fun positions. The arb worker
  *  refreshes prices every couple seconds, so this is at most a few seconds
@@ -199,6 +243,15 @@ async function runTick(ctx: UserContext): Promise<void> {
         mcapSamples,
       };
 
+      // Per-position visibility into why we're holding vs exiting. The
+      // previous worker was silent on hold decisions so operators
+      // couldn't tell whether the exit pass was even running.
+      const heldMin = ((Date.now() - position.entryAt) / 60_000).toFixed(1);
+      const lossPct = position.entryMarketCapUsd > 0
+        ? ((position.entryMarketCapUsd - currentMarketCapUsd) / position.entryMarketCapUsd * 100).toFixed(1)
+        : '?';
+      logRaw(`[pumpfun] check ${position.symbol} mcap=$${currentMarketCapUsd.toFixed(0)} loss=${lossPct}% held=${heldMin}m → ${exitReason ?? 'hold'}`, 'pumpfun-trade');
+
       if (!exitReason) {
         remainingPositions.push(updatedPosition);
         continue;
@@ -269,10 +322,37 @@ async function runTick(ctx: UserContext): Promise<void> {
     logRaw(`[pumpfun] discovery failed: ${(e as Error).message}`, 'pumpfun-trade');
   }
 
+  // Record current mcap for every candidate so we have a rolling window
+  // for momentum gating, then prune stale mints.
+  const nowMs = Date.now();
+  for (const c of candidates) recordCandidateMcap(c.mint, c.marketCapUsd, nowMs);
+  pruneCandidateHistory(nowMs);
+
+  // Momentum threshold — minimum 5-minute mcap change required to enter.
+  // Default 0% (must be flat or pumping); set negative to permit dips.
+  const minPct5m = num('PUMPFUN_ENTRY_MIN_5M_PCT') ?? 0;
+
   for (const candidate of candidates) {
     if (!shouldEnter(candidate, remainingPositions, entryConfig)) continue;
 
-    logActivity(`[pumpfun] ENTER ${candidate.symbol} cap=$${candidate.marketCapUsd.toFixed(0)} sol=${tradeSol}`, 'pumpfun-trade');
+    // Momentum gate: skip candidates whose 5-min mcap change is below
+    // threshold (i.e. already dumping). When we don't have enough
+    // history yet (first time seeing this mint), defer entry — better
+    // to miss one tick than buy a dump. The catch-22 of "we never
+    // build history without entering" doesn't apply because every
+    // discovery tick records a sample; on the next tick we'll have
+    // enough.
+    const pct5m = mcapPctChange(candidate.mint, 5 * 60_000, nowMs);
+    if (pct5m == null) {
+      logRaw(`[pumpfun] skip ${candidate.symbol}: no 5m history yet`, 'pumpfun-trade');
+      continue;
+    }
+    if (pct5m < minPct5m) {
+      logRaw(`[pumpfun] skip ${candidate.symbol}: 5m=${pct5m.toFixed(1)}% < ${minPct5m}% (dumping)`, 'pumpfun-trade');
+      continue;
+    }
+
+    logActivity(`[pumpfun] ENTER ${candidate.symbol} cap=$${candidate.marketCapUsd.toFixed(0)} 5m=${pct5m >= 0 ? '+' : ''}${pct5m.toFixed(1)}% sol=${tradeSol}`, 'pumpfun-trade');
 
     try {
       const result = await executePumpFunTrade(
