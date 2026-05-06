@@ -17,6 +17,7 @@ export type StreamEvent =
   | { kind: 'state:arb'; data: unknown }
   | { kind: 'state:trade'; data: unknown }
   | { kind: 'state:pipeline'; data: unknown }
+  | { kind: 'state:pumpfun'; data: unknown }
   | { kind: 'state:settings'; data: unknown }
   | { kind: 'ticker'; data: unknown };
 
@@ -262,6 +263,7 @@ export class B1dzClient {
                   currentEvent === 'state:arb'
                   || currentEvent === 'state:trade'
                   || currentEvent === 'state:pipeline'
+                  || currentEvent === 'state:pumpfun'
                   || currentEvent === 'state:settings'
                   || currentEvent === 'ticker'
                 ) {

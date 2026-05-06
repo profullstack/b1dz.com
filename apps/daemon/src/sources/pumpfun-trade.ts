@@ -30,6 +30,9 @@ import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.j
 
 const PUMP_API_BASE = 'https://frontend-api-v3.pump.fun';
 
+/** Cap on mcapSamples per position so payloads don't grow unbounded. */
+const MCAP_SAMPLE_LIMIT = 30;
+
 // ─── Coin status shape (partial) ─────────────────────────────────
 
 interface PumpCoinStatus {
@@ -135,8 +138,20 @@ async function runTick(ctx: UserContext): Promise<void> {
       const currentMarketCapUsd = coin.usd_market_cap ?? 0;
       const exitReason = checkExit(position, currentMarketCapUsd);
 
+      // Stamp the latest mcap onto the position + append a sparkline
+      // sample so the UI panels can compute P&L and draw a chart. Done
+      // BEFORE the exit branch so even positions about to exit get one
+      // last update visible to the operator.
+      const mcapSamples = [...(position.mcapSamples ?? []), currentMarketCapUsd]
+        .slice(-MCAP_SAMPLE_LIMIT);
+      const updatedPosition: PumpPosition = {
+        ...position,
+        currentMarketCapUsd,
+        mcapSamples,
+      };
+
       if (!exitReason) {
-        remainingPositions.push(position);
+        remainingPositions.push(updatedPosition);
         continue;
       }
 
@@ -149,7 +164,7 @@ async function runTick(ctx: UserContext): Promise<void> {
           tokenBalance = await getSolanaTokenBalance(walletAddress, position.mint, rpcUrl);
         } catch (e) {
           logRaw(`[pumpfun] balance fetch failed for ${position.symbol}: ${(e as Error).message}`, 'pumpfun-trade');
-          remainingPositions.push(position);
+          remainingPositions.push(updatedPosition);
           continue;
         }
       }
@@ -179,11 +194,11 @@ async function runTick(ctx: UserContext): Promise<void> {
         } else {
           logActivity(`[pumpfun] sell ${position.symbol} ${result.status}: ${result.error ?? ''}`, 'pumpfun-trade');
           // Keep the position — will retry next tick.
-          remainingPositions.push(position);
+          remainingPositions.push(updatedPosition);
         }
       } catch (e) {
         logRaw(`[pumpfun] sell error ${position.symbol}: ${(e as Error).message}`, 'pumpfun-trade');
-        remainingPositions.push(position);
+        remainingPositions.push(updatedPosition);
       }
     } catch (e) {
       logRaw(`[pumpfun] exit-pass error ${position.symbol}: ${(e as Error).message}`, 'pumpfun-trade');

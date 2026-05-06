@@ -218,11 +218,19 @@ export function PairChart({
     }
   }, [tick, bars]);
 
-  // Push bars to chart.
+  // Push bars to chart. We load enough history (500 bars) so historical
+  // trade markers fall inside the loaded window, but default the visible
+  // range to the most recent ~120 bars so candles aren't squished.
+  // The user can pan/zoom out to see older markers.
   useEffect(() => {
     candleSeriesRef.current?.setData(toCandleData(bars));
     volumeSeriesRef.current?.setData(toVolumeData(bars));
-    chartRef.current?.timeScale().fitContent();
+    if (bars.length > 0) {
+      const visibleCount = Math.min(120, bars.length);
+      const from = bars.length - visibleCount;
+      const to = bars.length - 1;
+      chartRef.current?.timeScale().setVisibleLogicalRange({ from, to });
+    }
   }, [bars]);
 
   // Project entry/exit/open markers onto the chart. Buys render as a

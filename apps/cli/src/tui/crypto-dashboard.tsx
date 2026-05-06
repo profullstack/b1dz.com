@@ -124,6 +124,24 @@ interface TradeStatusData {
   dexBalances?: { venue: string; usdc: number }[];
 }
 
+interface PumpfunPosition {
+  mint: string;
+  name?: string;
+  symbol?: string;
+  entryMarketCapUsd: number;
+  entryAt: number;
+  solSpent: number;
+  tokenBalance?: number;
+  currentMarketCapUsd?: number;
+  mcapSamples?: number[];
+}
+
+interface PumpfunState {
+  enabled?: boolean;
+  positions?: PumpfunPosition[];
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+}
+
 interface TradeState {
   signals: {
     title: string;
@@ -400,6 +418,7 @@ function DashboardInner() {
   const [arbState, setArbState] = useState<ArbState | null>(null);
   const [tradeState, setTradeState] = useState<TradeState | null>(null);
   const [arbPipeState, setArbPipeState] = useState<ArbPipelineState | null>(null);
+  const [pumpfunState, setPumpfunState] = useState<PumpfunState | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [autoTrade, setAutoTrade] = useState(true);
   const [tickCount, setTickCount] = useState(0);
@@ -707,6 +726,11 @@ function DashboardInner() {
                 const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
                 if (age < 120_000) setDaemonOnline(true);
               }
+            }
+
+            if (event.kind === 'state:pumpfun') {
+              const pf = event.data as PumpfunState;
+              setPumpfunState(pf);
             }
 
             setTickCount((c) => c + 1);
@@ -1398,21 +1422,51 @@ function DashboardInner() {
     ...logs.map((l) => `{white-fg}${formatLogTs(l.at)}{/} {white-fg}${l.text}{/}`),
   ];
 
+  // Build pump.fun rows (in same activity style as Positions). Done here so
+  // we can size the panel before computing chart heights.
+  const pumpfunPositions = pumpfunState?.positions ?? [];
+  const pumpfunLines: string[] = pumpfunPositions.length === 0
+    ? []
+    : [
+        ' Symbol      MCAP now    PnL %       SOL    Age    Chart',
+        ...pumpfunPositions.map((p) => {
+          const entry = p.entryMarketCapUsd;
+          const now = p.currentMarketCapUsd ?? 0;
+          const havePnl = entry > 0 && now > 0;
+          const pnlPct = havePnl ? ((now - entry) / entry) * 100 : 0;
+          const pnlColor = pnlPct >= 0 ? 'green' : 'red';
+          const symbol = (p.symbol ?? p.mint.slice(0, 6)).slice(0, 10).padEnd(10);
+          const mcapNow = (now > 0 ? `$${now.toFixed(0)}` : '—').padStart(8);
+          const pnlStr = havePnl ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : '—';
+          const sol = p.solSpent.toFixed(4);
+          const ageMs = Date.now() - p.entryAt;
+          const ageStr =
+            ageMs < 60_000 ? `${Math.floor(ageMs / 1000)}s`
+            : ageMs < 3_600_000 ? `${Math.floor(ageMs / 60_000)}m`
+            : `${Math.floor(ageMs / 3_600_000)}h${Math.floor((ageMs % 3_600_000) / 60_000)}m`;
+          const spark = unicodeSparkline(p.mcapSamples, 10);
+          return ` {magenta-fg}${symbol}{/}  ${mcapNow}  {${pnlColor}-fg}${pnlStr.padStart(8)}{/}  ${sol}  ${ageStr.padStart(5)}  ${spark}`;
+        }),
+      ];
+
   const posH = Math.min(posLines.length + 2, 7);
   const holdingsH = Math.min(holdingsLines.length + 2, 14);
+  // 0 when there are no pump.fun positions so the layout is unchanged.
+  const pumpH = pumpfunLines.length === 0 ? 0 : Math.min(pumpfunLines.length + 2, 8);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
-  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - holdingsH - row2H - row3H - 6));
+  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - holdingsH - pumpH - row2H - row3H - 6));
   const holdingsTop = 2 + posH;
-  const chartTop = 2 + posH + holdingsH;
+  const pumpTop = 2 + posH + holdingsH;
+  const chartTop = 2 + posH + holdingsH + pumpH;
   const primaryChartWidthPct = 44;
   const secondaryChartWidthPct = 44;
   const chartControlsWidthPct = 12;
   const screenCols = process.stdout.columns ?? 120;
   const primaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (primaryChartWidthPct / 100)) - 3);
   const secondaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (secondaryChartWidthPct / 100)) - 3);
-  const footerTop = 2 + posH + holdingsH + chartH + row2H + row3H;
+  const footerTop = 2 + posH + holdingsH + pumpH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
 
@@ -2027,6 +2081,20 @@ function DashboardInner() {
           />
         );
       })}
+
+      {pumpH > 0 && (
+        <box
+          label=" Pump.fun "
+          top={pumpTop}
+          left={0}
+          width="100%"
+          height={pumpH}
+          border={{ type: 'line' }}
+          tags={true}
+          style={{ border: { fg: 'magenta' } }}
+          content={pumpfunLines.join('\n')}
+        />
+      )}
 
       <RealtimeOHLCChartContainer
         top={chartTop}

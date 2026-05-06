@@ -174,6 +174,10 @@ export interface PumpfunPosition {
   entryAt: number;
   solSpent: number;
   tokenBalance?: number;
+  /** Latest fetched USD market cap. Populated by the daemon worker. */
+  currentMarketCapUsd?: number;
+  /** Rolling history of mcap samples for sparkline rendering. */
+  mcapSamples?: number[];
 }
 
 export interface PumpfunState {

@@ -36,6 +36,13 @@ export interface PumpPosition {
   /** Raw token units received (stored as number for JSON serialisation;
    *  cast to bigint when passing to arithmetic helpers). */
   tokenBalance?: number;
+  /** Latest fetched USD market cap. Populated by the daemon worker
+   *  during its exit-check pass; absent until the first successful
+   *  status fetch. Used by UIs to compute P&L vs entry. */
+  currentMarketCapUsd?: number;
+  /** Rolling history of mcap samples for sparkline rendering, oldest
+   *  first, capped to MCAP_SAMPLE_LIMIT. */
+  mcapSamples?: number[];
 }
 
 export type ExitReason = 'take_profit' | 'stop_loss' | 'time_stop' | 'graduation';

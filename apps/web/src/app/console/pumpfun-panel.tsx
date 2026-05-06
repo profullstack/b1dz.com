@@ -1,5 +1,6 @@
 'use client';
 
+import { Sparkline } from '@/components/sparkline';
 import type { PumpfunState } from '@/lib/source-state-types';
 
 interface Props {
@@ -44,49 +45,76 @@ export function PumpfunPanel({ pumpfun }: Props) {
               <th className="px-3 py-2">Symbol</th>
               <th className="px-3 py-2">Mint</th>
               <th className="px-3 py-2 text-right">Entry MCAP</th>
+              <th className="px-3 py-2 text-right">Now MCAP</th>
+              <th className="px-3 py-2 text-right">PnL</th>
               <th className="px-3 py-2 text-right">SOL spent</th>
-              <th className="px-3 py-2 text-right">Tokens</th>
               <th className="px-3 py-2 text-right">Age</th>
+              <th className="px-3 py-2 text-center">Chart</th>
             </tr>
           </thead>
           <tbody>
             {positions.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-3 text-zinc-500">
+                <td colSpan={8} className="px-3 py-3 text-zinc-500">
                   No open pump.fun positions
                 </td>
               </tr>
             )}
-            {positions.map((p, i) => (
-              <tr
-                key={`${p.mint}-${i}`}
-                className="border-t border-zinc-800/60"
-              >
-                <td className="px-3 py-1.5 text-emerald-400">{p.symbol ?? '-'}</td>
-                <td className="px-3 py-1.5 text-zinc-400" title={p.mint}>
-                  <a
-                    href={`https://pump.fun/coin/${p.mint}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline decoration-dotted decoration-zinc-700 hover:text-zinc-200"
-                  >
-                    {shortMint(p.mint)}
-                  </a>
-                </td>
-                <td className="px-3 py-1.5 text-right text-zinc-300">
-                  ${p.entryMarketCapUsd.toFixed(0)}
-                </td>
-                <td className="px-3 py-1.5 text-right text-zinc-300">
-                  {p.solSpent.toFixed(4)}
-                </td>
-                <td className="px-3 py-1.5 text-right text-zinc-300">
-                  {p.tokenBalance ? p.tokenBalance.toLocaleString() : '-'}
-                </td>
-                <td className="px-3 py-1.5 text-right text-zinc-400">
-                  {fmtAge(p.entryAt)}
-                </td>
-              </tr>
-            ))}
+            {positions.map((p, i) => {
+              const entry = Number.isFinite(p.entryMarketCapUsd) ? p.entryMarketCapUsd : 0;
+              const now = Number.isFinite(p.currentMarketCapUsd) ? (p.currentMarketCapUsd as number) : 0;
+              const havePnl = entry > 0 && now > 0;
+              const pnlPct = havePnl ? ((now - entry) / entry) * 100 : 0;
+              // Approximate USD P&L: we don't track SOL/USD per position, so
+              // base it on the same mcap ratio applied to USD-spent — for a
+              // bonding-curve token, mcap and our holdings move together.
+              // (Skips when we have no current mcap yet.)
+              const usdSpent = p.solSpent * 0; // unknown SOL price; show only %
+              const pnlUsdApprox = havePnl ? usdSpent * (pnlPct / 100) : 0;
+              const pnlClass = pnlPct >= 0 ? 'text-emerald-400' : 'text-red-400';
+
+              return (
+                <tr
+                  key={`${p.mint}-${i}`}
+                  className="border-t border-zinc-800/60"
+                >
+                  <td className="px-3 py-1.5 text-emerald-400">{p.symbol ?? '-'}</td>
+                  <td className="px-3 py-1.5 text-zinc-400" title={p.mint}>
+                    <a
+                      href={`https://pump.fun/coin/${p.mint}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline decoration-dotted decoration-zinc-700 hover:text-zinc-200"
+                    >
+                      {shortMint(p.mint)}
+                    </a>
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-zinc-300">
+                    ${entry.toFixed(0)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-zinc-300">
+                    {now > 0 ? `$${now.toFixed(0)}` : '—'}
+                  </td>
+                  <td className={`px-3 py-1.5 text-right ${havePnl ? pnlClass : 'text-zinc-500'}`}>
+                    {havePnl
+                      ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`
+                      : '—'}
+                    {havePnl && usdSpent > 0
+                      ? ` ($${pnlUsdApprox.toFixed(2)})`
+                      : ''}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-zinc-300">
+                    {p.solSpent.toFixed(4)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-zinc-400">
+                    {fmtAge(p.entryAt)}
+                  </td>
+                  <td className="px-3 py-1.5 text-center">
+                    <Sparkline samples={p.mcapSamples} profitable={pnlPct >= 0} />
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
