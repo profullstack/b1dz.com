@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ArbState } from '@/lib/source-state-types';
-import { PairChart } from './pair-chart';
+import type { ArbState, TradeState } from '@/lib/source-state-types';
+import { PairChart, type TradeMarkerInput } from './pair-chart';
 import { useChartPin } from '@/lib/chart-pinner';
 
 const CYCLE_MS = 30_000;
@@ -11,10 +11,44 @@ const OHLC_EXCHANGES = new Set(['coinbase', 'kraken', 'binance-us', 'binanceus',
 
 interface ChartsPanelProps {
   arb: ArbState | null;
+  trade: TradeState | null;
 }
 
-export function ChartsPanel({ arb }: ChartsPanelProps) {
+function parseElapsedMs(elapsed: string): number {
+  // "5m32s", "1h12m", "42s" — best-effort parse used by the TUI too.
+  const matches = elapsed.matchAll(/(\d+)([hms])/g);
+  let ms = 0;
+  for (const m of matches) {
+    const n = Number(m[1]);
+    if (!Number.isFinite(n)) continue;
+    if (m[2] === 'h') ms += n * 3_600_000;
+    else if (m[2] === 'm') ms += n * 60_000;
+    else if (m[2] === 's') ms += n * 1_000;
+  }
+  return ms;
+}
+
+export function ChartsPanel({ arb, trade }: ChartsPanelProps) {
   const prices = arb?.prices ?? [];
+  const closedTrades = trade?.tradeState?.closedTrades ?? [];
+  const livePositions = trade?.tradeStatus?.positions
+    ?? (trade?.tradeStatus?.position ? [{ exchange: 'kraken', ...trade.tradeStatus.position }] : []);
+
+  const markersFor = (pair: string | null, exchange: string | null): TradeMarkerInput[] => {
+    if (!pair || !exchange) return [];
+    const out: TradeMarkerInput[] = [];
+    for (const t of closedTrades) {
+      if (t.pair !== pair || t.exchange !== exchange) continue;
+      out.push({ kind: 'entry', time: t.entryTime, price: t.entryPrice });
+      out.push({ kind: 'exit',  time: t.exitTime,  price: t.exitPrice, netPnl: t.netPnl });
+    }
+    for (const p of livePositions) {
+      if (p.pair !== pair || p.exchange !== exchange) continue;
+      const ageMs = parseElapsedMs(p.elapsed);
+      out.push({ kind: 'open', time: Date.now() - ageMs, price: p.entryPrice });
+    }
+    return out;
+  };
   const pairs = useMemo(
     () => Array.from(new Set(prices.map((row) => row.pair))).sort(),
     [prices],
@@ -139,6 +173,7 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
         exchanges={exchanges}
         paused={pausedA}
         timeframe={timeframeA}
+        markers={markersFor(pairA, exchangeA)}
         onPair={(p) => { setPairA(p); setPausedA(true); }}
         onExchange={(x) => { setExchangeA(x); setPausedA(true); }}
         onTogglePause={() => setPausedA((v) => !v)}
@@ -153,6 +188,7 @@ export function ChartsPanel({ arb }: ChartsPanelProps) {
         exchanges={exchanges}
         paused={pausedB}
         timeframe={timeframeB}
+        markers={markersFor(pairB, exchangeB)}
         onPair={(p) => { setPairB(p); setPausedB(true); }}
         onExchange={(x) => { setExchangeB(x); setPausedB(true); }}
         onTogglePause={() => setPausedB((v) => !v)}

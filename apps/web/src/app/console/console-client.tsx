@@ -24,7 +24,7 @@ export function ConsoleClient() {
         onMutate={onMutate}
       />
       <div className="space-y-4 p-4">
-        <ChartsPanel arb={bundle.arb} />
+        <ChartsPanel arb={bundle.arb} trade={bundle.trade} />
         <PositionsTable trade={bundle.trade} />
         <div className="grid gap-4 lg:grid-cols-2">
           <SpreadsTable arb={bundle.arb} />

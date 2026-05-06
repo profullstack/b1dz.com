@@ -7,10 +7,13 @@ import {
   CrosshairMode,
   HistogramSeries,
   createChart,
+  createSeriesMarkers,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import type { ArbState } from '@/lib/source-state-types';
@@ -48,6 +51,13 @@ function toVolumeData(bars: RawBar[]): HistogramData<UTCTimestamp>[] {
   }));
 }
 
+export interface TradeMarkerInput {
+  kind: 'entry' | 'exit' | 'open';
+  time: number; // ms
+  price: number;
+  netPnl?: number;
+}
+
 interface PairChartProps {
   label: string;
   pair: string;
@@ -57,6 +67,7 @@ interface PairChartProps {
   exchanges: string[];
   paused: boolean;
   timeframe: string;
+  markers?: TradeMarkerInput[];
   onPair: (pair: string) => void;
   onExchange: (exchange: string) => void;
   onTogglePause: () => void;
@@ -74,6 +85,7 @@ export function PairChart({
   exchanges,
   paused,
   timeframe,
+  markers = [],
   onPair,
   onExchange,
   onTogglePause,
@@ -83,6 +95,7 @@ export function PairChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<UTCTimestamp> | null>(null);
 
   const [bars, setBars] = useState<RawBar[]>([]);
   const [feedStatus, setFeedStatus] = useState<'idle' | 'loading' | 'live' | 'error' | 'unsupported'>('idle');
@@ -124,6 +137,7 @@ export function PairChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
+    markersPluginRef.current = createSeriesMarkers(candleSeries, []);
     const resize = new ResizeObserver(() => chart.timeScale().fitContent());
     resize.observe(chartEl.current);
     return () => {
@@ -132,6 +146,7 @@ export function PairChart({
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      markersPluginRef.current = null;
     };
   }, []);
 
@@ -177,6 +192,42 @@ export function PairChart({
     volumeSeriesRef.current?.setData(toVolumeData(bars));
     chartRef.current?.timeScale().fitContent();
   }, [bars]);
+
+  // Project entry/exit/open markers onto the chart. Buys render as a
+  // white up-triangle below the bar; sells as a white down-triangle
+  // above. Open positions get a labelled up-triangle. Marker times are
+  // clamped into the visible candle range so they always have an
+  // anchor — without this, markers timestamped outside the loaded bar
+  // window are silently dropped by lightweight-charts.
+  useEffect(() => {
+    const plugin = markersPluginRef.current;
+    if (!plugin) return;
+    if (!bars.length || !markers.length) {
+      plugin.setMarkers([]);
+      return;
+    }
+    const firstSec = Math.floor(bars[0].time / 1000);
+    const lastSec = Math.floor(bars[bars.length - 1].time / 1000);
+    const seriesMarkers: SeriesMarker<UTCTimestamp>[] = markers.map((m) => {
+      const sec = Math.min(lastSec, Math.max(firstSec, Math.floor(m.time / 1000))) as UTCTimestamp;
+      if (m.kind === 'entry') {
+        return { time: sec, position: 'belowBar', color: '#ffffff', shape: 'arrowUp', text: 'BUY' };
+      }
+      if (m.kind === 'exit') {
+        const profitable = (m.netPnl ?? 0) >= 0;
+        return {
+          time: sec,
+          position: 'aboveBar',
+          color: '#ffffff',
+          shape: 'arrowDown',
+          text: profitable ? `SELL +$${m.netPnl?.toFixed(2)}` : `SELL ${m.netPnl?.toFixed(2)}`,
+        };
+      }
+      return { time: sec, position: 'belowBar', color: '#fbbf24', shape: 'arrowUp', text: 'OPEN' };
+    });
+    seriesMarkers.sort((a, b) => (a.time as number) - (b.time as number));
+    plugin.setMarkers(seriesMarkers);
+  }, [markers, bars]);
 
   const statusDot =
     feedStatus === 'live' ? 'bg-emerald-400'
