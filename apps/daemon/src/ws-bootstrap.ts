@@ -75,13 +75,12 @@ export async function startWsBootstrap(): Promise<void> {
 
   healthTimer = setInterval(() => {
     const snap = wsHealthSnapshot();
-    const geminiUp = snap.gemini.filter((g: { connected: boolean }) => g.connected).length;
     console.log(
       `[ws-health] pairs=${snap.subscribedPairCount} cached=${snap.cacheSize} `
       + `kraken=${snap.kraken.connected ? 'up' : 'DOWN'}(${snap.kraken.ageMs}ms) `
       + `coinbase=${snap.coinbase.connected ? 'up' : 'DOWN'}(${snap.coinbase.ageMs}ms) `
       + `binanceUs=${snap.binanceUs.connected ? 'up' : 'DOWN'}(${snap.binanceUs.ageMs}ms) `
-      + `gemini=${geminiUp}/${snap.gemini.length}`,
+      + `gemini=${snap.gemini.connected ? 'up' : 'DOWN'}(${snap.gemini.ageMs}ms,${snap.gemini.subscribedSymbols.length}sym)`,
     );
   }, HEALTH_LOG_INTERVAL_MS);
   healthTimer.unref?.();
