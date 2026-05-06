@@ -642,14 +642,16 @@ function DashboardInner() {
     return () => clearInterval(id);
   }, []);
 
-  // Poll API for daemon state
+  // SSE stream for daemon state — replaces setInterval(poll, 3000).
+  // The server pushes named events only when Redis data changes, so
+  // idle daemon ticks cost ~0 bytes on the wire.
   useEffect(() => {
     let active = true;
-    let client: B1dzClient | null = null;
     let seenVersionLog = false;
     let seenDaemonVersion: string | null = null;
 
-    const init = async () => {
+    const run = async () => {
+      let client: B1dzClient | null = null;
       try {
         client = await createApiClient();
         if (!client) {
@@ -657,67 +659,72 @@ function DashboardInner() {
           return;
         }
         setApiClient(client);
-        addLog(`{green-fg}Connected to API{/green-fg} cli=v${getB1dzVersion()}`);
-        poll();
+        addLog(`{green-fg}Connected to API (SSE){/green-fg} cli=v${getB1dzVersion()}`);
       } catch (e) {
         addLog(`{red-fg}API init error: ${(e as Error).message?.slice(0, 60)}{/red-fg}`);
+        return;
+      }
+
+      // Reconnect loop with exponential backoff.
+      let backoffMs = 1_000;
+      while (active) {
+        try {
+          for await (const event of client.stream()) {
+            if (!active) break;
+            setApiError(null);
+
+            if (event.kind === 'state:arb') {
+              const arb = event.data as ArbState;
+              setArbState(arb);
+              const apiVersion = client.getApiVersion();
+              if (!seenVersionLog && apiVersion) {
+                addLog(`{cyan-fg}Version{/cyan-fg} cli=v${getB1dzVersion()} api=v${apiVersion}`);
+                seenVersionLog = true;
+              }
+              if (arb.daemon?.lastTickAt) {
+                const age = Date.now() - new Date(arb.daemon.lastTickAt).getTime();
+                setDaemonOnline(age < 120_000);
+              }
+              if (arb.daemon?.version && arb.daemon.version !== seenDaemonVersion) {
+                addLog(`{cyan-fg}Daemon{/cyan-fg} ${arb.daemon.worker}=v${arb.daemon.version}`);
+                seenDaemonVersion = arb.daemon.version;
+              }
+            }
+
+            if (event.kind === 'state:trade') {
+              const trade = event.data as TradeState;
+              setTradeState(trade);
+              if (trade.daemon?.version && trade.daemon.version !== seenDaemonVersion) {
+                addLog(`{cyan-fg}Daemon{/cyan-fg} ${trade.daemon.worker}=v${trade.daemon.version}`);
+                seenDaemonVersion = trade.daemon.version;
+              }
+            }
+
+            if (event.kind === 'state:pipeline') {
+              const v2 = event.data as ArbPipelineState;
+              setArbPipeState(v2);
+              if (v2.daemon?.lastTickAt) {
+                const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
+                if (age < 120_000) setDaemonOnline(true);
+              }
+            }
+
+            setTickCount((c) => c + 1);
+            backoffMs = 1_000; // reset on successful event
+          }
+        } catch (e) {
+          if (!active) break;
+          const msg = (e as Error).message;
+          addLog(`{red-fg}API stream: ${msg.slice(0, 80)} — reconnecting in ${Math.round(backoffMs / 1000)}s{/red-fg}`);
+          setApiError(msg);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          backoffMs = Math.min(backoffMs * 2, 30_000);
+        }
       }
     };
 
-    const poll = async () => {
-      if (!client || !active) return;
-      try {
-        // Sequential to avoid refresh token races
-        const arb = await client.storage.get<ArbState>('source-state', 'crypto-arb');
-        const trade = await client.storage.get<TradeState>('source-state', 'crypto-trade');
-
-        if (!active) return;
-        setApiError(null);
-
-        if (arb) {
-          setArbState(arb);
-          const apiVersion = client.getApiVersion();
-          if (!seenVersionLog && apiVersion) {
-            addLog(`{cyan-fg}Version{/cyan-fg} cli=v${getB1dzVersion()} api=v${apiVersion}`);
-            seenVersionLog = true;
-          }
-          if (arb.daemon?.lastTickAt) {
-            const age = Date.now() - new Date(arb.daemon.lastTickAt).getTime();
-            setDaemonOnline(age < 120_000);
-          }
-          if (arb.daemon?.version && arb.daemon.version !== seenDaemonVersion) {
-            addLog(`{cyan-fg}Daemon version{/cyan-fg} ${arb.daemon.worker}=v${arb.daemon.version}`);
-            seenDaemonVersion = arb.daemon.version;
-          }
-        }
-        if (trade) {
-          setTradeState(trade);
-          if (trade.daemon?.version && trade.daemon.version !== seenDaemonVersion) {
-            addLog(`{cyan-fg}Daemon version{/cyan-fg} ${trade.daemon.worker}=v${trade.daemon.version}`);
-            seenDaemonVersion = trade.daemon.version;
-          }
-        }
-
-        const v2 = await client.storage.get<ArbPipelineState>('source-state', 'arb-pipeline').catch(() => null);
-        if (v2 && active) {
-          setArbPipeState(v2);
-          if (v2.daemon?.lastTickAt) {
-            const age = Date.now() - new Date(v2.daemon.lastTickAt).getTime();
-            if (age < 120_000) setDaemonOnline(true);
-          }
-        }
-
-        setTickCount((c) => c + 1);
-      } catch (e) {
-        const msg = (e as Error).message;
-        if (!apiError) addLog(`{red-fg}API: ${msg.slice(0, 80)}{/red-fg}`);
-        setApiError(msg);
-      }
-    };
-
-    init();
-    const timer = setInterval(poll, 3000);
-    return () => { active = false; clearInterval(timer); };
+    void run();
+    return () => { active = false; };
   }, []);
 
   // Poll brisk.news every 15s

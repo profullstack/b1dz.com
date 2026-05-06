@@ -1,5 +1,29 @@
 'use client';
 
+/**
+ * Realtime source-state hook — consumes the /api/stream SSE feed.
+ *
+ * Previously: four parallel setInterval(fetch, 3000) calls per component
+ * mount, each opening a new TCP connection every 3 seconds.
+ *
+ * Now: ONE persistent EventSource per page. The server pushes named events
+ * only when the underlying Redis data changes (delta detection), so silent
+ * daemon ticks cost ~0 bytes on the wire. The browser's built-in
+ * EventSource handles reconnects automatically with exponential backoff.
+ *
+ * Event→state mapping:
+ *   state:arb      → arb
+ *   state:trade    → trade
+ *   state:pipeline → pipeline
+ *   state:settings → settings
+ *
+ * The `ticker` event (live bid/ask prices) is consumed separately by the
+ * chart — see useTickerStream().
+ *
+ * Exported API is identical to the old polling hook so every consumer
+ * (ConsoleClient, DashboardSummary, StatusBar, etc.) requires zero changes.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import type { ArbState, ArbPipelineState, TradeState, UiSettings } from './source-state-types';
 
@@ -13,22 +37,7 @@ export interface SourceStateBundle {
   error: string | null;
 }
 
-const POLL_MS = 3000;
-const FETCH_TIMEOUT_MS = 8000;
 const LS_KEY = 'b1dz:source-state';
-
-async function fetchJson<T>(path: string): Promise<T | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(path, { cache: 'no-store', signal: controller.signal }).catch(() => null);
-    if (!res?.ok) return null;
-    const body = (await res.json().catch(() => null)) as { value?: unknown } | null;
-    return (body?.value ?? null) as T | null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 type LsData = {
   arb: ArbState | null;
@@ -63,7 +72,7 @@ function fromLs(): SourceStateBundle {
     trade: c?.trade ?? null,
     settings: c?.settings ?? null,
     pipeline: c?.pipeline ?? null,
-    loading: c === null, // already have data → skip loading spinner
+    loading: c === null,
     lastFetched: c?.savedAt ?? null,
     error: null,
   };
@@ -71,55 +80,58 @@ function fromLs(): SourceStateBundle {
 
 export function useSourceState(): SourceStateBundle {
   const [bundle, setBundle] = useState<SourceStateBundle>(fromLs);
-  const cancelled = useRef(false);
-  const lastGood = useRef<Omit<LsData, 'savedAt'>>({ arb: null, trade: null, settings: null, pipeline: null });
+  const stateRef = useRef<Omit<LsData, 'savedAt'>>({
+    arb: null, trade: null, settings: null, pipeline: null,
+  });
 
   useEffect(() => {
-    cancelled.current = false;
-
-    // Seed lastGood from cache so partial-failure saves don't wipe keys we haven't re-fetched yet
-    const seed = typeof window !== 'undefined' ? readLs() : null;
-    lastGood.current = {
+    const seed = readLs();
+    stateRef.current = {
       arb: seed?.arb ?? null,
       trade: seed?.trade ?? null,
       settings: seed?.settings ?? null,
       pipeline: seed?.pipeline ?? null,
     };
 
-    // Called as each individual fetch resolves — updates state immediately, not waiting for siblings
-    const patch = <K extends keyof typeof lastGood.current>(
+    const patch = <K extends keyof typeof stateRef.current>(
       key: K,
-      val: (typeof lastGood.current)[K] | null,
+      val: (typeof stateRef.current)[K],
     ) => {
-      if (cancelled.current) return;
-      if (val !== null) lastGood.current[key] = val;
+      stateRef.current[key] = val;
       setBundle((prev) => ({
         ...prev,
-        [key]: val !== null ? val : prev[key],
+        [key]: val,
         loading: false,
-        ...(val !== null && { lastFetched: Date.now() }),
+        lastFetched: Date.now(),
+        error: null,
       }));
+      writeLs(stateRef.current);
     };
 
-    const load = async () => {
-      await Promise.all([
-        fetchJson<ArbState>('/api/storage/source-state/crypto-arb')
-          .then((v) => patch('arb', v)).catch(() => patch('arb', null)),
-        fetchJson<TradeState>('/api/storage/source-state/crypto-trade')
-          .then((v) => patch('trade', v)).catch(() => patch('trade', null)),
-        fetchJson<UiSettings>('/api/storage/source-state/crypto-ui-settings')
-          .then((v) => patch('settings', v)).catch(() => patch('settings', null)),
-        fetchJson<ArbPipelineState>('/api/storage/source-state/arb-pipeline')
-          .then((v) => patch('pipeline', v)).catch(() => patch('pipeline', null)),
-      ]);
-      writeLs(lastGood.current);
+    const es = new EventSource('/api/stream');
+
+    es.addEventListener('state:arb', (e: MessageEvent) => {
+      try { patch('arb', JSON.parse(e.data) as ArbState); } catch {}
+    });
+    es.addEventListener('state:trade', (e: MessageEvent) => {
+      try { patch('trade', JSON.parse(e.data) as TradeState); } catch {}
+    });
+    es.addEventListener('state:pipeline', (e: MessageEvent) => {
+      try { patch('pipeline', JSON.parse(e.data) as ArbPipelineState); } catch {}
+    });
+    es.addEventListener('state:settings', (e: MessageEvent) => {
+      try { patch('settings', JSON.parse(e.data) as UiSettings); } catch {}
+    });
+
+    es.onerror = () => {
+      setBundle((prev) => {
+        if (prev.lastFetched !== null) return prev;
+        return { ...prev, error: 'stream error — reconnecting' };
+      });
     };
 
-    void load();
-    const id = window.setInterval(load, POLL_MS);
     return () => {
-      cancelled.current = true;
-      window.clearInterval(id);
+      es.close();
     };
   }, []);
 
@@ -133,4 +145,50 @@ export async function putUiSettings(next: UiSettings): Promise<boolean> {
     body: JSON.stringify(next),
   }).catch(() => null);
   return !!res?.ok;
+}
+
+/**
+ * A tick row from the `ticker` SSE event.
+ * Used by PairChart to update the current candle in realtime.
+ */
+export interface TickerTick {
+  pair: string;
+  exchange: string;
+  bid: number;
+  ask: number;
+  ts: number;
+}
+
+/**
+ * Subscribe to the ticker stream for a specific pair+exchange.
+ * Returns the latest bid/ask pushed ~every 500ms by the SSE route.
+ * Replaces the PairChart 10-second /api/candles polling for live price.
+ */
+export function useTickerStream(pair: string | null, exchange: string | null): TickerTick | null {
+  const [tick, setTick] = useState<TickerTick | null>(null);
+
+  useEffect(() => {
+    if (!pair || !exchange) {
+      setTick(null);
+      return;
+    }
+    const url = `/api/stream?ticker=${encodeURIComponent(`${pair}:${exchange}`)}`;
+    const es = new EventSource(url);
+
+    es.addEventListener('ticker', (e: MessageEvent) => {
+      try {
+        const ticks = JSON.parse(e.data) as TickerTick[];
+        const match = ticks.find((t) => t.pair === pair && t.exchange === exchange);
+        if (match) setTick(match);
+      } catch {}
+    });
+
+    es.onerror = () => {};
+
+    return () => {
+      es.close();
+    };
+  }, [pair, exchange]);
+
+  return tick;
 }
