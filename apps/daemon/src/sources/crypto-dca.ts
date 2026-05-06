@@ -198,11 +198,15 @@ export const cryptoDcaWorker: SourceWorker = {
       // Size each exchange's buys against its own available USD (not a
       // pro-rata slice of total equity). This way an exchange with $70
       // gets $70 worth of buys; one with $0.01 skips below-minimum checks.
-      // DCA_TOTAL_ALLOCATION_PCT still acts as a cap — default 80% so we
-      // keep a small reserve and don't overdraft on fees.
-      const allocPct = Math.min(100, Math.max(0, config.totalAllocationPct > 10
-        ? config.totalAllocationPct  // user overrode via env — respect it
-        : 80));                       // default: use 80% of each exchange's USD
+      // DCA_TOTAL_ALLOCATION_PCT acts as the cap. The previous version
+      // silently clobbered any value <= 10 to 80%, which made "DCA 2% of
+      // the bag" impossible to configure. Now: any explicit user value
+      // 0..100 wins; only when totalAllocationPct is 0 (not set) do we
+      // fall back to the 80% default.
+      const userPct = config.totalAllocationPct;
+      const allocPct = Math.min(100, Math.max(0,
+        userPct > 0 ? userPct : 80,
+      ));
       const now = Date.now();
       const buys: ReturnType<typeof decideDcaBuys> = [];
       for (const exchange of config.exchanges) {

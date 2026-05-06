@@ -110,7 +110,7 @@ export function StrategiesSection({
         onSave={saveDca}
       >
         <BoolRow field="DCA_ENABLED" label="DCA enabled?" value={dcaEnabled} onChange={setDcaEnabled} />
-        <NumberRow field="DCA_TOTAL_ALLOCATION_PCT" label="Total allocation %" value={dcaAllocPct} onChange={setDcaAllocPct} hint="% of account equity to DCA per cycle, e.g. 10" />
+        <NumberRow field="DCA_TOTAL_ALLOCATION_PCT" label="Total allocation %" value={dcaAllocPct} onChange={setDcaAllocPct} hint="% of each exchange's USD to DCA per cycle. Any value 0–100 is respected (e.g. 2 = 2%). Leave blank for the 80% default." />
         <NumberRow field="DCA_MAX_COINS" label="Max coins" value={dcaMaxCoins} onChange={setDcaMaxCoins} hint="e.g. 3" />
         <PlainTextRow field="DCA_COINS" label="Coins" value={dcaCoins} onChange={setDcaCoins} hint="Comma-separated: BTC,ETH,SOL" />
         <PlainTextRow field="DCA_EXCHANGES" label="Exchanges" value={dcaExchanges} onChange={setDcaExchanges} hint="Comma-separated: kraken,coinbase,binance-us,gemini" />
