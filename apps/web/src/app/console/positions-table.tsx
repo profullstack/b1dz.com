@@ -63,7 +63,17 @@ export function PositionsTable({ trade }: Props) {
                   title="Open in chart"
                 >
                   <td className={`px-3 py-1.5 ${exClass}`}>{p.exchange}</td>
-                  <td className="px-3 py-1.5 text-zinc-200 underline decoration-dotted decoration-zinc-700">{p.pair}</td>
+                  <td className="px-3 py-1.5 text-zinc-200">
+                    <span className="underline decoration-dotted decoration-zinc-700">{p.pair}</span>
+                    {p.restoredFromHydration && (
+                      <span
+                        className="ml-2 rounded border border-zinc-700 bg-zinc-800/60 px-1 py-px text-[9px] uppercase tracking-wider text-zinc-400"
+                        title="Synthesized from wallet balance during cold-start hydration. Trailing-stop and exit logic apply, but the venue is NOT blocked from opening fresh positions on other pairs."
+                      >
+                        held
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{volume.toFixed(6)}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">${value.toFixed(2)}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{entry > 0 ? `$${formatUsdPrice(entry)}` : '-'}</td>
