@@ -180,7 +180,7 @@ export function PairChart({
     const load = async () => {
       setFeedStatus('loading');
       try {
-        const url = `/api/candles?pair=${encodeURIComponent(pair)}&exchange=${encodeURIComponent(exchange)}&timeframe=${encodeURIComponent(timeframe)}&limit=120`;
+        const url = `/api/candles?pair=${encodeURIComponent(pair)}&exchange=${encodeURIComponent(exchange)}&timeframe=${encodeURIComponent(timeframe)}&limit=500`;
         const res = await fetch(url, { cache: 'no-store' });
         if (!res.ok) throw new Error(`http ${res.status}`);
         const body = (await res.json()) as { candles?: RawBar[] };
