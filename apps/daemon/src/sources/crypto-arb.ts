@@ -529,6 +529,21 @@ export const cryptoArbWorker: SourceWorker = {
         }
       }
 
+      // Periodic skip-reason summary so the daemon log shows *why* profitable
+      // spreads aren't seeding/liquidating. Decisions like 'no-stable-balance'
+      // or 'cooldown' are otherwise silent (only surfaced in the TUI labels).
+      if (tickCount % 15 === 0) {
+        for (const s of spreads) {
+          if (!s.profitable) continue;
+          if (s.seedStatus?.kind === 'seed') continue;
+          if (s.liqStatus?.kind === 'liquidate') continue;
+          const seedPart = s.seedLabel ? ` seed=${s.seedLabel}` : '';
+          const liqPart = s.liqLabel ? ` liq=${s.liqLabel}` : '';
+          if (!seedPart && !liqPart) continue;
+          logActivity(`[arb][skip] ${s.pair} ${s.buyExchange}→${s.sellExchange}${seedPart}${liqPart}`, 'crypto-arb');
+        }
+      }
+
     // ── Save everything every tick ──
     // Always overwrite private fields so stale balances/orders/trades do not
     // survive a failed fetch or a partially-updated worker.
