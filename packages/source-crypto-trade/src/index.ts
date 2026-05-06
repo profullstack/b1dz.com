@@ -200,8 +200,34 @@ interface Position {
   strategyId?: string;
   entryFee: number; // buy-side fee in USD — included in netPnl on close
   priceSamples: number[]; // bid samples per tick, capped at 20, for sparkline
+  /** True when this position was synthesized by the cold-start hydration
+   *  pass instead of being opened by an actual buy signal. Used by the
+   *  entry gate to NOT block fresh trades on the venue when the only
+   *  reason the gate would block is a stale wallet holding from a prior
+   *  session (or a manual buy outside the bot). The position itself is
+   *  still tracked so trailing stops + exit logic apply, but it doesn't
+   *  veto new opportunities. See `hasManagedPositionOnExchange`. */
+  restoredFromHydration?: boolean;
 }
 const openPositions = new Map<string, Position>();
+
+/** Per-phase timing breakdown for the most recent `cryptoTradeSource.poll()`
+ *  invocation. Read by the daemon worker to attach a phase-level
+ *  diagnostic to its slow-tick log line so ops can pinpoint which
+ *  phase is over budget without a separate profiling pass. */
+export interface PollPhaseTimings {
+  hydrateMs: number;
+  balancesMs: number;
+  discoverMs: number;
+  scanMs: number;
+  marketMinsMs: number;
+  pairs: number;
+  items: number;
+}
+let lastPollPhaseTimings: PollPhaseTimings | null = null;
+export function getLastPollPhaseTimings(): PollPhaseTimings | null {
+  return lastPollPhaseTimings;
+}
 interface PendingLiquidation {
   exchange: string;
   pair: string;
@@ -240,10 +266,26 @@ function recordDailyFee(usd: number): void {
   if (Number.isFinite(usd) && usd > 0) dailyFees += usd;
 }
 
-/** One position per exchange — check if THIS exchange already has a position. */
+/** Any position on this exchange (including hydration-restored ones).
+ *  Used by liquidation/funding helpers that need to know about EVERY
+ *  asset we hold on the venue, regardless of how it got there. */
 function hasPositionOnExchange(exchange: string): boolean {
   for (const pos of openPositions.values()) {
     if (pos.exchange === exchange) return true;
+  }
+  return false;
+}
+
+/** A position that was actually opened by the strategy (i.e. NOT a
+ *  passively-restored wallet holding from a prior session or a manual
+ *  buy outside the bot). The "one position per exchange" entry gate
+ *  uses this so leftover wallet inventory doesn't permanently lock the
+ *  venue out of fresh entries — the entry gate's intent is "don't
+ *  pyramid into the same venue" not "freeze the venue forever because
+ *  I have $30 of DASH sitting there from last week." */
+function hasManagedPositionOnExchange(exchange: string): boolean {
+  for (const pos of openPositions.values()) {
+    if (pos.exchange === exchange && !pos.restoredFromHydration) return true;
   }
   return false;
 }
@@ -391,6 +433,7 @@ function restorePosition(
     highWaterMark: entryPrice,
     entryFee: 0, // unknown for externally-detected positions
     priceSamples: [],
+    restoredFromHydration: true,
   });
   pendingLiquidations.delete(`${exchange}:${pair}`);
   console.log(`[trade] RESTORED from exchange: ${exchange}:${pair} ${volume} @ $${entryPrice.toFixed(2)} (${reason})`);
@@ -748,6 +791,24 @@ export function __resetTradeStateForTests(): void {
   dailyEquityBaselineUsd = 0;
 }
 
+/** Test hook: directly install a Position into the open-positions map.
+ *  Used by hasManagedPositionOnExchange tests to assert the
+ *  restored-vs-managed distinction without standing up the whole
+ *  hydration pipeline. */
+export function __seedOpenPositionForTests(pos: Position): void {
+  openPositions.set(`${pos.exchange}:${pos.pair}`, pos);
+}
+
+/** Test hook: read an open position by (exchange, pair). */
+export function __getOpenPositionForTests(exchange: string, pair: string): Position | null {
+  return openPositions.get(`${exchange}:${pair}`) ?? null;
+}
+
+/** Test hook: expose the predicate used by the entry gate. */
+export function __hasManagedPositionOnExchangeForTests(exchange: string): boolean {
+  return hasManagedPositionOnExchange(exchange);
+}
+
 export function __seedAnalysisStateForTests(exchange: string, pair: string, state: Omit<PersistedAnalysisState, 'exchange' | 'pair'>): void {
   analysisStates.set(`${exchange}:${pair}`, {
     entryCandles: state.entryCandles,
@@ -957,15 +1018,13 @@ function maybeRotatePosition(item: TradeItem, sig: Signal, strategyId: string): 
   });
 }
 
-async function refreshSpendableQuoteBalances(): Promise<void> {
-  if (Date.now() - lastQuoteBalanceRefresh < QUOTE_BALANCE_REFRESH_MS) return;
-  lastQuoteBalanceRefresh = Date.now();
-
+async function refreshKrakenBalances(): Promise<void> {
   try {
     const [bal, openOrders] = await Promise.all([getKrakenBalance(), getKrakenOpenOrders()]);
     accountBalances.kraken = bal;
     const now = Date.now();
     let reservedUsd = 0;
+    const stalenessCancellations: Promise<void>[] = [];
     for (const [txid, order] of Object.entries(openOrders ?? {})) {
       const type = order?.descr?.type?.toLowerCase?.() ?? '';
       const pair = order?.descr?.pair?.toUpperCase?.() ?? '';
@@ -979,17 +1038,24 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
         reservedUsd += remaining * price;
       }
       if (openAtMs > 0 && now - openAtMs > STALE_OPEN_BUY_ORDER_MS) {
-        try {
-          await cancelKrakenOrder(txid);
-          console.log(`[trade] canceled stale kraken buy order ${pair} txid=${txid}`);
-          if (pair.endsWith('USD') && Number.isFinite(price) && price > 0) {
-            reservedUsd = Math.max(0, reservedUsd - (remaining * price));
-          }
-        } catch (cancelError) {
-          console.log(`[trade] failed to cancel stale kraken order ${txid}: ${(cancelError as Error).message}`);
-        }
+        // Fire-and-await in parallel — n>1 stale orders happens routinely
+        // on illiquid pairs and serializing the cancels here adds another
+        // 100-500ms × order to the tick.
+        stalenessCancellations.push(
+          cancelKrakenOrder(txid)
+            .then(() => {
+              console.log(`[trade] canceled stale kraken buy order ${pair} txid=${txid}`);
+              if (pair.endsWith('USD') && Number.isFinite(price) && price > 0) {
+                reservedUsd = Math.max(0, reservedUsd - (remaining * price));
+              }
+            })
+            .catch((cancelError) => {
+              console.log(`[trade] failed to cancel stale kraken order ${txid}: ${(cancelError as Error).message}`);
+            }),
+        );
       }
     }
+    if (stalenessCancellations.length > 0) await Promise.allSettled(stalenessCancellations);
     spendableQuoteBalances.kraken = {
       USD: Math.max(0, parseFloat(bal.ZUSD ?? '0') - reservedUsd),
       USDC: parseFloat(bal.USDC ?? '0'),
@@ -1004,7 +1070,9 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     }
     console.log(`[trade] kraken balance fetch failed: ${msg}`);
   }
+}
 
+async function refreshCoinbaseBalances(): Promise<void> {
   try {
     const [availableBal, totalBal] = await Promise.all([getCoinbaseAvailableBalance(), getCoinbaseBalance()]);
     accountBalances.coinbase = totalBal;
@@ -1018,7 +1086,9 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     accountBalances.coinbase = {};
     console.log(`[trade] coinbase balance fetch failed: ${(e as Error).message}`);
   }
+}
 
+async function refreshBinanceBalances(): Promise<void> {
   try {
     const bal = await getBinanceBalance();
     accountBalances['binance-us'] = bal;
@@ -1032,7 +1102,9 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     accountBalances['binance-us'] = {};
     console.log(`[trade] binance balance fetch failed: ${(e as Error).message}`);
   }
+}
 
+async function refreshGeminiBalances(): Promise<void> {
   try {
     const bal = await getGeminiBalance();
     accountBalances.gemini = bal;
@@ -1047,25 +1119,44 @@ async function refreshSpendableQuoteBalances(): Promise<void> {
     accountBalances.gemini = {};
     console.log(`[trade] gemini balance fetch failed: ${(e as Error).message}`);
   }
+}
 
-  // DEX venues: populate from the injected executor (wallet USDC). With
-  // no executor wired we leave these empty — the evaluate() gate falls
-  // back to DEX_TRADE_BUDGET_USD so signals still flow into the TUI.
-  if (dexExecutor) {
-    for (const venue of ['uniswap-v3', 'jupiter'] as const) {
-      try {
-        const usdc = await dexExecutor.quoteBalanceUsd(venue);
-        if (typeof usdc === 'number' && Number.isFinite(usdc)) {
-          spendableQuoteBalances[venue] = { USDC: Math.max(0, usdc), USDT: 0, USD: 0 };
-        } else {
-          spendableQuoteBalances[venue] = {};
-        }
-      } catch (e) {
-        spendableQuoteBalances[venue] = {};
-        console.log(`[trade] ${venue} balance fetch failed: ${(e as Error).message}`);
-      }
+async function refreshDexBalance(venue: 'uniswap-v3' | 'jupiter'): Promise<void> {
+  if (!dexExecutor) return;
+  try {
+    const usdc = await dexExecutor.quoteBalanceUsd(venue);
+    if (typeof usdc === 'number' && Number.isFinite(usdc)) {
+      spendableQuoteBalances[venue] = { USDC: Math.max(0, usdc), USDT: 0, USD: 0 };
+    } else {
+      spendableQuoteBalances[venue] = {};
     }
+  } catch (e) {
+    spendableQuoteBalances[venue] = {};
+    console.log(`[trade] ${venue} balance fetch failed: ${(e as Error).message}`);
   }
+}
+
+async function refreshSpendableQuoteBalances(): Promise<void> {
+  if (Date.now() - lastQuoteBalanceRefresh < QUOTE_BALANCE_REFRESH_MS) return;
+  lastQuoteBalanceRefresh = Date.now();
+
+  // Parallel fanout — every venue's balance fetch is independent. The
+  // previous sequential run summed every venue's HTTP latency, which on
+  // a slow Coinbase day (their API has occasional 5-10s hiccups) was
+  // enough to push the trade tick past the TUI's 30s "stale" threshold
+  // even though the daemon was perfectly healthy. `allSettled` makes
+  // sure one venue's auth failure doesn't abort the others.
+  const refreshes: Array<Promise<void>> = [
+    refreshKrakenBalances(),
+    refreshCoinbaseBalances(),
+    refreshBinanceBalances(),
+    refreshGeminiBalances(),
+  ];
+  if (dexExecutor) {
+    refreshes.push(refreshDexBalance('uniswap-v3'));
+    refreshes.push(refreshDexBalance('jupiter'));
+  }
+  await Promise.allSettled(refreshes);
 }
 
 function spendableQuoteFor(exchange: string, pair: string): number {
@@ -1447,7 +1538,17 @@ async function hydrateFromExchange() {
 
   const wasFirstRun = hydratedExchanges.size < steps.length;
 
-  for (const step of due) {
+  // Parallel fanout — each exchange's hydration is API-heavy and
+  // independent of the others. The previous sequential `for await` loop
+  // serialized every venue's REST round-trips, and one slow exchange
+  // (Coinbase under load is a common culprit) added its full latency to
+  // every other venue's gate. With 4 CEXes + 1 DEX leg averaging ~3s
+  // each, a sequential pass burned ~15s per re-hydration tick — long
+  // enough to push `lastTickAt` past the TUI's 30s "stale" threshold.
+  // `allSettled` is the right primitive here: one venue's failure must
+  // not abort the others, and per-venue try/catch was already handling
+  // errors locally.
+  await Promise.allSettled(due.map(async (step) => {
     try {
       await step.fn();
       hydratedExchanges.add(step.exchange);
@@ -1457,7 +1558,7 @@ async function hydrateFromExchange() {
       // Intentionally DON'T stamp lastHydratedAtMs on failure — we want to
       // retry next tick rather than wait out REHYDRATE_INTERVAL_MS.
     }
-  }
+  }));
 
   if (wasFirstRun && hydratedExchanges.size === steps.length && openPositions.size === 0) {
     console.log('[trade] no crypto holdings found — starting clean');
@@ -1523,6 +1624,10 @@ export function restorePersistedTradeState(state: Record<string, unknown> | unde
       strategyId: pos.strategyId,
       entryFee: Number.isFinite(pos.entryFee) ? pos.entryFee : 0,
       priceSamples: Array.isArray(pos.priceSamples) ? pos.priceSamples : [],
+      // Restored hydration flag survives the persisted-state round-trip
+      // so a passively-held wallet position from a previous daemon run
+      // doesn't get re-classified as "managed" after restart.
+      restoredFromHydration: pos.restoredFromHydration === true,
     });
   }
   lastExitAt.clear();
@@ -1755,8 +1860,8 @@ export function getDexExecutor(): DexTradeExecutor | null {
 
 /** Live status snapshot for TUI display. */
 export interface TradeStatus {
-  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples: number[] }[];
-  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples: number[] } | null;
+  positions: { exchange: string; pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples: number[]; restoredFromHydration?: boolean }[];
+  position: { pair: string; entryPrice: number; currentPrice: number; volume: number; pnlPct: number; pnlUsd: number; stopPrice: number; elapsed: string; priceSamples: number[]; restoredFromHydration?: boolean } | null;
   dailyPnl: number;
   dailyPnlPct: number;
   dailyFees: number;
@@ -1773,6 +1878,12 @@ export interface TradeStatus {
   tradingOverride: boolean | null;
   dexExecutionEnabled: boolean;
   dexExecutorArmed: boolean;
+  /** Wallet USDC balance per DEX venue (uniswap-v3, jupiter), in USD.
+   *  Surfaced so the TUI Holdings panel and ops dashboards can show
+   *  whether the DEX legs have funds — previously DEX wallets were
+   *  invisible to operators and the only way to know if execution
+   *  could fire was to grep `[trade] DEX-BUY SKIPPED` after the fact. */
+  dexBalances: { venue: string; usdc: number }[];
 }
 
 export function getTradeStatus(): TradeStatus {
@@ -1809,6 +1920,7 @@ export function getTradeStatus(): TradeStatus {
         stopPrice: trailingStopPrice(pos),
         elapsed: elapsed + stale,
         priceSamples: [...pos.priceSamples],
+        restoredFromHydration: pos.restoredFromHydration === true ? true : undefined,
       };
     })
     .filter((pos) => (pos.currentPrice * pos.volume) >= DUST_USD_THRESHOLD);
@@ -1848,6 +1960,10 @@ export function getTradeStatus(): TradeStatus {
     tradingOverride,
     dexExecutionEnabled: (process.env.DEX_TRADE_EXECUTION ?? '').toLowerCase() !== 'false',
     dexExecutorArmed: dexExecutor !== null,
+    dexBalances: (['uniswap-v3', 'jupiter'] as const).map((venue) => ({
+      venue,
+      usdc: Math.max(0, spendableQuoteBalances[venue]?.USDC ?? 0),
+    })),
   };
 }
 
@@ -2016,16 +2132,28 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     pollIntervalMs: 5000,
 
     async poll(ctx) {
+      // Per-phase timings — captured in lastPollPhaseTimings so the
+      // daemon worker can include them in its slow-tick log line. The
+      // TUI's 30s stale threshold is unforgiving and "stale 52s" with
+      // no breakdown is unactionable; with the breakdown ops can see
+      // at a glance whether it's hydration (5min cadence — likely),
+      // balance refresh (60s — possible), the per-pair scan, or the
+      // market-minimums refresh.
       restorePersistedTradeState(ctx.state);
       // Reconcile tracked positions with exchange state. On cold start this
       // restores positions from fill history; thereafter it runs on a slow
       // cadence (REHYDRATE_INTERVAL_MS) to pick up externally-made buys.
+      const tHydrateStart = Date.now();
       await hydrateFromExchange();
+      const tHydrate = Date.now() - tHydrateStart;
+      const tBalStart = Date.now();
       await refreshSpendableQuoteBalances();
+      const tBalances = Date.now() - tBalStart;
       pendingBuyExchange = null;
       attemptedExchangeActions.clear();
       tradePollCount++;
 
+      const tDiscoverStart = Date.now();
       const cexPairs = await getActivePairs();
       // Inject DEX-native pairs so the DEX feeds (Uniswap V3, Jupiter)
       // actually get scanned by the momentum engine. Canonical names with
@@ -2037,6 +2165,8 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       lastEligiblePairs = [...PAIRS];
       pruneInactivePairState(PAIRS);
       await refreshPerExchangeVolumesIfStale();
+      const tDiscover = Date.now() - tDiscoverStart;
+      const tScanStart = Date.now();
       const items: TradeItem[] = [];
       // Poll each pair on each exchange — one position per exchange
       // Parallel snapshot fanout per pair (6 feeds in flight at once instead of
@@ -2093,7 +2223,10 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           }
         }
       }
+      const tScan = Date.now() - tScanStart;
+      const tMmStart = Date.now();
       await refreshMarketMinimums(PAIRS);
+      const tMarketMins = Date.now() - tMmStart;
       refreshDailyEquityBaselineIfNeeded();
       if (tradePollCount % 4 === 0) {
         const status = getTradeStatus();
@@ -2103,6 +2236,15 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }).join(' | ');
         console.log(`[trade] status ${summary}`);
       }
+      lastPollPhaseTimings = {
+        hydrateMs: tHydrate,
+        balancesMs: tBalances,
+        discoverMs: tDiscover,
+        scanMs: tScan,
+        marketMinsMs: tMarketMins,
+        pairs: PAIRS.length,
+        items: items.length,
+      };
       return items;
     },
 
@@ -2266,11 +2408,20 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null;
       }
 
-      // Already have a position for this pair on this exchange
+      // Already have a position for this pair on this exchange — never
+      // pyramid the same asset.
       const posKey2 = `${tradeExchange}:${item.pair}`;
       if (openPositions.has(posKey2)) return null;
 
-      if (hasPositionOnExchange(tradeExchange)) {
+      // "One position per exchange" gate. Restored hydration positions
+      // (= passive wallet holdings the bot didn't open itself, e.g.
+      // leftover DASH on Coinbase from a prior session) are intentionally
+      // ignored here. Without this filter, a $30 spendable USD balance
+      // on Coinbase + a $29 untracked DASH holding would lock the venue
+      // out of trading forever, which is the user-visible symptom we hit
+      // in production: only Gemini opened new positions because every
+      // other CEX had a hydration-restored holding sitting on it.
+      if (hasManagedPositionOnExchange(tradeExchange)) {
         return maybeRotatePosition(item, sig, strategyId);
       }
 
