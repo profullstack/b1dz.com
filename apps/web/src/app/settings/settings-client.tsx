@@ -5,11 +5,12 @@ import { WalletsSection } from './sections/wallets';
 import { SolanaSection } from './sections/solana';
 import { ThresholdsSection } from './sections/thresholds';
 import { StrategiesSection } from './sections/strategies';
+import { TogglesSection } from './sections/toggles';
 import { PluginsSection } from './sections/plugins';
 import type { SettingsResponse } from './shared';
 import { importKey } from '@/lib/browser-crypto';
 
-type Tab = 'plugins' | 'wallets' | 'solana' | 'thresholds' | 'strategies';
+type Tab = 'plugins' | 'wallets' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'plugins', label: 'Plugins' },
@@ -17,6 +18,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'solana', label: 'Solana' },
   { id: 'thresholds', label: 'Thresholds' },
   { id: 'strategies', label: 'Strategies' },
+  { id: 'toggles', label: 'Toggles' },
 ];
 
 export function SettingsClient() {
@@ -112,6 +114,7 @@ export function SettingsClient() {
           {tab === 'solana' && <SolanaSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'thresholds' && <ThresholdsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'strategies' && <StrategiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
+          {tab === 'toggles' && <TogglesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
         </div>
       )}
     </div>
