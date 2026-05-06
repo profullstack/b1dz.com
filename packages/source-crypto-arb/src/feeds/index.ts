@@ -12,6 +12,8 @@ export {
   getAllSnapshots,
   cacheSize as wsCacheSize,
   setWsLogger,
+  healthSnapshot as wsHealthSnapshot,
   __resetWsCacheForTests,
   __getWsCacheStateForTests,
+  __injectGeminiFrameForTests,
 } from './ws-price-cache.js';
