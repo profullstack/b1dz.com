@@ -1,16 +1,22 @@
 'use client';
 
 import { formatUsdPrice, fmtAmount, parseBalances, buildPriceOf, KRAKEN_NAME_MAP, STABLECOINS } from './format';
-import type { ArbState } from '@/lib/source-state-types';
+import type { ArbState, TradeState } from '@/lib/source-state-types';
 import { pinPair } from '@/lib/chart-pinner';
 
 interface Props {
   arb: ArbState | null;
+  /** Optional — when present, the panel renders DEX wallet USDC rows
+   *  (Uniswap V3 on Base, Jupiter on Solana) sourced from the trade
+   *  daemon's per-venue balance refresh. Operators previously had no
+   *  in-UI signal that DEX legs had funds; the only tell was greppping
+   *  `[trade] DEX-BUY SKIPPED` after the fact. */
+  trade?: TradeState | null;
 }
 
 const DUST = 1.0;
 
-export function HoldingsPanel({ arb }: Props) {
+export function HoldingsPanel({ arb, trade }: Props) {
   const priceOf = buildPriceOf(arb?.prices);
 
   const krakenHoldings = parseBalances(arb?.krakenBalance, priceOf, KRAKEN_NAME_MAP);
@@ -37,11 +43,23 @@ export function HoldingsPanel({ arb }: Props) {
 
   const sumValue = (h: { usdValue: number }[]) => h.reduce((s, x) => s + x.usdValue, 0);
 
+  const dexBalances = trade?.tradeStatus?.dexBalances ?? [];
+  const dexExecutorArmed = trade?.tradeStatus?.dexExecutorArmed === true;
+  const uniBalance = dexBalances.find((d) => d.venue === 'uniswap-v3')?.usdc ?? 0;
+  const jupBalance = dexBalances.find((d) => d.venue === 'jupiter')?.usdc ?? 0;
+  const showDex = dexExecutorArmed || uniBalance > 0 || jupBalance > 0;
+
   const exchangeSummaries = [
     { key: 'kraken', label: 'Kraken', color: 'text-cyan-400', value: sumValue(krakenHoldings) },
     { key: 'binance', label: 'Binance', color: 'text-yellow-400', value: sumValue(binanceDetailed.length ? binanceDetailed : binanceHoldings) },
     { key: 'coinbase', label: 'Coinbase', color: 'text-fuchsia-400', value: sumValue(coinbaseHoldings) },
     { key: 'gemini', label: 'Gemini', color: 'text-blue-400', value: sumValue(geminiHoldings) },
+    ...(showDex
+      ? [
+          { key: 'uniswap-v3', label: 'Uniswap', color: 'text-emerald-400', value: uniBalance },
+          { key: 'jupiter', label: 'Jupiter', color: 'text-emerald-400', value: jupBalance },
+        ]
+      : []),
   ];
 
   const totalValue = exchangeSummaries.reduce((s, x) => s + x.value, 0);
@@ -148,6 +166,30 @@ export function HoldingsPanel({ arb }: Props) {
                 unitPrice={h.unitPrice}
               />
             ))}
+            {showDex && (
+              <>
+                <Row
+                  key="uni-usdc"
+                  exchange="uniswap-v3"
+                  color="text-emerald-400"
+                  asset="USDC"
+                  free={uniBalance}
+                  freeUsd={uniBalance}
+                  isStable={true}
+                  unitPrice={1}
+                />
+                <Row
+                  key="jup-usdc"
+                  exchange="jupiter"
+                  color="text-emerald-400"
+                  asset="USDC"
+                  free={jupBalance}
+                  freeUsd={jupBalance}
+                  isStable={true}
+                  unitPrice={1}
+                />
+              </>
+            )}
             {arb?.binanceOpenOrders?.map((o) => {
               const remaining = parseFloat(o.origQty) - parseFloat(o.executedQty);
               const price = parseFloat(o.price);

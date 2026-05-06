@@ -57,6 +57,12 @@ export interface TradeStatusData {
     stopPrice: number;
     elapsed: string;
     priceSamples?: number[];
+    /** True when this position was synthesized from wallet balance
+     *  during cold-start hydration rather than opened by a real buy
+     *  signal. The entry gate ignores these for the "one position per
+     *  exchange" rule so leftover wallet inventory doesn't lock the
+     *  venue out of fresh entries. */
+    restoredFromHydration?: boolean;
   }[];
   position?: {
     pair: string;
@@ -85,6 +91,12 @@ export interface TradeStatusData {
   lastSignal?: string | null;
   dexExecutionEnabled?: boolean;
   dexExecutorArmed?: boolean;
+  /** Wallet USDC balance per DEX venue (uniswap-v3, jupiter), in USD.
+   *  Surfaced so the Holdings panel can render DEX rows alongside the
+   *  CEX exchanges — previously DEX wallets were invisible and the
+   *  only way to know if execution could fire was to grep the
+   *  activity log for `[trade] DEX-BUY SKIPPED`. */
+  dexBalances?: { venue: string; usdc: number }[];
 }
 
 export interface TradeState {

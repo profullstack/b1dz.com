@@ -28,7 +28,7 @@ export function ConsoleClient() {
         <PositionsTable trade={bundle.trade} />
         <div className="grid gap-4 lg:grid-cols-2">
           <SpreadsTable arb={bundle.arb} />
-          <HoldingsPanel arb={bundle.arb} />
+          <HoldingsPanel arb={bundle.arb} trade={bundle.trade} />
         </div>
         <FooterTabs arb={bundle.arb} trade={bundle.trade} pipeline={bundle.pipeline} />
         {bundle.error && (
