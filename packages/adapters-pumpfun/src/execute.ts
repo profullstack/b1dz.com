@@ -72,30 +72,30 @@ export async function executePumpFunTrade(
     pool = 'pump',
   } = params;
 
-  // Build query parameters for pumpportal trade-local endpoint.
-  const url = new URL(`${PUMPPORTAL_BASE}/trade-local`);
-  url.searchParams.set('publicKey', publicKey);
-  url.searchParams.set('action', action);
-  url.searchParams.set('mint', mint);
-  url.searchParams.set('slippage', String(slippagePct));
-  url.searchParams.set('priorityFee', String(priorityFeeSol));
-  url.searchParams.set('pool', pool);
-
-  if (action === 'buy') {
-    const amount = amountSol ?? 0.01;
-    url.searchParams.set('denominatedInSol', 'true');
-    url.searchParams.set('amount', String(amount));
-  } else {
-    // Sell: amount is in tokens (denominatedInSol=false).
-    const amount = amountTokens ?? 0;
-    url.searchParams.set('denominatedInSol', 'false');
-    url.searchParams.set('amount', String(amount));
-  }
+  // pumpportal /trade-local expects POST with a JSON body (not GET+query).
+  const tradeBody: Record<string, unknown> = {
+    publicKey,
+    action,
+    mint,
+    slippage: slippagePct,
+    priorityFee: priorityFeeSol,
+    pool,
+    ...(action === 'buy'
+      ? { denominatedInSol: 'true', amount: amountSol ?? 0.01 }
+      : { denominatedInSol: 'false', amount: amountTokens ?? 0 }),
+  };
 
   // Fetch the raw serialized transaction bytes.
   let txBytes: Uint8Array;
   try {
-    const res = await fetch(url.toString(), { headers: { accept: 'application/octet-stream' } });
+    const res = await fetch(`${PUMPPORTAL_BASE}/trade-local`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/octet-stream',
+      },
+      body: JSON.stringify(tradeBody),
+    });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       return {
