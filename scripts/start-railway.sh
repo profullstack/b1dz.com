@@ -7,6 +7,9 @@ export REDIS_URL
 
 DAEMON_RESTART_DELAY="${DAEMON_RESTART_DELAY:-5}"
 DAEMON_MAX_DELAY="${DAEMON_MAX_DELAY:-60}"
+DAEMON_LOG="${DAEMON_LOG:-/var/log/b1dz-daemon.log}"
+mkdir -p "$(dirname "$DAEMON_LOG")"
+: > "$DAEMON_LOG" || true
 
 mkdir -p /tmp/redis
 redis-server \
@@ -29,17 +32,19 @@ pnpm --filter @b1dz/web start &
 WEB_PID=$!
 
 # Daemon supervisor loop — crashes restart with backoff, web stays up.
+# All daemon output is tee'd to $DAEMON_LOG so it can be tailed via `railway ssh`,
+# while still being echoed to PID 1's stdout for Railway's log stream.
 daemon_supervisor() {
   local delay="$DAEMON_RESTART_DELAY"
   while true; do
-    echo "railway-supervisor: starting daemon"
-    pnpm daemon &
+    echo "railway-supervisor: starting daemon" | tee -a "$DAEMON_LOG"
+    pnpm daemon > >(tee -a "$DAEMON_LOG") 2>&1 &
     DAEMON_PID=$!
     if wait "$DAEMON_PID"; then
-      echo "railway-supervisor: daemon exited cleanly — not restarting"
+      echo "railway-supervisor: daemon exited cleanly — not restarting" | tee -a "$DAEMON_LOG"
       break
     else
-      echo "railway-supervisor: daemon crashed (exit $?) — restarting in ${delay}s"
+      echo "railway-supervisor: daemon crashed (exit $?) — restarting in ${delay}s" | tee -a "$DAEMON_LOG"
       sleep "$delay"
       delay=$(( delay * 2 > DAEMON_MAX_DELAY ? DAEMON_MAX_DELAY : delay * 2 ))
     fi
