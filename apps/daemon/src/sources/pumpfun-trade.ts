@@ -28,6 +28,30 @@ import {
 } from '@b1dz/adapters-pumpfun';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
 
+/** Pull a recent SOL/USD price from the crypto-arb worker's persisted prices
+ *  array so the panel can show USD P&L on pump.fun positions. The arb worker
+ *  refreshes prices every couple seconds, so this is at most a few seconds
+ *  stale — accurate enough for an approximate P&L display. Returns 0 when no
+ *  cached price is available (UI falls back to %-only). */
+async function readSolUsdRef(ctx: UserContext): Promise<number> {
+  try {
+    const { data } = await ctx.supabase
+      .from('source_state')
+      .select('payload')
+      .eq('user_id', ctx.userId)
+      .eq('source_id', 'crypto-arb')
+      .maybeSingle();
+    const prices = (data?.payload as { prices?: { pair: string; bid: number }[] } | null)?.prices ?? [];
+    let best = 0;
+    for (const p of prices) {
+      if (p.pair === 'SOL-USD' && Number.isFinite(p.bid) && p.bid > best) best = p.bid;
+    }
+    return best;
+  } catch {
+    return 0;
+  }
+}
+
 const PUMP_API_BASE = 'https://frontend-api-v3.pump.fun';
 
 /** Cap on mcapSamples per position so payloads don't grow unbounded. */
@@ -268,10 +292,14 @@ async function runTick(ctx: UserContext): Promise<void> {
     if (remainingPositions.length >= 3) break;
   }
 
+  // ── SOL/USD reference price for the panel's USD P&L column ─────
+  const solUsdRef = await readSolUsdRef(ctx);
+
   // ── Persist state ─────────────────────────────────────────────
   await ctx.savePayload({
     enabled: true,
     positions: remainingPositions,
+    solUsdRef,
     activityLog: getActivityLog('pumpfun-trade'),
     rawLog: getRawLog('pumpfun-trade'),
     daemon: {

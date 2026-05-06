@@ -27,6 +27,7 @@ export function PumpfunPanel({ pumpfun }: Props) {
   const positions = pumpfun?.positions ?? [];
   const enabled = pumpfun?.enabled ?? false;
   const status = pumpfun?.daemon?.status ?? '-';
+  const solUsdRef = pumpfun?.solUsdRef ?? 0;
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/80">
@@ -65,12 +66,11 @@ export function PumpfunPanel({ pumpfun }: Props) {
               const now = Number.isFinite(p.currentMarketCapUsd) ? (p.currentMarketCapUsd as number) : 0;
               const havePnl = entry > 0 && now > 0;
               const pnlPct = havePnl ? ((now - entry) / entry) * 100 : 0;
-              // Approximate USD P&L: we don't track SOL/USD per position, so
-              // base it on the same mcap ratio applied to USD-spent — for a
-              // bonding-curve token, mcap and our holdings move together.
-              // (Skips when we have no current mcap yet.)
-              const usdSpent = p.solSpent * 0; // unknown SOL price; show only %
-              const pnlUsdApprox = havePnl ? usdSpent * (pnlPct / 100) : 0;
+              // Approximate USD P&L. solSpent is constant; the bonding-curve
+              // ratio gives us the position's value vs cost in SOL terms;
+              // multiplying by the worker's solUsdRef converts to USD.
+              const usdSpent = solUsdRef > 0 ? p.solSpent * solUsdRef : 0;
+              const pnlUsdApprox = havePnl && usdSpent > 0 ? usdSpent * (pnlPct / 100) : 0;
               const pnlClass = pnlPct >= 0 ? 'text-emerald-400' : 'text-red-400';
 
               return (

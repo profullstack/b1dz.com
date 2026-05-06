@@ -183,6 +183,9 @@ export interface PumpfunPosition {
 export interface PumpfunState {
   enabled?: boolean;
   positions?: PumpfunPosition[];
+  /** Recent SOL/USD price (from the arb worker's price cache) — used by
+   *  the panel to convert per-position SOL P&L into approximate USD. */
+  solUsdRef?: number;
   activityLog?: { at: string; text: string }[];
   rawLog?: { at: string; text: string }[];
   daemon?: { lastTickAt: string; worker: string; status: string; version?: string };

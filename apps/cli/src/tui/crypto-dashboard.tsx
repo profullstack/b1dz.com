@@ -139,6 +139,7 @@ interface PumpfunPosition {
 interface PumpfunState {
   enabled?: boolean;
   positions?: PumpfunPosition[];
+  solUsdRef?: number;
   daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
 }
 
@@ -1469,19 +1470,26 @@ function DashboardInner() {
   // Build pump.fun rows (in same activity style as Positions). Done here so
   // we can size the panel before computing chart heights.
   const pumpfunPositions = pumpfunState?.positions ?? [];
+  const solUsdRef = pumpfunState?.solUsdRef ?? 0;
   const pumpfunLines: string[] = pumpfunPositions.length === 0
     ? []
     : [
-        ' Symbol      MCAP now    PnL %       SOL    Age    Chart',
+        ' Symbol      MCAP now    PnL                  SOL    Age    Chart',
         ...pumpfunPositions.map((p) => {
           const entry = p.entryMarketCapUsd;
           const now = p.currentMarketCapUsd ?? 0;
           const havePnl = entry > 0 && now > 0;
           const pnlPct = havePnl ? ((now - entry) / entry) * 100 : 0;
+          const usdSpent = solUsdRef > 0 ? p.solSpent * solUsdRef : 0;
+          const pnlUsd = havePnl && usdSpent > 0 ? usdSpent * (pnlPct / 100) : 0;
           const pnlColor = pnlPct >= 0 ? 'green' : 'red';
           const symbol = (p.symbol ?? p.mint.slice(0, 6)).slice(0, 10).padEnd(10);
           const mcapNow = (now > 0 ? `$${now.toFixed(0)}` : '—').padStart(8);
-          const pnlStr = havePnl ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : '—';
+          const pnlStr = havePnl
+            ? (usdSpent > 0
+              ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}% ($${pnlUsd.toFixed(2)})`
+              : `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`)
+            : '—';
           const sol = p.solSpent.toFixed(4);
           const ageMs = Date.now() - p.entryAt;
           const ageStr =
@@ -1489,7 +1497,7 @@ function DashboardInner() {
             : ageMs < 3_600_000 ? `${Math.floor(ageMs / 60_000)}m`
             : `${Math.floor(ageMs / 3_600_000)}h${Math.floor((ageMs % 3_600_000) / 60_000)}m`;
           const spark = unicodeSparkline(p.mcapSamples, 10);
-          return ` {magenta-fg}${symbol}{/}  ${mcapNow}  {${pnlColor}-fg}${pnlStr.padStart(8)}{/}  ${sol}  ${ageStr.padStart(5)}  ${spark}`;
+          return ` {magenta-fg}${symbol}{/}  ${mcapNow}  {${pnlColor}-fg}${pnlStr.padEnd(18)}{/}  ${sol}  ${ageStr.padStart(5)}  ${spark}`;
         }),
       ];
 

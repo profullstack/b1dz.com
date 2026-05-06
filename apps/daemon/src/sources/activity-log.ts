@@ -9,7 +9,11 @@ interface LogEntry {
 }
 
 const MAX_ACTIVITY_ENTRIES = 100;
-const MAX_RAW_ENTRIES = 2000;
+// Was 2000; trimmed to 500 since the per-source ring buffer (×5 sources, ×2
+// kinds) was the largest non-essential allocation in the daemon's payload.
+// Keeps ~3MB out of process state at steady state without losing meaningful
+// debug history.
+const MAX_RAW_ENTRIES = 500;
 const ACTIVITY_BUFFER_KEY = 'activity';
 const RAW_BUFFER_KEY = 'raw';
 const buffers = new Map<string, LogEntry[]>();
