@@ -155,6 +155,33 @@ export async function putUiSettings(next: UiSettings): Promise<boolean> {
 }
 
 /**
+ * Queue a manual sell on the pump.fun worker for the given mint. The
+ * worker drains `manualSellRequests` on its next tick (~10s) and force-
+ * sells regardless of strategy thresholds.
+ *
+ * Race-vulnerable across tabs (last-write-wins on the array), but the
+ * pump.fun worker drains every tick so duplicates resolve themselves
+ * within one cycle.
+ */
+export async function requestPumpfunSell(mint: string): Promise<boolean> {
+  const getRes = await fetch('/api/storage/source-state/pumpfun-trade', { cache: 'no-store' }).catch(() => null);
+  if (!getRes?.ok) return false;
+  const body = (await getRes.json()) as { value: Record<string, unknown> | null };
+  const current = body.value ?? {};
+  const existing = Array.isArray(current.manualSellRequests)
+    ? (current.manualSellRequests as string[])
+    : [];
+  if (existing.includes(mint)) return true; // already queued
+  const next = { ...current, manualSellRequests: [...existing, mint] };
+  const putRes = await fetch('/api/storage/source-state/pumpfun-trade', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(next),
+  }).catch(() => null);
+  return !!putRes?.ok;
+}
+
+/**
  * A tick row from the `ticker` SSE event.
  * Used by PairChart to update the current candle in realtime.
  */

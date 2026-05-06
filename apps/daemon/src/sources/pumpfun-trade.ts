@@ -203,6 +203,8 @@ async function runTick(ctx: UserContext): Promise<void> {
     maxPositions: num('PUMPFUN_MAX_POSITIONS'),
     minReplyCount: num('PUMPFUN_ENTRY_MIN_REPLIES'),
     minVirtualSolReserves: num('PUMPFUN_ENTRY_MIN_SOL_RESERVES'),
+    minCurveProgressPct: num('PUMPFUN_ENTRY_MIN_CURVE_PCT'),
+    maxCurveProgressPct: num('PUMPFUN_ENTRY_MAX_CURVE_PCT'),
   };
   const exitConfig = {
     takeProfitPct: num('PUMPFUN_TAKE_PROFIT_PCT'),
@@ -210,11 +212,23 @@ async function runTick(ctx: UserContext): Promise<void> {
     maxHoldMinutes: num('PUMPFUN_MAX_HOLD_MIN'),
     graduationCapUsd: num('PUMPFUN_GRADUATION_CAP_USD'),
   };
+  const volumeCollapsePct = num('PUMPFUN_VOLUME_COLLAPSE_PCT') ?? 20;
+  const partialExitPct = num('PUMPFUN_PARTIAL_EXIT_PCT') ?? 0.5;
+  const partialExitTriggerPct = num('PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT') ?? 0.5;
 
   // ── Load open positions ───────────────────────────────────────
   const openPositions: PumpPosition[] = Array.isArray(ctx.payload.positions)
     ? (ctx.payload.positions as PumpPosition[])
     : [];
+
+  // Manual-sell mints — populated by the web "Sell now" button. Each
+  // request lasts one tick: we attempt the sell, then drop the entry
+  // from the queue regardless of outcome so a stuck mint doesn't loop.
+  const manualSellMints = new Set<string>(
+    Array.isArray(ctx.payload.manualSellRequests)
+      ? (ctx.payload.manualSellRequests as string[])
+      : [],
+  );
 
   // ── Exit pass ─────────────────────────────────────────────────
   const remainingPositions: PumpPosition[] = [];
@@ -229,7 +243,25 @@ async function runTick(ctx: UserContext): Promise<void> {
       }
 
       const currentMarketCapUsd = coin.usd_market_cap ?? 0;
-      const exitReason = checkExit(position, currentMarketCapUsd, exitConfig);
+      const manualSellRequested = manualSellMints.has(position.mint);
+
+      // Volume-collapse / drawdown-from-peak: trailing-stop-style exit
+      // that catches dumps which never reach the entry-loss threshold.
+      // Compares current mcap against the peak of all recorded samples
+      // (since position open). Activates after we have at least 3
+      // samples so a single bad fetch can't trip it.
+      const samplesSoFar = position.mcapSamples ?? [];
+      const peakMcap = samplesSoFar.length >= 3 ? Math.max(...samplesSoFar, currentMarketCapUsd) : 0;
+      const drawdownPct = peakMcap > 0 && currentMarketCapUsd > 0
+        ? ((peakMcap - currentMarketCapUsd) / peakMcap) * 100
+        : 0;
+      const volumeCollapse = peakMcap > 0 && drawdownPct >= volumeCollapsePct;
+
+      const exitReason = manualSellRequested
+        ? 'manual_sell' as const
+        : volumeCollapse
+          ? 'volume_collapse' as const
+          : checkExit(position, currentMarketCapUsd, exitConfig);
 
       // Stamp the latest mcap onto the position + append a sparkline
       // sample so the UI panels can compute P&L and draw a chart. Done
@@ -253,6 +285,59 @@ async function runTick(ctx: UserContext): Promise<void> {
       logRaw(`[pumpfun] check ${position.symbol} mcap=$${currentMarketCapUsd.toFixed(0)} loss=${lossPct}% held=${heldMin}m → ${exitReason ?? 'hold'}`, 'pumpfun-trade');
 
       if (!exitReason) {
+        // Tiered partial exit: when a position has a meaningful gain
+        // (default +50%), sell `partialExitPct` (default 0.5) of the
+        // tokens so principal is largely de-risked, and let the rest
+        // ride toward the full take-profit threshold.
+        const gainFraction = position.entryMarketCapUsd > 0
+          ? (currentMarketCapUsd - position.entryMarketCapUsd) / position.entryMarketCapUsd
+          : 0;
+        if (
+          !position.partialExitDone
+          && gainFraction >= partialExitTriggerPct
+          && partialExitPct > 0
+          && partialExitPct < 1
+        ) {
+          let tokenBalance: bigint;
+          try {
+            tokenBalance = position.tokenBalance && position.tokenBalance > 0
+              ? BigInt(Math.floor(position.tokenBalance))
+              : await getSolanaTokenBalance(walletAddress, position.mint, rpcUrl);
+          } catch (e) {
+            logRaw(`[pumpfun] partial: balance fetch failed ${position.symbol}: ${(e as Error).message}`, 'pumpfun-trade');
+            remainingPositions.push(updatedPosition);
+            continue;
+          }
+          if (tokenBalance > 0n) {
+            const sellQty = BigInt(Math.floor(Number(tokenBalance) * partialExitPct));
+            logActivity(`[pumpfun] PARTIAL ${position.symbol} +${(gainFraction * 100).toFixed(1)}% — selling ${(partialExitPct * 100).toFixed(0)}% of bag`, 'pumpfun-trade');
+            try {
+              const result = await executePumpFunTrade(
+                {
+                  publicKey: walletAddress,
+                  action: 'sell',
+                  mint: position.mint,
+                  amountTokens: Number(sellQty),
+                },
+                walletProvider,
+                rpcUrl,
+              );
+              if (result.status === 'confirmed') {
+                logActivity(`[pumpfun] partial ✓ ${position.symbol} sig=${result.signature.slice(0, 16)}…`, 'pumpfun-trade');
+                remainingPositions.push({
+                  ...updatedPosition,
+                  tokenBalance: Number(tokenBalance - sellQty),
+                  partialExitDone: true,
+                });
+                continue;
+              } else {
+                logActivity(`[pumpfun] partial ✗ ${position.symbol} ${result.status}: ${result.error ?? ''}`, 'pumpfun-trade');
+              }
+            } catch (e) {
+              logRaw(`[pumpfun] partial error ${position.symbol}: ${(e as Error).message}`, 'pumpfun-trade');
+            }
+          }
+        }
         remainingPositions.push(updatedPosition);
         continue;
       }
@@ -401,10 +486,15 @@ async function runTick(ctx: UserContext): Promise<void> {
   const solUsdRef = await readSolUsdRef(ctx);
 
   // ── Persist state ─────────────────────────────────────────────
+  // Drain the manual-sell queue regardless of whether each sell
+  // succeeded — see comment at queue load. The worker either took the
+  // shot or the position couldn't be sold; either way the request was
+  // honored once and shouldn't replay.
   await ctx.savePayload({
     enabled: true,
     positions: remainingPositions,
     solUsdRef,
+    manualSellRequests: [],
     activityLog: getActivityLog('pumpfun-trade'),
     rawLog: getRawLog('pumpfun-trade'),
     daemon: {

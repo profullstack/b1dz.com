@@ -36,6 +36,10 @@ export interface PumpPosition {
   /** Raw token units received (stored as number for JSON serialisation;
    *  cast to bigint when passing to arithmetic helpers). */
   tokenBalance?: number;
+  /** True once a partial exit has fired on this position. Prevents
+   *  re-firing the partial sell on every subsequent tick. The remaining
+   *  tokenBalance reflects what's left after the partial. */
+  partialExitDone?: boolean;
   /** Latest fetched USD market cap. Populated by the daemon worker
    *  during its exit-check pass; absent until the first successful
    *  status fetch. Used by UIs to compute P&L vs entry. */
@@ -68,6 +72,31 @@ export interface EntryConfig {
    *  it. Setting this to >30 requires *someone* to have already bought.
    *  Default: 32 (~2 SOL of cumulative buys, roughly $360 traded). */
   minVirtualSolReserves?: number;
+  /** Bonding-curve progress floor (% filled, 0–100). pump.fun curves
+   *  graduate at ~85 SOL of real buys; this is `(reserves - 30) / 85`.
+   *  Default: 10 — skip the dust band where bots/insiders dominate. */
+  minCurveProgressPct?: number;
+  /** Bonding-curve progress ceiling (% filled). Above this we're in the
+   *  near-graduation crowded zone where price often dumps post-migration.
+   *  Default: 80. */
+  maxCurveProgressPct?: number;
+}
+
+/** Genesis virtual SOL reserves for a new pump.fun bonding curve. The
+ *  curve grows from this point as real SOL is bought into it (bonded). */
+const PUMPFUN_GENESIS_SOL_RESERVES = 30;
+/** SOL needed to graduate from the bonding curve to the AMM (Raydium /
+ *  PumpSwap). Curve progress is normalised against this number. */
+const PUMPFUN_GRADUATION_SOL_DELTA = 85;
+
+/** Compute the bonding-curve progress as a percentage 0..100, where 0 is
+ *  fresh genesis (no buys) and 100 is graduation. Returns null when the
+ *  candidate has no virtualSolReserves field (already migrated/graduated). */
+export function curveProgressPct(virtualSolReserves: number | null): number | null {
+  if (virtualSolReserves == null || !Number.isFinite(virtualSolReserves)) return null;
+  return Math.max(0, Math.min(100,
+    ((virtualSolReserves - PUMPFUN_GENESIS_SOL_RESERVES) / PUMPFUN_GRADUATION_SOL_DELTA) * 100,
+  ));
 }
 
 export interface ExitConfig {
@@ -97,6 +126,10 @@ const DEFAULT_ENTRY: Required<EntryConfig> = {
   // dumped. Require some signal that a token is alive before entering.
   minReplyCount: 3,
   minVirtualSolReserves: 32,
+  // Curve-progress band: skip the bot-dominated dust band (<10%) and
+  // the post-migration crowd (>80%).
+  minCurveProgressPct: 10,
+  maxCurveProgressPct: 80,
 };
 
 const DEFAULT_EXIT: Required<ExitConfig> = {
@@ -162,6 +195,13 @@ export function shouldEnter(
   if (candidate.replyCount < cfg.minReplyCount) return false;
   if (candidate.virtualSolReserves != null
       && candidate.virtualSolReserves < cfg.minVirtualSolReserves) return false;
+
+  // Curve-progress band gate.
+  const progress = curveProgressPct(candidate.virtualSolReserves);
+  if (progress != null) {
+    if (progress < cfg.minCurveProgressPct) return false;
+    if (progress > cfg.maxCurveProgressPct) return false;
+  }
 
   return true;
 }

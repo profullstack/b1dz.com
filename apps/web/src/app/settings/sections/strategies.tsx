@@ -53,11 +53,17 @@ export function StrategiesSection({
   const [pfMinAgeMin, setPfMinAgeMin] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_AGE_MIN'));
   const [pfMinReplies, setPfMinReplies] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_REPLIES'));
   const [pfMinSolReserves, setPfMinSolReserves] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_SOL_RESERVES'));
+  const [pfMinCurvePct, setPfMinCurvePct] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_CURVE_PCT'));
+  const [pfMaxCurvePct, setPfMaxCurvePct] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MAX_CURVE_PCT'));
+  const [pfMin5mPct, setPfMin5mPct] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_5M_PCT'));
   const [pfMaxPositions, setPfMaxPositions] = useState(readPlainNumber(data, 'PUMPFUN_MAX_POSITIONS'));
   const [pfTakeProfit, setPfTakeProfit] = useState(readPlainNumber(data, 'PUMPFUN_TAKE_PROFIT_PCT'));
   const [pfStopLoss, setPfStopLoss] = useState(readPlainNumber(data, 'PUMPFUN_STOP_LOSS_PCT'));
   const [pfMaxHold, setPfMaxHold] = useState(readPlainNumber(data, 'PUMPFUN_MAX_HOLD_MIN'));
   const [pfGraduation, setPfGraduation] = useState(readPlainNumber(data, 'PUMPFUN_GRADUATION_CAP_USD'));
+  const [pfVolumeCollapse, setPfVolumeCollapse] = useState(readPlainNumber(data, 'PUMPFUN_VOLUME_COLLAPSE_PCT'));
+  const [pfPartialPct, setPfPartialPct] = useState(readPlainNumber(data, 'PUMPFUN_PARTIAL_EXIT_PCT'));
+  const [pfPartialTrigger, setPfPartialTrigger] = useState(readPlainNumber(data, 'PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT'));
 
   const saveArb = async () => {
     const plain: Record<string, string | number | boolean | null> = {
@@ -106,11 +112,17 @@ export function StrategiesSection({
       PUMPFUN_ENTRY_MIN_AGE_MIN: pfMinAgeMin !== '' ? Number(pfMinAgeMin) : null,
       PUMPFUN_ENTRY_MIN_REPLIES: pfMinReplies !== '' ? Number(pfMinReplies) : null,
       PUMPFUN_ENTRY_MIN_SOL_RESERVES: pfMinSolReserves !== '' ? Number(pfMinSolReserves) : null,
+      PUMPFUN_ENTRY_MIN_CURVE_PCT: pfMinCurvePct !== '' ? Number(pfMinCurvePct) : null,
+      PUMPFUN_ENTRY_MAX_CURVE_PCT: pfMaxCurvePct !== '' ? Number(pfMaxCurvePct) : null,
+      PUMPFUN_ENTRY_MIN_5M_PCT: pfMin5mPct !== '' ? Number(pfMin5mPct) : null,
       PUMPFUN_MAX_POSITIONS: pfMaxPositions !== '' ? Number(pfMaxPositions) : null,
       PUMPFUN_TAKE_PROFIT_PCT: pfTakeProfit !== '' ? Number(pfTakeProfit) : null,
       PUMPFUN_STOP_LOSS_PCT: pfStopLoss !== '' ? Number(pfStopLoss) : null,
       PUMPFUN_MAX_HOLD_MIN: pfMaxHold !== '' ? Number(pfMaxHold) : null,
       PUMPFUN_GRADUATION_CAP_USD: pfGraduation !== '' ? Number(pfGraduation) : null,
+      PUMPFUN_VOLUME_COLLAPSE_PCT: pfVolumeCollapse !== '' ? Number(pfVolumeCollapse) : null,
+      PUMPFUN_PARTIAL_EXIT_PCT: pfPartialPct !== '' ? Number(pfPartialPct) : null,
+      PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT: pfPartialTrigger !== '' ? Number(pfPartialTrigger) : null,
     };
     const next = await saveSettings({ plain }, { cryptoKey });
     onSaved(next);
@@ -163,8 +175,14 @@ export function StrategiesSection({
         <NumberRow field="PUMPFUN_ENTRY_MAX_AGE_MIN" label="Max token age (minutes)" value={pfMaxAgeMin} onChange={setPfMaxAgeMin} hint="Default 10. Past this we've missed the launch window." />
         <NumberRow field="PUMPFUN_ENTRY_MIN_REPLIES" label="Min replies (engagement)" value={pfMinReplies} onChange={setPfMinReplies} hint="Default 3. Filters tokens nobody is watching." />
         <NumberRow field="PUMPFUN_ENTRY_MIN_SOL_RESERVES" label="Min SOL reserves" value={pfMinSolReserves} onChange={setPfMinSolReserves} hint="Default 32 (~2 SOL of cumulative buys). Genesis bonding curve is ~30." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_CURVE_PCT" label="Min bonding-curve %" value={pfMinCurvePct} onChange={setPfMinCurvePct} hint="Default 10. Skip the bot-dominated dust band (0–10%)." />
+        <NumberRow field="PUMPFUN_ENTRY_MAX_CURVE_PCT" label="Max bonding-curve %" value={pfMaxCurvePct} onChange={setPfMaxCurvePct} hint="Default 80. Skip near-graduation crowding." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_5M_PCT" label="Min 5-min momentum %" value={pfMin5mPct} onChange={setPfMin5mPct} hint="Default 0. Token must be flat-or-up over the last 5 min. Set negative to allow dips." />
         <NumberRow field="PUMPFUN_TAKE_PROFIT_PCT" label="Take profit (fraction)" value={pfTakeProfit} onChange={setPfTakeProfit} hint="0.5 = +50%. Default 0.5." />
         <NumberRow field="PUMPFUN_STOP_LOSS_PCT" label="Stop loss (fraction)" value={pfStopLoss} onChange={setPfStopLoss} hint="0.3 = −30%. Default 0.3." />
+        <NumberRow field="PUMPFUN_VOLUME_COLLAPSE_PCT" label="Drawdown-from-peak exit %" value={pfVolumeCollapse} onChange={setPfVolumeCollapse} hint="Default 20. Trailing-stop: exit when mcap is this % below its post-entry peak." />
+        <NumberRow field="PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT" label="Partial exit trigger (fraction)" value={pfPartialTrigger} onChange={setPfPartialTrigger} hint="0.5 = +50% gain. Default 0.5. The gain at which we de-risk by selling part of the bag." />
+        <NumberRow field="PUMPFUN_PARTIAL_EXIT_PCT" label="Partial exit fraction" value={pfPartialPct} onChange={setPfPartialPct} hint="0.5 = sell half. Default 0.5. The fraction of tokens sold when the partial trigger fires." />
         <NumberRow field="PUMPFUN_MAX_HOLD_MIN" label="Max hold (minutes)" value={pfMaxHold} onChange={setPfMaxHold} hint="Default 10. Time-stops stalled positions." />
         <NumberRow field="PUMPFUN_GRADUATION_CAP_USD" label="Graduation exit cap (USD)" value={pfGraduation} onChange={setPfGraduation} hint="Default 55000. Exit before bonding-curve migration risk." />
       </SectionShell>

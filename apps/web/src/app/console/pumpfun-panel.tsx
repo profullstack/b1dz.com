@@ -1,7 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import { Sparkline } from '@/components/sparkline';
 import type { PumpfunState } from '@/lib/source-state-types';
+import { requestPumpfunSell } from '@/lib/use-source-state';
 
 interface Props {
   pumpfun: PumpfunState | null;
@@ -28,6 +30,16 @@ export function PumpfunPanel({ pumpfun }: Props) {
   const enabled = pumpfun?.enabled ?? false;
   const status = pumpfun?.daemon?.status ?? '-';
   const solUsdRef = pumpfun?.solUsdRef ?? 0;
+  const [pending, setPending] = useState<Record<string, boolean>>({});
+
+  const onSell = async (mint: string) => {
+    setPending((p) => ({ ...p, [mint]: true }));
+    try {
+      await requestPumpfunSell(mint);
+    } finally {
+      setPending((p) => ({ ...p, [mint]: false }));
+    }
+  };
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/80">
@@ -51,12 +63,13 @@ export function PumpfunPanel({ pumpfun }: Props) {
               <th className="px-3 py-2 text-right">SOL spent</th>
               <th className="px-3 py-2 text-right">Age</th>
               <th className="px-3 py-2 text-center">Chart</th>
+              <th className="px-3 py-2 text-center">Action</th>
             </tr>
           </thead>
           <tbody>
             {positions.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-3 text-zinc-500">
+                <td colSpan={9} className="px-3 py-3 text-zinc-500">
                   No open pump.fun positions
                 </td>
               </tr>
@@ -111,6 +124,17 @@ export function PumpfunPanel({ pumpfun }: Props) {
                   </td>
                   <td className="px-3 py-1.5 text-center">
                     <Sparkline samples={p.mcapSamples} profitable={pnlPct >= 0} />
+                  </td>
+                  <td className="px-3 py-1.5 text-center">
+                    <button
+                      type="button"
+                      onClick={() => onSell(p.mint)}
+                      disabled={!!pending[p.mint]}
+                      className="rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                      title="Force-sell this position on the next worker tick"
+                    >
+                      {pending[p.mint] ? 'queued…' : 'sell now'}
+                    </button>
                   </td>
                 </tr>
               );
