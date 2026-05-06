@@ -66,6 +66,7 @@ export function StrategiesSection({
   const [pfPartialTrigger, setPfPartialTrigger] = useState(readPlainNumber(data, 'PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT'));
   const [pfMinHolders, setPfMinHolders] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_HOLDERS'));
   const [pfMaxTopHolderRatio, setPfMaxTopHolderRatio] = useState(readPlainNumber(data, 'PUMPFUN_MAX_TOP_HOLDER_RATIO'));
+  const [pfSellSlippage, setPfSellSlippage] = useState(readPlainNumber(data, 'PUMPFUN_SELL_SLIPPAGE_PCT'));
 
   const saveArb = async () => {
     const plain: Record<string, string | number | boolean | null> = {
@@ -127,6 +128,7 @@ export function StrategiesSection({
       PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT: pfPartialTrigger !== '' ? Number(pfPartialTrigger) : null,
       PUMPFUN_ENTRY_MIN_HOLDERS: pfMinHolders !== '' ? Number(pfMinHolders) : null,
       PUMPFUN_MAX_TOP_HOLDER_RATIO: pfMaxTopHolderRatio !== '' ? Number(pfMaxTopHolderRatio) : null,
+      PUMPFUN_SELL_SLIPPAGE_PCT: pfSellSlippage !== '' ? Number(pfSellSlippage) : null,
     };
     const next = await saveSettings({ plain }, { cryptoKey });
     onSaved(next);
@@ -171,26 +173,27 @@ export function StrategiesSection({
         description="Solana bonding-curve scanner. Tighter defaults from observation: enters tokens with some history (≥2min old, ≥3 replies, bonding curve already moved off genesis), takes profit at +50%, stops at −30%, exits at 10min if neither hits. Leave any field blank to use the default."
         onSave={savePumpfun}
       >
-        <NumberRow field="PUMPFUN_TRADE_SOL" label="Trade size (SOL)" value={pfTradeSol} onChange={setPfTradeSol} hint="SOL spent per buy. Default 0.01 (~$1.80)" />
-        <NumberRow field="PUMPFUN_MAX_POSITIONS" label="Max concurrent positions" value={pfMaxPositions} onChange={setPfMaxPositions} hint="Default 3" />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_MCAP" label="Min entry market cap (USD)" value={pfMinMcap} onChange={setPfMinMcap} hint="Default 5000. Below this is dust." />
-        <NumberRow field="PUMPFUN_ENTRY_MAX_MCAP" label="Max entry market cap (USD)" value={pfMaxMcap} onChange={setPfMaxMcap} hint="Default 25000. Above this is near-graduation." />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_AGE_MIN" label="Min token age (minutes)" value={pfMinAgeMin} onChange={setPfMinAgeMin} hint="Default 2. Wait this long for trade history to accumulate." />
-        <NumberRow field="PUMPFUN_ENTRY_MAX_AGE_MIN" label="Max token age (minutes)" value={pfMaxAgeMin} onChange={setPfMaxAgeMin} hint="Default 10. Past this we've missed the launch window." />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_REPLIES" label="Min replies (engagement)" value={pfMinReplies} onChange={setPfMinReplies} hint="Default 3. Filters tokens nobody is watching." />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_SOL_RESERVES" label="Min SOL reserves" value={pfMinSolReserves} onChange={setPfMinSolReserves} hint="Default 32 (~2 SOL of cumulative buys). Genesis bonding curve is ~30." />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_CURVE_PCT" label="Min bonding-curve %" value={pfMinCurvePct} onChange={setPfMinCurvePct} hint="Default 10. Skip the bot-dominated dust band (0–10%)." />
-        <NumberRow field="PUMPFUN_ENTRY_MAX_CURVE_PCT" label="Max bonding-curve %" value={pfMaxCurvePct} onChange={setPfMaxCurvePct} hint="Default 80. Skip near-graduation crowding." />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_5M_PCT" label="Min 5-min momentum %" value={pfMin5mPct} onChange={setPfMin5mPct} hint="Default 0. Token must be flat-or-up over the last 5 min. Set negative to allow dips." />
-        <NumberRow field="PUMPFUN_ENTRY_MIN_HOLDERS" label="Min unique holders" value={pfMinHolders} onChange={setPfMinHolders} hint="Default 10. Filters dead-on-arrival tokens with no real distribution." />
-        <NumberRow field="PUMPFUN_MAX_TOP_HOLDER_RATIO" label="Max top/2nd holder ratio" value={pfMaxTopHolderRatio} onChange={setPfMaxTopHolderRatio} hint="Default 50. Skip tokens where the top wallet owns ≥50× more than the second holder (whale concentration)." />
-        <NumberRow field="PUMPFUN_TAKE_PROFIT_PCT" label="Take profit (fraction)" value={pfTakeProfit} onChange={setPfTakeProfit} hint="0.5 = +50%. Default 0.5." />
-        <NumberRow field="PUMPFUN_STOP_LOSS_PCT" label="Stop loss (fraction)" value={pfStopLoss} onChange={setPfStopLoss} hint="0.3 = −30%. Default 0.3." />
-        <NumberRow field="PUMPFUN_VOLUME_COLLAPSE_PCT" label="Drawdown-from-peak exit %" value={pfVolumeCollapse} onChange={setPfVolumeCollapse} hint="Default 20. Trailing-stop: exit when mcap is this % below its post-entry peak." />
-        <NumberRow field="PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT" label="Partial exit trigger (fraction)" value={pfPartialTrigger} onChange={setPfPartialTrigger} hint="0.5 = +50% gain. Default 0.5. The gain at which we de-risk by selling part of the bag." />
-        <NumberRow field="PUMPFUN_PARTIAL_EXIT_PCT" label="Partial exit fraction" value={pfPartialPct} onChange={setPfPartialPct} hint="0.5 = sell half. Default 0.5. The fraction of tokens sold when the partial trigger fires." />
-        <NumberRow field="PUMPFUN_MAX_HOLD_MIN" label="Max hold (minutes)" value={pfMaxHold} onChange={setPfMaxHold} hint="Default 10. Time-stops stalled positions." />
-        <NumberRow field="PUMPFUN_GRADUATION_CAP_USD" label="Graduation exit cap (USD)" value={pfGraduation} onChange={setPfGraduation} hint="Default 55000. Exit before bonding-curve migration risk." />
+        <NumberRow field="PUMPFUN_TRADE_SOL" label="Trade size (SOL)" value={pfTradeSol} onChange={setPfTradeSol} placeholder="0.01" hint="SOL spent per buy. Default 0.01 (~$1.80 at SOL≈$180)." />
+        <NumberRow field="PUMPFUN_MAX_POSITIONS" label="Max concurrent positions" value={pfMaxPositions} onChange={setPfMaxPositions} placeholder="3" hint="Cap on simultaneous open positions." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_MCAP" label="Min entry market cap (USD)" value={pfMinMcap} onChange={setPfMinMcap} placeholder="5000" hint="Below this is dust / pre–price-discovery." />
+        <NumberRow field="PUMPFUN_ENTRY_MAX_MCAP" label="Max entry market cap (USD)" value={pfMaxMcap} onChange={setPfMaxMcap} placeholder="25000" hint="Above this we're near graduation; less upside." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_AGE_MIN" label="Min token age (minutes)" value={pfMinAgeMin} onChange={setPfMinAgeMin} placeholder="2" hint="Wait this long for trade history to accumulate." />
+        <NumberRow field="PUMPFUN_ENTRY_MAX_AGE_MIN" label="Max token age (minutes)" value={pfMaxAgeMin} onChange={setPfMaxAgeMin} placeholder="10" hint="Past this we've missed the launch window." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_REPLIES" label="Min replies (engagement)" value={pfMinReplies} onChange={setPfMinReplies} placeholder="3" hint="Filters tokens nobody is watching." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_SOL_RESERVES" label="Min SOL reserves" value={pfMinSolReserves} onChange={setPfMinSolReserves} placeholder="32" hint="Genesis bonding curve is ~30 SOL; require some buys to have happened (~2 SOL ≈ $360 traded)." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_CURVE_PCT" label="Min bonding-curve %" value={pfMinCurvePct} onChange={setPfMinCurvePct} placeholder="10" hint="Skip the bot-dominated dust band (0–10%)." />
+        <NumberRow field="PUMPFUN_ENTRY_MAX_CURVE_PCT" label="Max bonding-curve %" value={pfMaxCurvePct} onChange={setPfMaxCurvePct} placeholder="80" hint="Skip near-graduation crowding (>80%)." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_5M_PCT" label="Min 5-min momentum %" value={pfMin5mPct} onChange={setPfMin5mPct} placeholder="0" hint="Token must be flat-or-up over the last 5 min. Set negative to allow dips." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_HOLDERS" label="Min unique holders" value={pfMinHolders} onChange={setPfMinHolders} placeholder="10" hint="Filters dead-on-arrival tokens with no real distribution." />
+        <NumberRow field="PUMPFUN_MAX_TOP_HOLDER_RATIO" label="Max top/2nd holder ratio" value={pfMaxTopHolderRatio} onChange={setPfMaxTopHolderRatio} placeholder="50" hint="Skip tokens where the top wallet owns ≥50× more than the second holder (whale concentration)." />
+        <NumberRow field="PUMPFUN_TAKE_PROFIT_PCT" label="Take profit (fraction)" value={pfTakeProfit} onChange={setPfTakeProfit} placeholder="0.5" hint="0.5 = +50%. Sell when gain reaches this fraction." />
+        <NumberRow field="PUMPFUN_STOP_LOSS_PCT" label="Stop loss (fraction)" value={pfStopLoss} onChange={setPfStopLoss} placeholder="0.3" hint="0.3 = −30%. Cut losers at this drawdown vs entry." />
+        <NumberRow field="PUMPFUN_VOLUME_COLLAPSE_PCT" label="Drawdown-from-peak exit %" value={pfVolumeCollapse} onChange={setPfVolumeCollapse} placeholder="20" hint="Trailing-stop: exit when mcap is this % below its post-entry peak." />
+        <NumberRow field="PUMPFUN_PARTIAL_EXIT_TRIGGER_PCT" label="Partial exit trigger (fraction)" value={pfPartialTrigger} onChange={setPfPartialTrigger} placeholder="0.5" hint="0.5 = +50% gain. The gain at which we de-risk by selling part of the bag." />
+        <NumberRow field="PUMPFUN_PARTIAL_EXIT_PCT" label="Partial exit fraction" value={pfPartialPct} onChange={setPfPartialPct} placeholder="0.5" hint="0.5 = sell half. Fraction of tokens sold when the partial trigger fires." />
+        <NumberRow field="PUMPFUN_MAX_HOLD_MIN" label="Max hold (minutes)" value={pfMaxHold} onChange={setPfMaxHold} placeholder="10" hint="Time-stops stalled positions." />
+        <NumberRow field="PUMPFUN_GRADUATION_CAP_USD" label="Graduation exit cap (USD)" value={pfGraduation} onChange={setPfGraduation} placeholder="55000" hint="Exit before bonding-curve migration risk." />
+        <NumberRow field="PUMPFUN_SELL_SLIPPAGE_PCT" label="Sell slippage tolerance (%)" value={pfSellSlippage} onChange={setPfSellSlippage} placeholder="50" hint="Slippage allowed on exits. High default because dumping bag-hold tokens with low liquidity moves the bonding curve dramatically — pump.fun program error 6022 = slippage exceeded." />
       </SectionShell>
 
       <SectionShell
