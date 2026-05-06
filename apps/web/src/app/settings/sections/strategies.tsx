@@ -45,6 +45,20 @@ export function StrategiesSection({
   const [v2MaxTradeUsd, setV2MaxTradeUsd] = useState(readPlainNumber(data, 'V2_MAX_TRADE_USD'));
   const [v2MinNetUsd, setV2MinNetUsd] = useState(readPlainNumber(data, 'V2_MIN_NET_USD'));
 
+  // Pump.fun
+  const [pfTradeSol, setPfTradeSol] = useState(readPlainNumber(data, 'PUMPFUN_TRADE_SOL'));
+  const [pfMinMcap, setPfMinMcap] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_MCAP'));
+  const [pfMaxMcap, setPfMaxMcap] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MAX_MCAP'));
+  const [pfMaxAgeMin, setPfMaxAgeMin] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MAX_AGE_MIN'));
+  const [pfMinAgeMin, setPfMinAgeMin] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_AGE_MIN'));
+  const [pfMinReplies, setPfMinReplies] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_REPLIES'));
+  const [pfMinSolReserves, setPfMinSolReserves] = useState(readPlainNumber(data, 'PUMPFUN_ENTRY_MIN_SOL_RESERVES'));
+  const [pfMaxPositions, setPfMaxPositions] = useState(readPlainNumber(data, 'PUMPFUN_MAX_POSITIONS'));
+  const [pfTakeProfit, setPfTakeProfit] = useState(readPlainNumber(data, 'PUMPFUN_TAKE_PROFIT_PCT'));
+  const [pfStopLoss, setPfStopLoss] = useState(readPlainNumber(data, 'PUMPFUN_STOP_LOSS_PCT'));
+  const [pfMaxHold, setPfMaxHold] = useState(readPlainNumber(data, 'PUMPFUN_MAX_HOLD_MIN'));
+  const [pfGraduation, setPfGraduation] = useState(readPlainNumber(data, 'PUMPFUN_GRADUATION_CAP_USD'));
+
   const saveArb = async () => {
     const plain: Record<string, string | number | boolean | null> = {
       ARB_MODE: arbMode.trim() || null,
@@ -83,6 +97,25 @@ export function StrategiesSection({
     onSaved(next);
   };
 
+  const savePumpfun = async () => {
+    const plain: Record<string, string | number | boolean | null> = {
+      PUMPFUN_TRADE_SOL: pfTradeSol !== '' ? Number(pfTradeSol) : null,
+      PUMPFUN_ENTRY_MIN_MCAP: pfMinMcap !== '' ? Number(pfMinMcap) : null,
+      PUMPFUN_ENTRY_MAX_MCAP: pfMaxMcap !== '' ? Number(pfMaxMcap) : null,
+      PUMPFUN_ENTRY_MAX_AGE_MIN: pfMaxAgeMin !== '' ? Number(pfMaxAgeMin) : null,
+      PUMPFUN_ENTRY_MIN_AGE_MIN: pfMinAgeMin !== '' ? Number(pfMinAgeMin) : null,
+      PUMPFUN_ENTRY_MIN_REPLIES: pfMinReplies !== '' ? Number(pfMinReplies) : null,
+      PUMPFUN_ENTRY_MIN_SOL_RESERVES: pfMinSolReserves !== '' ? Number(pfMinSolReserves) : null,
+      PUMPFUN_MAX_POSITIONS: pfMaxPositions !== '' ? Number(pfMaxPositions) : null,
+      PUMPFUN_TAKE_PROFIT_PCT: pfTakeProfit !== '' ? Number(pfTakeProfit) : null,
+      PUMPFUN_STOP_LOSS_PCT: pfStopLoss !== '' ? Number(pfStopLoss) : null,
+      PUMPFUN_MAX_HOLD_MIN: pfMaxHold !== '' ? Number(pfMaxHold) : null,
+      PUMPFUN_GRADUATION_CAP_USD: pfGraduation !== '' ? Number(pfGraduation) : null,
+    };
+    const next = await saveSettings({ plain }, { cryptoKey });
+    onSaved(next);
+  };
+
   return (
     <div className="space-y-4">
       <SectionShell
@@ -115,6 +148,25 @@ export function StrategiesSection({
         <PlainTextRow field="DCA_COINS" label="Coins" value={dcaCoins} onChange={setDcaCoins} hint="Comma-separated: BTC,ETH,SOL" />
         <PlainTextRow field="DCA_EXCHANGES" label="Exchanges" value={dcaExchanges} onChange={setDcaExchanges} hint="Comma-separated: kraken,coinbase,binance-us,gemini" />
         <NumberRow field="DCA_INTERVAL_MS" label="Interval ms" value={dcaIntervalMs} onChange={setDcaIntervalMs} hint="86400000 = 24h" />
+      </SectionShell>
+
+      <SectionShell
+        title="Pump.fun memecoin sniper"
+        description="Solana bonding-curve scanner. Tighter defaults from observation: enters tokens with some history (≥2min old, ≥3 replies, bonding curve already moved off genesis), takes profit at +50%, stops at −30%, exits at 10min if neither hits. Leave any field blank to use the default."
+        onSave={savePumpfun}
+      >
+        <NumberRow field="PUMPFUN_TRADE_SOL" label="Trade size (SOL)" value={pfTradeSol} onChange={setPfTradeSol} hint="SOL spent per buy. Default 0.01 (~$1.80)" />
+        <NumberRow field="PUMPFUN_MAX_POSITIONS" label="Max concurrent positions" value={pfMaxPositions} onChange={setPfMaxPositions} hint="Default 3" />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_MCAP" label="Min entry market cap (USD)" value={pfMinMcap} onChange={setPfMinMcap} hint="Default 5000. Below this is dust." />
+        <NumberRow field="PUMPFUN_ENTRY_MAX_MCAP" label="Max entry market cap (USD)" value={pfMaxMcap} onChange={setPfMaxMcap} hint="Default 25000. Above this is near-graduation." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_AGE_MIN" label="Min token age (minutes)" value={pfMinAgeMin} onChange={setPfMinAgeMin} hint="Default 2. Wait this long for trade history to accumulate." />
+        <NumberRow field="PUMPFUN_ENTRY_MAX_AGE_MIN" label="Max token age (minutes)" value={pfMaxAgeMin} onChange={setPfMaxAgeMin} hint="Default 10. Past this we've missed the launch window." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_REPLIES" label="Min replies (engagement)" value={pfMinReplies} onChange={setPfMinReplies} hint="Default 3. Filters tokens nobody is watching." />
+        <NumberRow field="PUMPFUN_ENTRY_MIN_SOL_RESERVES" label="Min SOL reserves" value={pfMinSolReserves} onChange={setPfMinSolReserves} hint="Default 32 (~2 SOL of cumulative buys). Genesis bonding curve is ~30." />
+        <NumberRow field="PUMPFUN_TAKE_PROFIT_PCT" label="Take profit (fraction)" value={pfTakeProfit} onChange={setPfTakeProfit} hint="0.5 = +50%. Default 0.5." />
+        <NumberRow field="PUMPFUN_STOP_LOSS_PCT" label="Stop loss (fraction)" value={pfStopLoss} onChange={setPfStopLoss} hint="0.3 = −30%. Default 0.3." />
+        <NumberRow field="PUMPFUN_MAX_HOLD_MIN" label="Max hold (minutes)" value={pfMaxHold} onChange={setPfMaxHold} hint="Default 10. Time-stops stalled positions." />
+        <NumberRow field="PUMPFUN_GRADUATION_CAP_USD" label="Graduation exit cap (USD)" value={pfGraduation} onChange={setPfGraduation} hint="Default 55000. Exit before bonding-curve migration risk." />
       </SectionShell>
 
       <SectionShell

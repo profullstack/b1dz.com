@@ -142,6 +142,31 @@ async function runTick(ctx: UserContext): Promise<void> {
   // Trade size from env (SOL), default 0.01.
   const tradeSol = parseFloat(process.env.PUMPFUN_TRADE_SOL ?? '0.01') || 0.01;
 
+  // Strategy overrides — empty/non-numeric env values fall back to the
+  // strategy module's DEFAULT_ENTRY / DEFAULT_EXIT, which already encode
+  // sensible values (5k–25k mcap, 10min hold, 30% stop, 50% TP).
+  const num = (key: string): number | undefined => {
+    const v = process.env[key];
+    if (v == null || v === '') return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const entryConfig = {
+    minMarketCapUsd: num('PUMPFUN_ENTRY_MIN_MCAP'),
+    maxMarketCapUsd: num('PUMPFUN_ENTRY_MAX_MCAP'),
+    maxAgeMinutes: num('PUMPFUN_ENTRY_MAX_AGE_MIN'),
+    minAgeMinutes: num('PUMPFUN_ENTRY_MIN_AGE_MIN'),
+    maxPositions: num('PUMPFUN_MAX_POSITIONS'),
+    minReplyCount: num('PUMPFUN_ENTRY_MIN_REPLIES'),
+    minVirtualSolReserves: num('PUMPFUN_ENTRY_MIN_SOL_RESERVES'),
+  };
+  const exitConfig = {
+    takeProfitPct: num('PUMPFUN_TAKE_PROFIT_PCT'),
+    stopLossPct: num('PUMPFUN_STOP_LOSS_PCT'),
+    maxHoldMinutes: num('PUMPFUN_MAX_HOLD_MIN'),
+    graduationCapUsd: num('PUMPFUN_GRADUATION_CAP_USD'),
+  };
+
   // ── Load open positions ───────────────────────────────────────
   const openPositions: PumpPosition[] = Array.isArray(ctx.payload.positions)
     ? (ctx.payload.positions as PumpPosition[])
@@ -160,7 +185,7 @@ async function runTick(ctx: UserContext): Promise<void> {
       }
 
       const currentMarketCapUsd = coin.usd_market_cap ?? 0;
-      const exitReason = checkExit(position, currentMarketCapUsd);
+      const exitReason = checkExit(position, currentMarketCapUsd, exitConfig);
 
       // Stamp the latest mcap onto the position + append a sparkline
       // sample so the UI panels can compute P&L and draw a chart. Done
@@ -235,9 +260,9 @@ async function runTick(ctx: UserContext): Promise<void> {
   let candidates: Awaited<ReturnType<typeof discovery.discover>> = [];
   try {
     candidates = await discovery.discover({
-      maxAgeMinutes: 5,
-      minMarketCapUsd: 3_000,
-      maxMarketCapUsd: 25_000,
+      maxAgeMinutes: entryConfig.maxAgeMinutes ?? 5,
+      minMarketCapUsd: entryConfig.minMarketCapUsd ?? 5_000,
+      maxMarketCapUsd: entryConfig.maxMarketCapUsd ?? 25_000,
       lifecycleAllowlist: ['new_launch', 'bonding_curve'],
     });
   } catch (e) {
@@ -245,7 +270,7 @@ async function runTick(ctx: UserContext): Promise<void> {
   }
 
   for (const candidate of candidates) {
-    if (!shouldEnter(candidate, remainingPositions)) continue;
+    if (!shouldEnter(candidate, remainingPositions, entryConfig)) continue;
 
     logActivity(`[pumpfun] ENTER ${candidate.symbol} cap=$${candidate.marketCapUsd.toFixed(0)} sol=${tradeSol}`, 'pumpfun-trade');
 
@@ -289,7 +314,7 @@ async function runTick(ctx: UserContext): Promise<void> {
     }
 
     // Re-check position count after each buy attempt to avoid overfilling.
-    if (remainingPositions.length >= 3) break;
+    if (remainingPositions.length >= (entryConfig.maxPositions ?? 3)) break;
   }
 
   // ── SOL/USD reference price for the panel's USD P&L column ─────

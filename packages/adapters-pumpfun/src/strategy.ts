@@ -48,14 +48,26 @@ export interface PumpPosition {
 export type ExitReason = 'take_profit' | 'stop_loss' | 'time_stop' | 'graduation';
 
 export interface EntryConfig {
-  /** Minimum market cap to consider entering. Default: 3000 USD. */
+  /** Minimum market cap to consider entering. Default: 5000 USD. */
   minMarketCapUsd?: number;
   /** Maximum market cap to consider entering. Default: 25000 USD. */
   maxMarketCapUsd?: number;
   /** Only enter tokens younger than this (minutes). Default: 5. */
   maxAgeMinutes?: number;
+  /** Skip tokens younger than this (minutes). Forces a minimum window
+   *  for trade history to accumulate. Default: 2. */
+  minAgeMinutes?: number;
   /** Maximum open positions at any one time. Default: 3. */
   maxPositions?: number;
+  /** Skip dead-on-arrival tokens with no chat engagement. The pump.fun
+   *  reply count is the cheapest "is anyone watching this" signal.
+   *  Default: 3 (filters most rugged-at-launch dust). */
+  minReplyCount?: number;
+  /** Skip tokens whose bonding curve hasn't moved off genesis. New
+   *  pump.fun curves start at ~30 SOL virtual reserves; any buy increases
+   *  it. Setting this to >30 requires *someone* to have already bought.
+   *  Default: 32 (~2 SOL of cumulative buys, roughly $360 traded). */
+  minVirtualSolReserves?: number;
 }
 
 export interface ExitConfig {
@@ -72,16 +84,30 @@ export interface ExitConfig {
 // ─── Default values ───────────────────────────────────────────────
 
 const DEFAULT_ENTRY: Required<EntryConfig> = {
-  minMarketCapUsd: 3_000,
+  // Slightly higher floor avoids the rugged-at-launch dust where price
+  // discovery hasn't started; ceiling stays where late-stage bonding
+  // curves still have meaningful upside.
+  minMarketCapUsd: 5_000,
   maxMarketCapUsd: 25_000,
-  maxAgeMinutes: 5,
+  maxAgeMinutes: 10,
+  minAgeMinutes: 2,
   maxPositions: 3,
+  // History filters — the previous defaults entered tokens with zero
+  // trades since launch ("no history" tokens), most of which immediately
+  // dumped. Require some signal that a token is alive before entering.
+  minReplyCount: 3,
+  minVirtualSolReserves: 32,
 };
 
 const DEFAULT_EXIT: Required<ExitConfig> = {
-  takeProfitPct: 0.8,
-  stopLossPct: 0.45,
-  maxHoldMinutes: 20,
+  // Tightened from prior 0.8 / 0.45 / 20 / 55k. The previous defaults
+  // let positions sit at -36% for half an hour, which observation shows
+  // is mostly bag-holding rather than waiting for a re-pump. Faster cuts
+  // and lower take-profits match the realistic distribution where most
+  // tokens don't 2x.
+  takeProfitPct: 0.5,
+  stopLossPct: 0.3,
+  maxHoldMinutes: 10,
   graduationCapUsd: 55_000,
 };
 
@@ -120,13 +146,22 @@ export function shouldEnter(
   // Only bonding-curve stages — we can actually trade against the curve.
   if (candidate.lifecycle !== 'new_launch' && candidate.lifecycle !== 'bonding_curve') return false;
 
-  // Age gate.
+  // Age gate. Reject too-young (no history yet) AND too-old (missed
+  // momentum window) candidates.
   const ageMinutes = (now - candidate.createdAtMs) / 60_000;
+  if (ageMinutes < cfg.minAgeMinutes) return false;
   if (ageMinutes > cfg.maxAgeMinutes) return false;
 
   // Market cap range.
   if (candidate.marketCapUsd < cfg.minMarketCapUsd) return false;
   if (candidate.marketCapUsd > cfg.maxMarketCapUsd) return false;
+
+  // History gates — skip tokens with no community / no trades since
+  // launch. These would otherwise keep us bag-holding new launches that
+  // nobody else cared enough to buy.
+  if (candidate.replyCount < cfg.minReplyCount) return false;
+  if (candidate.virtualSolReserves != null
+      && candidate.virtualSolReserves < cfg.minVirtualSolReserves) return false;
 
   return true;
 }
