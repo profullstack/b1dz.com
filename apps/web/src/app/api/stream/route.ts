@@ -16,6 +16,7 @@
  *   state:arb      — ArbState payload (spreads, prices, balances, logs)
  *   state:trade    — TradeState payload (positions, PnL, signals)
  *   state:pipeline — ArbPipelineState payload (v2 observer)
+ *   state:pumpfun  — PumpfunState payload (positions, logs)
  *   state:settings — UiSettings payload
  *   ticker         — { pair, exchange, bid, ask, ts } — current best price
  *                    for the pair(s) in the `ticker` query param, sourced
@@ -149,18 +150,20 @@ export async function GET(req: NextRequest) {
       const tick = async () => {
         if (closed) return;
         try {
-          // Fetch all four source keys in parallel — they're all cheap Redis
+          // Fetch all source keys in parallel — they're all cheap Redis
           // reads from the same instance.
-          const [arb, trade, pipeline, settings] = await Promise.allSettled([
+          const [arb, trade, pipeline, pumpfun, settings] = await Promise.allSettled([
             getRuntimeSourceState<unknown>(userId, 'crypto-arb'),
             getRuntimeSourceState<unknown>(userId, 'crypto-trade'),
             getRuntimeSourceState<unknown>(userId, 'arb-pipeline'),
+            getRuntimeSourceState<unknown>(userId, 'pumpfun-trade'),
             getRuntimeSourceState<unknown>(userId, 'crypto-ui-settings'),
           ]);
 
           const arbVal = arb.status === 'fulfilled' ? arb.value : null;
           const tradeVal = trade.status === 'fulfilled' ? trade.value : null;
           const pipelineVal = pipeline.status === 'fulfilled' ? pipeline.value : null;
+          const pumpfunVal = pumpfun.status === 'fulfilled' ? pumpfun.value : null;
           const settingsVal = settings.status === 'fulfilled' ? settings.value : null;
 
           // Delta push — only send if changed since last push.
@@ -168,6 +171,7 @@ export async function GET(req: NextRequest) {
             ['state:arb', arbVal],
             ['state:trade', tradeVal],
             ['state:pipeline', pipelineVal],
+            ['state:pumpfun', pumpfunVal],
             ['state:settings', settingsVal],
           ] as [string, unknown][]) {
             if (val === null) continue;

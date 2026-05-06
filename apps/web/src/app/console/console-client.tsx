@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { useSourceState } from '@/lib/use-source-state';
 import { StatusBar } from './status-bar';
 import { PositionsTable } from './positions-table';
+import { PumpfunPanel } from './pumpfun-panel';
 import { HoldingsPanel } from './holdings-panel';
 import { SpreadsTable } from './spreads-table';
 import { FooterTabs } from './footer-tabs';
@@ -26,6 +27,7 @@ export function ConsoleClient() {
       <div className="space-y-4 p-4">
         <ChartsPanel arb={bundle.arb} trade={bundle.trade} />
         <PositionsTable trade={bundle.trade} />
+        <PumpfunPanel pumpfun={bundle.pumpfun} />
         <div className="grid gap-4 lg:grid-cols-2">
           <SpreadsTable arb={bundle.arb} />
           <HoldingsPanel arb={bundle.arb} trade={bundle.trade} />

@@ -165,3 +165,21 @@ export interface UiSettings {
   tradingEnabled?: boolean | null;
   dailyLossLimitPct?: number | null;
 }
+
+export interface PumpfunPosition {
+  mint: string;
+  name?: string;
+  symbol?: string;
+  entryMarketCapUsd: number;
+  entryAt: number;
+  solSpent: number;
+  tokenBalance?: number;
+}
+
+export interface PumpfunState {
+  enabled?: boolean;
+  positions?: PumpfunPosition[];
+  activityLog?: { at: string; text: string }[];
+  rawLog?: { at: string; text: string }[];
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+}

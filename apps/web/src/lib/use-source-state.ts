@@ -25,13 +25,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import type { ArbState, ArbPipelineState, TradeState, UiSettings } from './source-state-types';
+import type { ArbState, ArbPipelineState, PumpfunState, TradeState, UiSettings } from './source-state-types';
 
 export interface SourceStateBundle {
   arb: ArbState | null;
   trade: TradeState | null;
   settings: UiSettings | null;
   pipeline: ArbPipelineState | null;
+  pumpfun: PumpfunState | null;
   loading: boolean;
   lastFetched: number | null;
   error: string | null;
@@ -44,6 +45,7 @@ type LsData = {
   trade: TradeState | null;
   settings: UiSettings | null;
   pipeline: ArbPipelineState | null;
+  pumpfun: PumpfunState | null;
   savedAt: number;
 };
 
@@ -64,7 +66,7 @@ function writeLs(d: Omit<LsData, 'savedAt'>) {
 
 function fromLs(): SourceStateBundle {
   if (typeof window === 'undefined') {
-    return { arb: null, trade: null, settings: null, pipeline: null, loading: true, lastFetched: null, error: null };
+    return { arb: null, trade: null, settings: null, pipeline: null, pumpfun: null, loading: true, lastFetched: null, error: null };
   }
   const c = readLs();
   return {
@@ -72,6 +74,7 @@ function fromLs(): SourceStateBundle {
     trade: c?.trade ?? null,
     settings: c?.settings ?? null,
     pipeline: c?.pipeline ?? null,
+    pumpfun: c?.pumpfun ?? null,
     loading: c === null,
     lastFetched: c?.savedAt ?? null,
     error: null,
@@ -81,7 +84,7 @@ function fromLs(): SourceStateBundle {
 export function useSourceState(): SourceStateBundle {
   const [bundle, setBundle] = useState<SourceStateBundle>(fromLs);
   const stateRef = useRef<Omit<LsData, 'savedAt'>>({
-    arb: null, trade: null, settings: null, pipeline: null,
+    arb: null, trade: null, settings: null, pipeline: null, pumpfun: null,
   });
 
   useEffect(() => {
@@ -91,6 +94,7 @@ export function useSourceState(): SourceStateBundle {
       trade: seed?.trade ?? null,
       settings: seed?.settings ?? null,
       pipeline: seed?.pipeline ?? null,
+      pumpfun: seed?.pumpfun ?? null,
     };
 
     const patch = <K extends keyof typeof stateRef.current>(
@@ -118,6 +122,9 @@ export function useSourceState(): SourceStateBundle {
     });
     es.addEventListener('state:pipeline', (e: MessageEvent) => {
       try { patch('pipeline', JSON.parse(e.data) as ArbPipelineState); } catch {}
+    });
+    es.addEventListener('state:pumpfun', (e: MessageEvent) => {
+      try { patch('pumpfun', JSON.parse(e.data) as PumpfunState); } catch {}
     });
     es.addEventListener('state:settings', (e: MessageEvent) => {
       try { patch('settings', JSON.parse(e.data) as UiSettings); } catch {}
