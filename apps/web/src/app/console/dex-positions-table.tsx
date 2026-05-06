@@ -9,23 +9,29 @@ interface Props {
   trade: TradeState | null;
 }
 
-export function PositionsTable({ trade }: Props) {
+const DEX_EXCHANGES = new Set(['uniswap-v3', 'jupiter']);
+
+export function DexPositionsTable({ trade }: Props) {
   const ts = trade?.tradeStatus;
-  const positions = ts?.positions ?? (ts?.position ? [{ exchange: 'kraken', ...ts.position }] : []);
-  // DEX positions render in their own DexPositionsTable below.
-  const cexPositions = positions.filter((p) => p.exchange !== 'uniswap-v3' && p.exchange !== 'jupiter');
-  const visible = cexPositions.filter((p) => ((p.currentPrice ?? 0) * (p.volume ?? 0)) >= 1);
+  const all = ts?.positions ?? [];
+  const dex = all.filter((p) => DEX_EXCHANGES.has(p.exchange));
+  const visible = dex.filter((p) => ((p.currentPrice ?? 0) * (p.volume ?? 0)) >= 1);
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/80">
-      <header className="border-b border-zinc-800 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
-        Positions
+      <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          DEX positions
+        </span>
+        <span className="font-mono text-[10px] text-zinc-500">
+          uniswap-v3 · jupiter · {visible.length} open
+        </span>
       </header>
       <div className="overflow-x-auto">
         <table className="w-full text-left font-mono text-xs">
           <thead className="text-zinc-500">
             <tr>
-              <th className="px-3 py-2">Exch</th>
+              <th className="px-3 py-2">Venue</th>
               <th className="px-3 py-2">Pair</th>
               <th className="px-3 py-2 text-right">Coins</th>
               <th className="px-3 py-2 text-right">Value</th>
@@ -40,7 +46,9 @@ export function PositionsTable({ trade }: Props) {
           <tbody>
             {visible.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-3 py-3 text-zinc-500">No open positions</td>
+                <td colSpan={10} className="px-3 py-3 text-zinc-500">
+                  No open DEX positions
+                </td>
               </tr>
             )}
             {visible.map((p, i) => {
@@ -52,11 +60,7 @@ export function PositionsTable({ trade }: Props) {
               const pnlUsd = Number.isFinite(p.pnlUsd) ? p.pnlUsd : 0;
               const stop = Number.isFinite(p.stopPrice) ? p.stopPrice : 0;
               const pnlClass = pnlPct >= 0 ? 'text-emerald-400' : 'text-red-400';
-              const exClass =
-                p.exchange === 'kraken' ? 'text-cyan-400'
-                : p.exchange === 'coinbase' ? 'text-fuchsia-400'
-                : p.exchange === 'gemini' ? 'text-blue-400'
-                : 'text-yellow-400';
+              const exClass = p.exchange === 'uniswap-v3' ? 'text-pink-400' : 'text-emerald-300';
               return (
                 <tr
                   key={`${p.exchange}-${p.pair}-${i}`}
@@ -67,14 +71,6 @@ export function PositionsTable({ trade }: Props) {
                   <td className={`px-3 py-1.5 ${exClass}`}>{p.exchange}</td>
                   <td className="px-3 py-1.5 text-zinc-200">
                     <span className="underline decoration-dotted decoration-zinc-700">{p.pair}</span>
-                    {p.restoredFromHydration && (
-                      <span
-                        className="ml-2 rounded border border-zinc-700 bg-zinc-800/60 px-1 py-px text-[9px] uppercase tracking-wider text-zinc-400"
-                        title="Synthesized from wallet balance during cold-start hydration. Trailing-stop and exit logic apply, but the venue is NOT blocked from opening fresh positions on other pairs."
-                      >
-                        held
-                      </span>
-                    )}
                   </td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">{volume.toFixed(6)}</td>
                   <td className="px-3 py-1.5 text-right text-zinc-300">${value.toFixed(2)}</td>

@@ -845,8 +845,14 @@ function DashboardInner() {
   // balances still render in the Holdings panel below, so nothing is hidden
   // from the operator. If a holding isn't tracked yet, the daemon's periodic
   // re-hydration (see hydrateFromExchange) will pick it up within a few min.
-  const displayedPositions = [...positions];
+  // DEX venues (uniswap-v3, jupiter) split out into their own panel so
+  // the operator can tell at a glance how much capital is on-chain.
+  const isDexVenue = (ex: string) => ex === 'uniswap-v3' || ex === 'jupiter';
+  const cexPositions = positions.filter((p) => !isDexVenue(p.exchange));
+  const dexPositions = positions.filter((p) => isDexVenue(p.exchange));
+  const displayedPositions = cexPositions;
   const visiblePositions = displayedPositions.filter((pos) => ((pos.currentPrice ?? 0) * (pos.volume ?? 0)) >= DUST_USD_THRESHOLD);
+  const visibleDexPositions = dexPositions.filter((pos) => ((pos.currentPrice ?? 0) * (pos.volume ?? 0)) >= DUST_USD_THRESHOLD);
 
   const daemonStatus = daemonOnline ? '{green-fg}●{/}' : '{red-fg}●{/}';
   const posStr = visiblePositions.length === 0
@@ -1075,6 +1081,44 @@ function DashboardInner() {
   }
   if (visiblePositions.length === 0) {
     posLines.push(' {white-fg}No open positions{/white-fg}');
+  }
+
+  // DEX positions — same column layout as the CEX positions table, but
+  // pinned to its own box so on-chain venues are visually distinct.
+  const dexLines: string[] = [
+    '{bold} Venue       Pair             Coins        Value       Entry        Last         PnL               Stop        Age      Chart{/bold}',
+  ];
+  for (const pos of visibleDexPositions) {
+    const volume = typeof pos.volume === 'number' && Number.isFinite(pos.volume) ? pos.volume : 0;
+    const currentPrice = typeof pos.currentPrice === 'number' && Number.isFinite(pos.currentPrice) ? pos.currentPrice : 0;
+    const currentValue = volume * currentPrice;
+    const entryPrice = typeof pos.entryPrice === 'number' && Number.isFinite(pos.entryPrice) ? pos.entryPrice : 0;
+    const pnlPct = typeof pos.pnlPct === 'number' && Number.isFinite(pos.pnlPct) ? pos.pnlPct : 0;
+    const pnlUsd = typeof pos.pnlUsd === 'number' && Number.isFinite(pos.pnlUsd) ? pos.pnlUsd : 0;
+    const stopPrice = typeof pos.stopPrice === 'number' && Number.isFinite(pos.stopPrice) ? pos.stopPrice : 0;
+    const pnlColor = pnlPct >= 0 ? '{green-fg}' : '{red-fg}';
+    const exColor = pos.exchange === 'uniswap-v3' ? '{magenta-fg}' : '{green-fg}';
+    const exchangeCell = padRight(pos.exchange, 10);
+    const pairCell = padRight(pos.pair, 16);
+    const volumeCell = padLeft(volume.toFixed(6), 11);
+    const valueCell = padLeft(`$${currentValue.toFixed(2)}`, 11);
+    const lastCell = padLeft(`$${formatUsdPrice(currentPrice)}`, 11);
+    const sparkCell = unicodeSparkline(pos.priceSamples, 10);
+    const sparkColored = `${pnlColor}${sparkCell}{/}`;
+    if (entryPrice > 0) {
+      const entryCell = padLeft(`$${formatUsdPrice(entryPrice)}`, 11);
+      const pnlText = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% ($${pnlUsd.toFixed(2)})`;
+      const pnlCell = padLeft(pnlText, 18);
+      const stopCell = padLeft(`$${formatUsdPrice(stopPrice)}`, 11);
+      const ageCell = padLeft(pos.elapsed ?? '-', 8);
+      dexLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${entryCell} ${lastCell} ${pnlColor}${pnlCell}{/} ${stopCell} ${ageCell}  ${sparkColored}`);
+    } else {
+      const pnlCell = padLeft('-', 18);
+      dexLines.push(` ${exColor}${exchangeCell}{/} ${pairCell} ${volumeCell} ${valueCell} ${padLeft('-', 11)} ${lastCell} {white-fg}${pnlCell}{/} ${padLeft('-', 11)} ${padLeft(pos.elapsed ?? '-', 8)}  ${sparkColored}`);
+    }
+  }
+  if (visibleDexPositions.length === 0) {
+    dexLines.push(' {white-fg}No open DEX positions{/white-fg}');
   }
 
   // Holdings — per-exchange breakdown with free/locked and inline [close]/[cancel] actions.
@@ -1450,23 +1494,27 @@ function DashboardInner() {
       ];
 
   const posH = Math.min(posLines.length + 2, 7);
+  // 0 when there are no DEX positions so the layout is unchanged for users
+  // running CEX-only — same approach as pumpH below.
+  const dexH = visibleDexPositions.length === 0 ? 0 : Math.min(dexLines.length + 2, 7);
   const holdingsH = Math.min(holdingsLines.length + 2, 14);
   // 0 when there are no pump.fun positions so the layout is unchanged.
   const pumpH = pumpfunLines.length === 0 ? 0 : Math.min(pumpfunLines.length + 2, 8);
   const row2H = Math.min(Math.max(displaySpreads.length + 4, 8), 10);
   const row3H = Math.min(Math.max(tradeLines.length + 2, balLines.length + 2, 6), 11);
   const screenRows = process.stdout.rows ?? 40;
-  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - holdingsH - pumpH - row2H - row3H - 6));
-  const holdingsTop = 2 + posH;
-  const pumpTop = 2 + posH + holdingsH;
-  const chartTop = 2 + posH + holdingsH + pumpH;
+  const chartH = Math.max(12, Math.min(20, screenRows - 2 - posH - dexH - holdingsH - pumpH - row2H - row3H - 6));
+  const dexTop = 2 + posH;
+  const holdingsTop = 2 + posH + dexH;
+  const pumpTop = 2 + posH + dexH + holdingsH;
+  const chartTop = 2 + posH + dexH + holdingsH + pumpH;
   const primaryChartWidthPct = 44;
   const secondaryChartWidthPct = 44;
   const chartControlsWidthPct = 12;
   const screenCols = process.stdout.columns ?? 120;
   const primaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (primaryChartWidthPct / 100)) - 3);
   const secondaryChartRenderWidth = Math.max(34, Math.floor(screenCols * (secondaryChartWidthPct / 100)) - 3);
-  const footerTop = 2 + posH + holdingsH + pumpH + chartH + row2H + row3H;
+  const footerTop = 2 + posH + dexH + holdingsH + pumpH + chartH + row2H + row3H;
   const footerH = Math.max(8, screenRows - footerTop);
   const footerPageSize = Math.max(1, footerH - 2);
 
@@ -2026,6 +2074,20 @@ function DashboardInner() {
           width={pos.pair.length + 2}
         />
       ))}
+
+      {dexH > 0 && (
+        <box
+          label=" DEX positions "
+          top={dexTop}
+          left={0}
+          width="100%"
+          height={dexH}
+          border={{ type: 'line' }}
+          tags={true}
+          style={{ border: { fg: 'magenta' } }}
+          content={dexLines.join('\n')}
+        />
+      )}
 
       <box label=" Holdings " top={holdingsTop} left={0} width="100%" height={holdingsH}
         border={{ type: 'line' }} tags={true} scrollable={true} mouse={true}
