@@ -145,10 +145,18 @@ export async function executePumpFunTrade(
     signature = base58encode(sig);
 
     // Submit via JSON-RPC sendTransaction.
+    //
+    // skipPreflight=true: pumpportal embeds a recent blockhash on its end,
+    // but if the operator's SOLANA_RPC_URL lags the cluster tip even by a
+    // few slots, preflight rejects with "Blockhash not found" before the
+    // leader ever sees the tx. Skipping preflight defers validation to
+    // the leader, which compares against actual cluster state. Cost of a
+    // bad tx getting through is the priority fee (~$0.02 at 0.0001 SOL),
+    // which is dwarfed by the current 100% rejection rate on lagging RPCs.
     const signedB64 = Buffer.from(signed).toString('base64');
     const rpcRes = await rpcCall<string>(rpcUrl, 'sendTransaction', [
       signedB64,
-      { encoding: 'base64', skipPreflight: false, maxRetries: 3 },
+      { encoding: 'base64', skipPreflight: true, maxRetries: 5 },
     ]);
     // The RPC returns the actual signature string; prefer that over our
     // local derivation in case of mismatch.
