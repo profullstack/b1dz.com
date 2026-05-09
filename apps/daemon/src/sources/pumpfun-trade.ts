@@ -18,6 +18,7 @@
 
 import type { SourceWorker, UserContext } from '../types.js';
 import { DirectSolanaWalletProvider } from '@b1dz/wallet-direct';
+import { getRuntimeSourceState } from '@b1dz/core';
 import {
   PumpFunDiscoveryAdapter,
   executePumpFunTrade,
@@ -278,7 +279,15 @@ async function runTick(ctx: UserContext): Promise<void> {
   // Manual-sell mints — populated by the web "Sell now" button. Each
   // request lasts one tick: we attempt the sell, then drop the entry
   // from the queue regardless of outcome so a stuck mint doesn't loop.
-  const manualSellMints = new Set<string>(
+  //
+  // We snapshot the queued mints at start-of-tick (`drainedMints`) and
+  // at end-of-tick we re-read the live runtime cache to recover any
+  // mints the web layer queued WHILE this tick was running. Without
+  // that, a click landing mid-tick gets silently overwritten by the
+  // end-of-tick `manualSellRequests: []` write, since pump.fun ticks
+  // routinely take several seconds (per-position coin-status fetches +
+  // discovery + holder calls).
+  const drainedMints = new Set<string>(
     Array.isArray(ctx.payload.manualSellRequests)
       ? (ctx.payload.manualSellRequests as string[])
       : [],
@@ -297,7 +306,7 @@ async function runTick(ctx: UserContext): Promise<void> {
       }
 
       const currentMarketCapUsd = coin.usd_market_cap ?? 0;
-      const manualSellRequested = manualSellMints.has(position.mint);
+      const manualSellRequested = drainedMints.has(position.mint);
 
       // Volume-collapse / drawdown-from-peak: trailing-stop-style exit
       // that catches dumps which never reach the entry-loss threshold.
@@ -547,15 +556,24 @@ async function runTick(ctx: UserContext): Promise<void> {
   const solUsdRef = await readSolUsdRef(ctx);
 
   // ── Persist state ─────────────────────────────────────────────
-  // Drain the manual-sell queue regardless of whether each sell
-  // succeeded — see comment at queue load. The worker either took the
-  // shot or the position couldn't be sold; either way the request was
-  // honored once and shouldn't replay.
+  // Drain only the mints we attempted on this tick. Re-read the live
+  // runtime cache so any mints the web "Sell now" button queued WHILE
+  // we were ticking survive into the next tick instead of being clobbered
+  // by a blanket `manualSellRequests: []` write.
+  const liveState = await getRuntimeSourceState<Record<string, unknown>>(
+    ctx.userId,
+    'pumpfun-trade',
+  );
+  const liveQueue = Array.isArray(liveState?.manualSellRequests)
+    ? (liveState!.manualSellRequests as string[])
+    : [];
+  const remainingQueue = liveQueue.filter((mint) => !drainedMints.has(mint));
+
   await ctx.savePayload({
     enabled: true,
     positions: remainingPositions,
     solUsdRef,
-    manualSellRequests: [],
+    manualSellRequests: remainingQueue,
     activityLog: getActivityLog('pumpfun-trade'),
     rawLog: getRawLog('pumpfun-trade'),
     daemon: {
