@@ -1767,7 +1767,10 @@ function isDailyLossLimitHit(): boolean {
  * Manual trading override set by the user via TUI.
  *   null  → default behaviour (respect daily loss limit)
  *   true  → bypass daily loss limit, keep trading
- *   false → halt entries regardless of PnL
+ *   false → full halt — no entries, no exits, no liquidations, no rotations.
+ *           Open positions are frozen so the operator can manually move funds
+ *           between exchanges/wallets without the bot closing positions out
+ *           from under them.
  */
 let tradingOverride: boolean | null = null;
 let lastTradingOverrideLogAt = 0;
@@ -2249,6 +2252,20 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     },
 
     evaluate(item): Opportunity | null {
+      // Full kill-switch: when the user has clicked "DISABLE TRADING" in the
+      // TUI (or TRADING_ENABLED=false in the env), produce zero signals — no
+      // entries, no exits, no liquidations, no rotations. This lets the
+      // operator manually move funds between CEXs / wallets (e.g. buying SOL
+      // on Kraken to withdraw to a self-custody wallet) without the bot
+      // closing the position out from under them.
+      if (tradingOverride === false) {
+        if (Date.now() - lastTradingOverrideLogAt >= 60_000) {
+          console.log('[trade] TRADING HALTED by user override — scanning only (entries+exits+liquidations all suppressed)');
+          lastTradingOverrideLogAt = Date.now();
+        }
+        return null;
+      }
+
       const activeStrategy = strategy ?? defaultStrategy ?? momentumStrategy;
       const analysisSignal = analysisToTradeSignal(item.analysis);
 
@@ -2334,15 +2351,6 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       }
 
       // ── Check entries ──
-
-      // Manual halt overrides everything
-      if (tradingOverride === false) {
-        if (Date.now() - lastTradingOverrideLogAt >= 60_000) {
-          console.log('[trade] TRADING HALTED by user override — scanning only');
-          lastTradingOverrideLogAt = Date.now();
-        }
-        return null;
-      }
 
       // Daily loss limit, unless user force-enabled
       if (isDailyLossLimitHit() && tradingOverride !== true) {
@@ -2480,6 +2488,14 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
     },
 
     async act(opp): Promise<ActionResult> {
+      // Belt-and-suspenders kill switch — evaluate() already filters when
+      // tradingOverride === false, but if a signal somehow slips through
+      // (replayed payload, future code path), refuse to actually send the
+      // order. Manual liquidation by the operator is what the disable
+      // toggle is for.
+      if (tradingOverride === false) {
+        return { ok: false, message: 'trading disabled by user override — order suppressed' };
+      }
       const meta = opp.metadata as unknown as { signal: Signal; snap: MarketSnapshot; position?: Position; strategy?: string; liquidation?: PendingLiquidation };
       const pair = meta.snap.pair;
       const exchange = meta.snap.exchange;
