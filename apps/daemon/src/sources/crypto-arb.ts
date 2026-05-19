@@ -60,6 +60,17 @@ const krakenNameMap: Record<string, string> = { XXBT: 'BTC', XETH: 'ETH', XXDG: 
 const stableSet = new Set(['ZUSD', 'USD', 'USDC', 'USDT']);
 let tickCount = 0;
 
+// Railway-level panic kill switch, captured at module-load time. The per-tick
+// applyEnvOverlay() copies user_settings.TRADING_ENABLED on top of process.env,
+// which would otherwise let a stale "true" in a user's settings catalog mask
+// the Railway env. Reading process.env exactly once, before any tick runs,
+// isolates this flag from the overlay. See crypto-trade.ts for the matching
+// guard.
+const TRADING_ENV_PANIC_HALT = (() => {
+  const raw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+  return raw === 'false';
+})();
+
 // ── Auto-seeder state ─────────────────────────────────────────────────
 // The seed ledger is persisted per-user via ctx.payload, but we also keep
 // a module-level shadow so we don't clobber the ledger when concurrent
@@ -332,22 +343,27 @@ export const cryptoArbWorker: SourceWorker = {
       }
 
       // Resolve trading toggle (same priority as crypto-trade worker):
-      // env=false is an unconditional panic kill switch; otherwise UI wins;
-      // otherwise env=true; otherwise default true.
+      //   1. TRADING_ENV_PANIC_HALT (Railway env=false at module load) → halt
+      //   2. UI tradingEnabled=false → halt
+      //   3. UI tradingEnabled=true  → enabled
+      //   4. env TRADING_ENABLED=true (post-overlay) → enabled
+      //   5. default → enabled
       let tradingEnabled = true;
-      try {
-        const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
-        if (envRaw === 'false') {
-          tradingEnabled = false;
-        } else {
+      if (TRADING_ENV_PANIC_HALT) {
+        tradingEnabled = false;
+      } else {
+        try {
           const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
           const uiOverride = uiSettings?.tradingEnabled;
           if (uiOverride === false || uiOverride === true) {
             tradingEnabled = uiOverride;
+          } else {
+            const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+            if (envRaw === 'false') tradingEnabled = false;
           }
+        } catch {
+          // Fall through — conservative default is "enabled", same as crypto-trade.
         }
-      } catch {
-        // Fall through — conservative default is "enabled", same as crypto-trade.
       }
 
       // Stable balance per exchange (USDC → USDT → USD priority).

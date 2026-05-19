@@ -34,6 +34,16 @@ let dexExecutorArmedAt: number | null = null;
 let dexExecutorLastAttemptLogAt = 0;
 const DEX_EXECUTOR_RETRY_LOG_INTERVAL_MS = 5 * 60_000;
 
+// Railway-level panic kill switch, captured at module-load time. The
+// per-tick applyEnvOverlay() copies user_settings.TRADING_ENABLED on top
+// of process.env, which would otherwise let a stale "true" in a user's
+// settings catalog mask the Railway env. Reading process.env exactly
+// once, before any tick runs, isolates this flag from the overlay.
+const TRADING_ENV_PANIC_HALT = (() => {
+  const raw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+  return raw === 'false';
+})();
+
 // Analysis-cache persistence. Candle history + indicators are multi-MB;
 // writing them into source_state.payload every 5s was blowing up Redis
 // I/O and V8 churn. We now keep them in a dedicated Redis key, loaded
@@ -97,28 +107,30 @@ export const cryptoTradeWorker: SourceWorker = {
         }
       }
 
-      // Resolve the trading override. Either source saying "false" halts;
-      // env=false acts as an unconditional panic kill switch so an operator
-      // can shut trading off via Railway even when the UI toggle is missing,
-      // stale, or has not persisted (e.g. cached browser state).
-      //   1. env TRADING_ENABLED=false  → halt, regardless of UI
-      //   2. UI tradingEnabled=false    → halt
-      //   3. UI tradingEnabled=true     → enabled
-      //   4. env TRADING_ENABLED=true   → enabled
-      //   5. default                    → enabled
+      // Resolve the trading override. Priority:
+      //   1. TRADING_ENV_PANIC_HALT (Railway env = false at module load)  → halt
+      //   2. UI tradingEnabled=false (crypto-ui-settings)                 → halt
+      //   3. UI tradingEnabled=true                                       → enabled
+      //   4. env TRADING_ENABLED=true (post-overlay)                      → enabled
+      //   5. default                                                      → enabled
+      // (1) bypasses the per-tick user-config overlay, so a stale "true"
+      // in user_settings.TRADING_ENABLED cannot mask the Railway panic
+      // switch. (2)–(4) fall back to normal toggle behavior.
       const uiSettings = await storage.get<{ tradingEnabled?: boolean | null; dailyLossLimitPct?: number | null }>('source-state', 'crypto-ui-settings');
       const uiOverride = uiSettings?.tradingEnabled;
       const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
       const envOverride = envRaw === 'true' ? true : envRaw === 'false' ? false : null;
-      const resolved = envOverride === false
+      const resolved = TRADING_ENV_PANIC_HALT
         ? false
         : uiOverride === false
           ? false
           : uiOverride === true
             ? true
-            : envOverride === true
-              ? true
-              : true;
+            : envOverride === false
+              ? false
+              : envOverride === true
+                ? true
+                : true;
       setTradingOverride(resolved);
       setDailyLossLimitPct(
         typeof uiSettings?.dailyLossLimitPct === 'number' && Number.isFinite(uiSettings.dailyLossLimitPct) && uiSettings.dailyLossLimitPct > 0
