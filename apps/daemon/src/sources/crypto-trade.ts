@@ -97,21 +97,28 @@ export const cryptoTradeWorker: SourceWorker = {
         }
       }
 
-      // Resolve the trading override in priority order:
-      //   1. UI toggle (crypto-ui-settings.tradingEnabled)  — user's explicit choice via TUI
-      //   2. TRADING_ENABLED env flag                       — operator deploy-time setting
-      //   3. Built-in default: true (ENABLED, override)
-      // Only an explicit `false` at any layer halts entries. `null`
-      // or missing values at a layer fall through to the next.
+      // Resolve the trading override. Either source saying "false" halts;
+      // env=false acts as an unconditional panic kill switch so an operator
+      // can shut trading off via Railway even when the UI toggle is missing,
+      // stale, or has not persisted (e.g. cached browser state).
+      //   1. env TRADING_ENABLED=false  → halt, regardless of UI
+      //   2. UI tradingEnabled=false    → halt
+      //   3. UI tradingEnabled=true     → enabled
+      //   4. env TRADING_ENABLED=true   → enabled
+      //   5. default                    → enabled
       const uiSettings = await storage.get<{ tradingEnabled?: boolean | null; dailyLossLimitPct?: number | null }>('source-state', 'crypto-ui-settings');
       const uiOverride = uiSettings?.tradingEnabled;
       const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
       const envOverride = envRaw === 'true' ? true : envRaw === 'false' ? false : null;
-      const resolved = uiOverride === true || uiOverride === false
-        ? uiOverride
-        : envOverride === true || envOverride === false
-          ? envOverride
-          : true;
+      const resolved = envOverride === false
+        ? false
+        : uiOverride === false
+          ? false
+          : uiOverride === true
+            ? true
+            : envOverride === true
+              ? true
+              : true;
       setTradingOverride(resolved);
       setDailyLossLimitPct(
         typeof uiSettings?.dailyLossLimitPct === 'number' && Number.isFinite(uiSettings.dailyLossLimitPct) && uiSettings.dailyLossLimitPct > 0

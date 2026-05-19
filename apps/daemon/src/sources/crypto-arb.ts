@@ -332,16 +332,19 @@ export const cryptoArbWorker: SourceWorker = {
       }
 
       // Resolve trading toggle (same priority as crypto-trade worker):
-      // UI setting → TRADING_ENABLED env → default true.
+      // env=false is an unconditional panic kill switch; otherwise UI wins;
+      // otherwise env=true; otherwise default true.
       let tradingEnabled = true;
       try {
-        const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
-        const uiOverride = uiSettings?.tradingEnabled;
-        if (uiOverride === false || uiOverride === true) {
-          tradingEnabled = uiOverride;
+        const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
+        if (envRaw === 'false') {
+          tradingEnabled = false;
         } else {
-          const envRaw = (process.env.TRADING_ENABLED ?? '').trim().toLowerCase();
-          if (envRaw === 'false') tradingEnabled = false;
+          const uiSettings = await storage.get<{ tradingEnabled?: boolean | null }>('source-state', 'crypto-ui-settings');
+          const uiOverride = uiSettings?.tradingEnabled;
+          if (uiOverride === false || uiOverride === true) {
+            tradingEnabled = uiOverride;
+          }
         }
       } catch {
         // Fall through — conservative default is "enabled", same as crypto-trade.
