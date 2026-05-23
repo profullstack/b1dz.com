@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { PLUGIN_CATALOG } from '@b1dz/core/catalog';
+import { normalizeConfigSchema, splitConfigSchema, type PluginConfigField } from '@profullstack/pluginstore';
 import {
   PlainTextRow,
   NumberRow,
@@ -15,122 +16,6 @@ import {
   saveSettings,
   type SettingsResponse,
 } from '../shared';
-
-// ── Per-plugin field spec ────────────────────────────────────────────────────
-
-interface FieldDef { key: string; label: string; hint?: string; multiline?: boolean }
-interface PluginFieldSpec {
-  secrets?: FieldDef[];
-  strings?: FieldDef[];
-  numbers?: FieldDef[];
-  bools?: FieldDef[];
-}
-
-const PLUGIN_FIELDS: Record<string, PluginFieldSpec> = {
-  coinbase: {
-    strings: [{ key: 'COINBASE_API_KEY_NAME', label: 'API key name', hint: 'organizations/.../apiKeys/...' }],
-    secrets: [
-      { key: 'COINBASE_API_PRIVATE_KEY', label: 'EC private key (PEM)', multiline: true, hint: '-----BEGIN EC PRIVATE KEY----- block' },
-      { key: 'COINBASE_API_PRIVATE_KEY_B', label: 'EC private key B (PEM, optional)', multiline: true, hint: 'Second account key' },
-      { key: 'COINBASE_EC_KEY_B', label: 'EC key B legacy (PEM, optional)', multiline: true, hint: 'Legacy secondary key' },
-    ],
-  },
-  kraken: {
-    secrets: [
-      { key: 'KRAKEN_API_KEY', label: 'API key' },
-      { key: 'KRAKEN_API_SECRET', label: 'API secret' },
-    ],
-  },
-  'binance-us': {
-    secrets: [
-      { key: 'BINANCE_US_API_KEY', label: 'API key' },
-      { key: 'BINANCE_US_API_SECRET', label: 'API secret' },
-    ],
-  },
-  gemini: {
-    strings: [{ key: 'GEMINI_ACCOUNT', label: 'Account name', hint: 'primary / master / sub-label' }],
-    secrets: [
-      { key: 'GEMINI_API_KEY', label: 'API key' },
-      { key: 'GEMINI_API_SECRET', label: 'API secret' },
-    ],
-  },
-  'uniswap-v3-base': {
-    secrets: [{ key: 'EVM_PRIVATE_KEY', label: 'EVM hot wallet private key', hint: '0x… 64-hex' }],
-    strings: [{ key: 'BASE_RPC_URL', label: 'Base RPC URL' }],
-    numbers: [
-      { key: 'DEX_TRADE_MAX_USD', label: 'Max trade USD', hint: 'Hard ceiling per swap, e.g. 20' },
-      { key: 'DEX_SLIPPAGE_BPS', label: 'Slippage (bps)', hint: '300 = 3%' },
-    ],
-  },
-  '1inch': {
-    secrets: [
-      { key: 'ONEINCH_API_KEY', label: '1inch API key' },
-      { key: 'EVM_PRIVATE_KEY', label: 'EVM hot wallet private key', hint: '0x… 64-hex' },
-    ],
-  },
-  // Note: Solana hot wallet + RPC are now configured under the dedicated
-  // "Solana" tab — the same values are reused by every Solana-signing
-  // plugin (jupiter, pumpfun) so we keep them in one place rather than
-  // duplicating the field across plugins.
-  // PUMPPORTAL_API_KEY now lives in the Solana tab (always visible) so users
-  // don't need to install the pumpfun plugin first to set the credential.
-  pumpfun: {
-    bools: [{ key: 'PUMPFUN_ENABLE_SCRAPE', label: 'Enable scraper' }],
-  },
-  '0x': {
-    secrets: [{ key: 'ZEROX_API_KEY', label: '0x API key' }],
-  },
-  'cex-arb': {
-    strings: [{ key: 'ARB_MODE', label: 'Mode', hint: 'observe | paper | live' }],
-    numbers: [
-      { key: 'ARB_MAX_TRADE_USD', label: 'Max trade USD', hint: 'Per-leg cap, e.g. 15' },
-      { key: 'ARB_SIZE_USD', label: 'Notional size USD' },
-      { key: 'ARB_MIN_NET_USD', label: 'Min net profit USD', hint: 'e.g. 0.01' },
-      { key: 'ARB_MIN_NET_BPS', label: 'Min net profit bps', hint: 'e.g. 3 (= 0.03%)' },
-    ],
-    bools: [
-      { key: 'ARB_EXECUTOR_UNISWAP_BASE', label: 'Arm Uniswap V3 executor' },
-      { key: 'ARB_TRIANGULAR', label: 'Triangular arb scanner' },
-      { key: 'MARGIN_TRADING', label: 'Margin trading' },
-    ],
-  },
-  dca: {
-    bools: [{ key: 'DCA_ENABLED', label: 'DCA enabled' }],
-    strings: [
-      { key: 'DCA_COINS', label: 'Coins', hint: 'BTC,ETH,SOL' },
-      { key: 'DCA_EXCHANGES', label: 'Exchanges', hint: 'kraken,coinbase,binance-us,gemini' },
-    ],
-    numbers: [
-      { key: 'DCA_TOTAL_ALLOCATION_PCT', label: 'Allocation %', hint: '% of equity, e.g. 10' },
-      { key: 'DCA_MAX_COINS', label: 'Max coins', hint: 'e.g. 3' },
-      { key: 'DCA_INTERVAL_MS', label: 'Interval ms', hint: '86400000 = 24h' },
-    ],
-  },
-  'v2-pipeline': {
-    strings: [{ key: 'V2_MODE', label: 'Mode', hint: 'observe | paper | live' }],
-    numbers: [
-      { key: 'V2_SIZE_USD', label: 'Notional size USD' },
-      { key: 'V2_MAX_PAIRS', label: 'Max pairs', hint: 'e.g. 10' },
-      { key: 'V2_MAX_TRADE_USD', label: 'Max trade USD' },
-      { key: 'V2_MIN_NET_USD', label: 'Min net profit USD', hint: 'e.g. 0.10' },
-    ],
-  },
-  'signal-trade': {
-    numbers: [
-      { key: 'ENTRY_MIN_SCORE', label: 'Min entry score', hint: '0–1, e.g. 0.6' },
-      { key: 'MIN_HOLD_SECS', label: 'Min hold (secs)', hint: 'e.g. 300' },
-      { key: 'MIN_VOLUME_USD', label: 'Min volume USD', hint: 'Pair must clear this threshold' },
-    ],
-    bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
-  },
-  momentum: {
-    numbers: [
-      { key: 'ENTRY_MIN_SCORE', label: 'Min entry score', hint: '0–1' },
-      { key: 'MIN_HOLD_SECS', label: 'Min hold (secs)' },
-    ],
-    bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
-  },
-};
 
 const SYSTEM_BOOLS: { key: string; label: string }[] = [
   { key: 'TRADING_ENABLED', label: 'Trading enabled (master on/off)' },
@@ -260,26 +145,27 @@ export function PluginsSection({
 
   // ── Per-plugin save ────────────────────────────────────────────────────────
 
-  const savePlugin = (pluginId: string, spec: PluginFieldSpec) => async () => {
+  const savePlugin = (fields: PluginConfigField[]) => async () => {
     if (!data) throw new Error('settings not loaded');
+    const split = splitConfigSchema(fields);
 
     const plain: Record<string, string | number | boolean | null> = {};
-    for (const { key } of (spec.strings ?? [])) {
+    for (const { key } of split.strings) {
       const v = plainDrafts[key] !== undefined ? plainDrafts[key] : readPlainString(data, key);
       plain[key] = v.trim() || null;
     }
-    for (const { key } of (spec.numbers ?? [])) {
+    for (const { key } of split.numbers) {
       const raw = plainDrafts[key] !== undefined ? plainDrafts[key] : String(data.plain[key] ?? '');
       plain[key] = raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
     }
-    for (const { key } of (spec.bools ?? [])) {
+    for (const { key } of split.bools) {
       plain[key] = plainDrafts[key] !== undefined
         ? plainDrafts[key] === 'true'
         : readPlainBool(data, key);
     }
 
     const merged: Record<string, string> = { ...(decrypted ?? {}) };
-    for (const { key } of (spec.secrets ?? [])) {
+    for (const { key } of split.secrets) {
       if (pendingClear[key]) delete merged[key];
       else if ((secretDrafts[key] ?? '').trim() !== '') merged[key] = secretDrafts[key];
     }
@@ -292,12 +178,7 @@ export function PluginsSection({
     setDecrypted(merged);
 
     // Clear drafts for only this plugin's fields
-    const specKeys = new Set([
-      ...(spec.secrets ?? []).map(f => f.key),
-      ...(spec.strings ?? []).map(f => f.key),
-      ...(spec.numbers ?? []).map(f => f.key),
-      ...(spec.bools ?? []).map(f => f.key),
-    ]);
+    const specKeys = new Set(fields.map(f => f.key));
     setSecretDrafts(d => { const n = { ...d }; for (const k of specKeys) delete n[k]; return n; });
     setPlainDrafts(d => { const n = { ...d }; for (const k of specKeys) delete n[k]; return n; });
     setPendingClear(p => { const n = { ...p }; for (const k of specKeys) delete n[k]; return n; });
@@ -306,14 +187,14 @@ export function PluginsSection({
 
   // ── Field renderers ────────────────────────────────────────────────────────
 
-  const renderSecret = (f: FieldDef) => {
+  const renderSecret = (f: PluginConfigField) => {
     const stored = decrypted?.[f.key];
     return (
       <SecretRow
         key={f.key}
         field={f.key}
         label={f.label}
-        hint={f.hint}
+        hint={f.help ?? f.hint}
         multiline={f.multiline}
         isSet={!!stored}
         length={stored ? stored.length : undefined}
@@ -335,21 +216,21 @@ export function PluginsSection({
     );
   };
 
-  const renderPlain = (f: FieldDef) => {
+  const renderPlain = (f: PluginConfigField) => {
     const val = plainDrafts[f.key] !== undefined ? plainDrafts[f.key] : readPlainString(data!, f.key);
     return (
       <PlainTextRow
         key={f.key}
         field={f.key}
         label={f.label}
-        hint={f.hint}
+        hint={f.help ?? f.hint}
         value={val}
         onChange={v => setPlainDrafts(d => ({ ...d, [f.key]: v }))}
       />
     );
   };
 
-  const renderNumber = (f: FieldDef) => {
+  const renderNumber = (f: PluginConfigField) => {
     const val = plainDrafts[f.key] !== undefined
       ? plainDrafts[f.key]
       : String(data?.plain[f.key] ?? '');
@@ -358,14 +239,14 @@ export function PluginsSection({
         key={f.key}
         field={f.key}
         label={f.label}
-        hint={f.hint}
+        hint={f.help ?? f.hint}
         value={val === 'undefined' || val === 'null' ? '' : val}
         onChange={v => setPlainDrafts(d => ({ ...d, [f.key]: v }))}
       />
     );
   };
 
-  const renderBool = (f: FieldDef) => {
+  const renderBool = (f: PluginConfigField) => {
     const val = plainDrafts[f.key] !== undefined
       ? plainDrafts[f.key] === 'true'
       : readPlainBool(data!, f.key);
@@ -446,8 +327,9 @@ export function PluginsSection({
               const isExpired = !isDisabled && expiresMs != null && expiresMs <= now;
               const expiresLabel = expiresMs ? new Date(expiresMs).toLocaleDateString() : null;
               const installedLabel = new Date(row.installed_at).toLocaleDateString();
-              const spec = PLUGIN_FIELDS[row.plugin_id];
-              const hasSettings = !!spec && data !== null;
+              const fields = normalizeConfigSchema(entry?.config_schema ?? []);
+              const split = splitConfigSchema(fields);
+              const hasSettings = fields.length > 0 && data !== null;
               const isExpanded = !!expanded[row.plugin_id];
 
               return (
@@ -509,16 +391,16 @@ export function PluginsSection({
                   </div>
 
                   {/* Inline plugin settings */}
-                  {isExpanded && hasSettings && spec && (
+                  {isExpanded && hasSettings && (
                     <div className="pb-4 pt-1 pl-2">
-                      <SectionShell
-                        title={`${name} settings`}
-                        onSave={savePlugin(row.plugin_id, spec)}
-                      >
-                        {(spec.secrets ?? []).map(renderSecret)}
-                        {(spec.strings ?? []).map(renderPlain)}
-                        {(spec.numbers ?? []).map(renderNumber)}
-                        {(spec.bools ?? []).map(renderBool)}
+                        <SectionShell
+                          title={`${name} settings`}
+                          onSave={savePlugin(fields)}
+                        >
+                        {split.secrets.map(renderSecret)}
+                        {split.strings.map(renderPlain)}
+                        {split.numbers.map(renderNumber)}
+                        {split.bools.map(renderBool)}
                       </SectionShell>
                     </div>
                   )}

@@ -19,6 +19,7 @@
     "@b1dz/storage-json": "workspace:*",
     "@b1dz/storage-supabase": "workspace:*",
     "@profullstack/coinpay": "^0.6.11",
+    "@profullstack/pluginstore": "github:profullstack/pluginstore",
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "lightweight-charts": "^5.2.0",

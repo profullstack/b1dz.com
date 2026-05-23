@@ -8,19 +8,118 @@
  * Third-party entries land here via a content pipeline in v1; for now this
  * is b1dz's first-party set.
  */
-import type { PluginManifest } from './plugins.js';
+import {
+  configSchemaFromFieldSpec,
+  type CatalogEntry,
+  type PluginFieldSpec,
+  type PluginManifest,
+} from '@profullstack/pluginstore';
 
-export interface CatalogEntry {
-  manifest: PluginManifest;
-  /** 'ready' = armed first-party. 'preview' = shipped but gated. 'coming-soon' = listed, not yet built. */
-  status: 'ready' | 'preview' | 'coming-soon';
-  /** Pricing for v1 marketplace. 'free' for b1dz first-party; authors set 'subscription' or 'revshare' later. */
-  pricing: { model: 'free' } | { model: 'subscription'; usdPerMonth: number } | { model: 'revshare'; bps: number };
-  /** Optional marketing tagline shown in the catalog card. */
-  tagline?: string;
-}
+export type { CatalogEntry } from '@profullstack/pluginstore';
 
 const V = '0.3.10';
+
+const PLUGIN_CONFIG_SCHEMAS = Object.fromEntries(
+  Object.entries({
+    coinbase: {
+      strings: [{ key: 'COINBASE_API_KEY_NAME', label: 'API key name', hint: 'organizations/.../apiKeys/...' }],
+      secrets: [
+        { key: 'COINBASE_API_PRIVATE_KEY', label: 'EC private key (PEM)', multiline: true, hint: '-----BEGIN EC PRIVATE KEY----- block' },
+        { key: 'COINBASE_API_PRIVATE_KEY_B', label: 'EC private key B (PEM, optional)', multiline: true, hint: 'Second account key' },
+        { key: 'COINBASE_EC_KEY_B', label: 'EC key B legacy (PEM, optional)', multiline: true, hint: 'Legacy secondary key' },
+      ],
+    },
+    kraken: {
+      secrets: [
+        { key: 'KRAKEN_API_KEY', label: 'API key' },
+        { key: 'KRAKEN_API_SECRET', label: 'API secret' },
+      ],
+    },
+    'binance-us': {
+      secrets: [
+        { key: 'BINANCE_US_API_KEY', label: 'API key' },
+        { key: 'BINANCE_US_API_SECRET', label: 'API secret' },
+      ],
+    },
+    gemini: {
+      strings: [{ key: 'GEMINI_ACCOUNT', label: 'Account name', hint: 'primary / master / sub-label' }],
+      secrets: [
+        { key: 'GEMINI_API_KEY', label: 'API key' },
+        { key: 'GEMINI_API_SECRET', label: 'API secret' },
+      ],
+    },
+    'uniswap-v3-base': {
+      secrets: [{ key: 'EVM_PRIVATE_KEY', label: 'EVM hot wallet private key', hint: '0x... 64-hex' }],
+      strings: [{ key: 'BASE_RPC_URL', label: 'Base RPC URL' }],
+      numbers: [
+        { key: 'DEX_TRADE_MAX_USD', label: 'Max trade USD', hint: 'Hard ceiling per swap, e.g. 20' },
+        { key: 'DEX_SLIPPAGE_BPS', label: 'Slippage (bps)', hint: '300 = 3%' },
+      ],
+    },
+    '1inch': {
+      secrets: [
+        { key: 'ONEINCH_API_KEY', label: '1inch API key' },
+        { key: 'EVM_PRIVATE_KEY', label: 'EVM hot wallet private key', hint: '0x... 64-hex' },
+      ],
+    },
+    pumpfun: {
+      bools: [{ key: 'PUMPFUN_ENABLE_SCRAPE', label: 'Enable scraper' }],
+    },
+    '0x': {
+      secrets: [{ key: 'ZEROX_API_KEY', label: '0x API key' }],
+    },
+    'cex-arb': {
+      strings: [{ key: 'ARB_MODE', label: 'Mode', hint: 'observe | paper | live' }],
+      numbers: [
+        { key: 'ARB_MAX_TRADE_USD', label: 'Max trade USD', hint: 'Per-leg cap, e.g. 15' },
+        { key: 'ARB_SIZE_USD', label: 'Notional size USD' },
+        { key: 'ARB_MIN_NET_USD', label: 'Min net profit USD', hint: 'e.g. 0.01' },
+        { key: 'ARB_MIN_NET_BPS', label: 'Min net profit bps', hint: 'e.g. 3 (= 0.03%)' },
+      ],
+      bools: [
+        { key: 'ARB_EXECUTOR_UNISWAP_BASE', label: 'Arm Uniswap V3 executor' },
+        { key: 'ARB_TRIANGULAR', label: 'Triangular arb scanner' },
+        { key: 'MARGIN_TRADING', label: 'Margin trading' },
+      ],
+    },
+    dca: {
+      bools: [{ key: 'DCA_ENABLED', label: 'DCA enabled' }],
+      strings: [
+        { key: 'DCA_COINS', label: 'Coins', hint: 'BTC,ETH,SOL' },
+        { key: 'DCA_EXCHANGES', label: 'Exchanges', hint: 'kraken,coinbase,binance-us,gemini' },
+      ],
+      numbers: [
+        { key: 'DCA_TOTAL_ALLOCATION_PCT', label: 'Allocation %', hint: '% of equity, e.g. 10' },
+        { key: 'DCA_MAX_COINS', label: 'Max coins', hint: 'e.g. 3' },
+        { key: 'DCA_INTERVAL_MS', label: 'Interval ms', hint: '86400000 = 24h' },
+      ],
+    },
+    'v2-pipeline': {
+      strings: [{ key: 'V2_MODE', label: 'Mode', hint: 'observe | paper | live' }],
+      numbers: [
+        { key: 'V2_SIZE_USD', label: 'Notional size USD' },
+        { key: 'V2_MAX_PAIRS', label: 'Max pairs', hint: 'e.g. 10' },
+        { key: 'V2_MAX_TRADE_USD', label: 'Max trade USD' },
+        { key: 'V2_MIN_NET_USD', label: 'Min net profit USD', hint: 'e.g. 0.10' },
+      ],
+    },
+    'signal-trade': {
+      numbers: [
+        { key: 'ENTRY_MIN_SCORE', label: 'Min entry score', hint: '0-1, e.g. 0.6' },
+        { key: 'MIN_HOLD_SECS', label: 'Min hold (secs)', hint: 'e.g. 300' },
+        { key: 'MIN_VOLUME_USD', label: 'Min volume USD', hint: 'Pair must clear this threshold' },
+      ],
+      bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
+    },
+    momentum: {
+      numbers: [
+        { key: 'ENTRY_MIN_SCORE', label: 'Min entry score', hint: '0-1' },
+        { key: 'MIN_HOLD_SECS', label: 'Min hold (secs)' },
+      ],
+      bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
+    },
+  } satisfies Record<string, PluginFieldSpec>).map(([id, spec]) => [id, configSchemaFromFieldSpec(spec)]),
+) as Record<string, ReturnType<typeof configSchemaFromFieldSpec>>;
 
 export const PLUGIN_CATALOG: CatalogEntry[] = [
   // ── Strategies ──────────────────────────────────────────────────────────
@@ -28,6 +127,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Automated cross-exchange arbitrage across Kraken, Binance.US, Coinbase, and Gemini.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['cex-arb'],
     manifest: {
       id: 'cex-arb',
       kind: 'strategy',
@@ -42,6 +142,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Multi-pair signal-based trading with integrated DEX execution.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['signal-trade'],
     manifest: {
       id: 'signal-trade',
       kind: 'strategy',
@@ -56,6 +157,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Passive dollar-cost averaging across all four CEX venues.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.dca,
     manifest: {
       id: 'dca',
       kind: 'strategy',
@@ -70,6 +172,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Multi-venue cross-DEX arbitrage with triangular path detection.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['v2-pipeline'],
     manifest: {
       id: 'v2-pipeline',
       kind: 'strategy',
@@ -84,6 +187,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'preview',
     pricing: { model: 'free' },
     tagline: 'Buy signal when the last three bid ticks are strictly rising.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.momentum,
     manifest: {
       id: 'momentum',
       kind: 'strategy',
@@ -100,6 +204,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Spot and advanced trading on Coinbase Advanced Trade (US).',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.coinbase,
     manifest: {
       id: 'coinbase',
       kind: 'connector',
@@ -114,6 +219,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Spot trading on Kraken with full order book and trade history.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.kraken,
     manifest: {
       id: 'kraken',
       kind: 'connector',
@@ -128,6 +234,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'US-compliant spot trading on Binance.US.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['binance-us'],
     manifest: {
       id: 'binance-us',
       kind: 'connector',
@@ -142,6 +249,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Spot and sub-account trading on Gemini Exchange.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.gemini,
     manifest: {
       id: 'gemini',
       kind: 'connector',
@@ -158,6 +266,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Execute swaps on Base through Uniswap V3.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['uniswap-v3-base'],
     manifest: {
       id: 'uniswap-v3-base',
       kind: 'connector',
@@ -172,6 +281,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'ready',
     pricing: { model: 'free' },
     tagline: 'Best-price EVM swaps via the 1inch aggregation router.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['1inch'],
     manifest: {
       id: '1inch',
       kind: 'connector',
@@ -200,6 +310,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'preview',
     pricing: { model: 'free' },
     tagline: 'Discover and monitor pump.fun token launches on Solana.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.pumpfun,
     manifest: {
       id: 'pumpfun',
       kind: 'connector',
@@ -214,6 +325,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     status: 'preview',
     pricing: { model: 'free' },
     tagline: 'EVM DEX liquidity via the 0x Protocol API.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS['0x'],
     manifest: {
       id: '0x',
       kind: 'connector',
