@@ -218,8 +218,8 @@ importers:
         specifier: ^0.6.11
         version: 0.6.11
       '@profullstack/pluginstore':
-        specifier: github:profullstack/pluginstore
-        version: https://codeload.github.com/profullstack/pluginstore/tar.gz/065c591a07b2a078b14e08bceacbc527e8674084
+        specifier: ^0.1.0
+        version: 0.1.0
       '@supabase/ssr':
         specifier: latest
         version: 0.10.3(@supabase/supabase-js@2.106.1)
@@ -346,8 +346,8 @@ importers:
   packages/core:
     dependencies:
       '@profullstack/pluginstore':
-        specifier: github:profullstack/pluginstore
-        version: https://codeload.github.com/profullstack/pluginstore/tar.gz/065c591a07b2a078b14e08bceacbc527e8674084
+        specifier: ^0.1.0
+        version: 0.1.0
       redis:
         specifier: latest
         version: 5.12.1
@@ -1196,9 +1196,8 @@ packages:
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@profullstack/pluginstore@https://codeload.github.com/profullstack/pluginstore/tar.gz/065c591a07b2a078b14e08bceacbc527e8674084':
-    resolution: {tarball: https://codeload.github.com/profullstack/pluginstore/tar.gz/065c591a07b2a078b14e08bceacbc527e8674084}
-    version: 0.1.0
+  '@profullstack/pluginstore@0.1.0':
+    resolution: {integrity: sha512-7AoaATTlZ2q+4TLRESvfn78r59O28rvOQ+B1mRdErriM85ttW8wgjWa5q1JMB9YVwAt2luB0si/JVsheFm2esQ==}
 
   '@puppeteer/browsers@3.0.3':
     resolution: {integrity: sha512-v3YaiGpzUTgOZkHBFR0iZg58Vto25SqBQxfLUXDiofJccwVl6Mlr7BdLCS1NZgxikdeIHf936cxYWL9IZp3tow==}
@@ -3473,7 +3472,7 @@ snapshots:
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
 
-  '@profullstack/pluginstore@https://codeload.github.com/profullstack/pluginstore/tar.gz/065c591a07b2a078b14e08bceacbc527e8674084': {}
+  '@profullstack/pluginstore@0.1.0': {}
 
   '@puppeteer/browsers@3.0.3':
     dependencies:
