@@ -27,7 +27,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@profullstack/pluginstore": "^0.1.0",
+    "@profullstack/pluginstore": "^0.1.1",
     "redis": "latest"
   },
   "devDependencies": {
