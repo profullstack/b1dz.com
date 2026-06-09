@@ -371,6 +371,16 @@ export default async function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-zinc-800 py-8 text-center text-zinc-500 text-sm">
         <p>&copy; {new Date().getFullYear()} b1dz.com — AI Arbitrage Terminal</p>
+        <p className="mt-2">
+          <a
+            href="https://github.com/profullstack/b1dz.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-zinc-400 underline-offset-4 transition hover:text-zinc-200 hover:underline"
+          >
+            GitHub
+          </a>
+        </p>
       </footer>
     </main>
   );
