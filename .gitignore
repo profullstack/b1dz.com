@@ -2,6 +2,7 @@ node_modules
 .next
 dist
 .turbo
+*.tsbuildinfo
 .env
 .env.local
 .env.bak*
