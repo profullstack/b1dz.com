@@ -440,7 +440,7 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
     },
   },
   {
-    status: 'preview',
+    status: 'coming-soon',
     pricing: { model: 'free' },
     tagline: 'Global equities via Interactive Brokers (advanced — needs a gateway).',
     config_schema: PLUGIN_CONFIG_SCHEMAS.ibkr,
