@@ -4,6 +4,21 @@
  * to the same exchange feeds — one PriceFeed, many strategies on top.
  */
 
+/**
+ * Trading-session state for a symbol on its exchange. Crypto venues are always
+ * 'open'; equity venues cycle pre/open/post/closed on an exchange calendar.
+ * Lives here (not plugins.ts) because MarketSnapshot references it and plugins.ts
+ * already imports from this module — keeping it here avoids an import cycle.
+ * See docs/prd-equities-v1.md §5.
+ */
+export interface MarketSession {
+  status: 'open' | 'closed' | 'pre' | 'post';
+  /** Exchange-local next open/close, ISO 8601 with offset */
+  nextOpen?: string;
+  nextClose?: string;
+  timezone: string; // e.g. 'America/New_York', 'Europe/London'
+}
+
 export interface MarketSnapshot {
   exchange: string;        // 'gemini' | 'kraken' | 'binance-us' | …
   pair: string;            // 'BTC-USD', 'ETH-USD', …
@@ -12,6 +27,14 @@ export interface MarketSnapshot {
   bidSize: number;         // depth at best bid
   askSize: number;         // depth at best ask
   ts: number;              // ms epoch
+
+  // --- Equity-aware optional fields (PRD equities-v1 §5). ---
+  // Crypto paths leave these undefined; equity strategies and the risk engine
+  // read them. Optional so all existing consumers compile unchanged.
+  assetClass?: 'crypto' | 'equity';
+  session?: MarketSession;
+  currency?: string;       // 'USD', 'CAD', 'GBP', … (quote currency of `pair`)
+  haltState?: 'none' | 'halted' | 'luld';
 }
 
 export interface OrderBookLevel { price: number; size: number; }

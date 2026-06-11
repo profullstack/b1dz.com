@@ -118,6 +118,14 @@ const PLUGIN_CONFIG_SCHEMAS = Object.fromEntries(
       ],
       bools: [{ key: 'REQUIRE_CONFIRM_UPTREND', label: 'Require uptrend confirmation' }],
     },
+    alpaca: {
+      secrets: [
+        { key: 'ALPACA_API_KEY_ID', label: 'API key ID' },
+        { key: 'ALPACA_API_SECRET_KEY', label: 'API secret key' },
+      ],
+      bools: [{ key: 'ALPACA_PAPER', label: 'Paper trading', hint: 'Leave on until live equity execution is enabled' }],
+      strings: [{ key: 'ALPACA_FEED', label: 'Market-data feed', hint: 'iex (free) | sip (subscription)' }],
+    },
   } satisfies Record<string, PluginFieldSpec>).map(([id, spec]) => [id, configSchemaFromFieldSpec(spec)]),
 ) as Record<string, ReturnType<typeof configSchemaFromFieldSpec>>;
 
@@ -196,6 +204,49 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
       author: 'b1dz',
       description: 'Reference momentum strategy. Fires a buy signal on 3 consecutive rising bid ticks. Useful as a template for building custom tick-based strategies.',
       capabilities: ['style:momentum', 'timeframe:tick'],
+    },
+  },
+  // Asset-agnostic strategies (PRD equities-v1 §8) — run on crypto AND equities.
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'Ride established trends across crypto and equities.',
+    manifest: {
+      id: 'trend-continuation',
+      kind: 'strategy',
+      version: '0.1.0',
+      name: 'Trend Continuation',
+      author: 'b1dz',
+      description: 'Follows an established trend: long when the fast EMA leads the slow EMA with rising MACD momentum, short on the inverse. Signals-only; the engine applies session gating, sizing, and risk. Asset-agnostic — runs unchanged on crypto ticks and equity bars.',
+      capabilities: ['style:trend', 'style:momentum', 'asset:crypto', 'asset:equity', 'timeframe:any'],
+    },
+  },
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'Fade overbought/oversold extremes on any asset class.',
+    manifest: {
+      id: 'mean-reversion',
+      kind: 'strategy',
+      version: '0.1.0',
+      name: 'Mean Reversion (RSI)',
+      author: 'b1dz',
+      description: 'Fades extremes: buys when RSI is oversold (<30), sells when overbought (>70). Signals-only. Asset-agnostic — works on crypto and equities.',
+      capabilities: ['style:mean-reversion', 'indicator:rsi', 'asset:crypto', 'asset:equity', 'timeframe:any'],
+    },
+  },
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'Trade range expansion — breakouts and breakdowns.',
+    manifest: {
+      id: 'breakout',
+      kind: 'strategy',
+      version: '0.1.0',
+      name: 'Breakout / Breakdown',
+      author: 'b1dz',
+      description: 'Trades range expansion: buys a push above the prior N-bar high, sells a break below the prior N-bar low. Signals-only. Asset-agnostic — runs on crypto and equities.',
+      capabilities: ['style:breakout', 'asset:crypto', 'asset:equity', 'timeframe:any'],
     },
   },
 
@@ -336,6 +387,13 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
       capabilities: ['chain:base', 'chain:evm', 'venue:0x', 'signer:evm'],
     },
   },
+  // ── Brokers (equities) — first-party, included with b1dz (PRD equities-v1) ──
+  // BLOCKED: @profullstack/pluginstore's PluginKind is
+  // 'connector' | 'strategy' | 'module' and does not yet include 'broker'.
+  // The Alpaca store listing lands once a pluginstore release adds 'broker'
+  // (config schema staged below as PLUGIN_CONFIG_SCHEMAS.alpaca). The connector
+  // itself (@b1dz/source-alpaca) and the core contract are complete; only the
+  // store-facing catalog entry waits on that dependency bump.
 ];
 
 export function listCatalog(kind?: PluginManifest['kind']): CatalogEntry[] {

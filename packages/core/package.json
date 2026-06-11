@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@profullstack/pluginstore": "^0.1.1",
-    "redis": "latest"
+    "redis": "5.12.1"
   },
   "devDependencies": {
     "@types/node": "latest",
