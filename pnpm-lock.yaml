@@ -150,6 +150,9 @@ importers:
       '@b1dz/observe-engine':
         specifier: workspace:*
         version: link:../../packages/observe-engine
+      '@b1dz/equity-engine':
+        specifier: workspace:*
+        version: link:../../packages/equity-engine
       '@b1dz/source-alpaca':
         specifier: workspace:*
         version: link:../../packages/source-alpaca
@@ -162,6 +165,9 @@ importers:
       '@b1dz/source-ibkr':
         specifier: workspace:*
         version: link:../../packages/source-ibkr
+      '@b1dz/source-strategies':
+        specifier: workspace:*
+        version: link:../../packages/source-strategies
       '@b1dz/storage-supabase':
         specifier: workspace:*
         version: link:../../packages/storage-supabase
@@ -357,6 +363,22 @@ importers:
       redis:
         specifier: 5.12.1
         version: 5.12.1
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 25.9.1
+      typescript:
+        specifier: latest
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
+
+  packages/equity-engine:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@types/node':
         specifier: latest
