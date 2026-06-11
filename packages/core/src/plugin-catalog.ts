@@ -126,6 +126,35 @@ const PLUGIN_CONFIG_SCHEMAS = Object.fromEntries(
       bools: [{ key: 'ALPACA_PAPER', label: 'Paper trading', hint: 'Leave on until live equity execution is enabled' }],
       strings: [{ key: 'ALPACA_FEED', label: 'Market-data feed', hint: 'iex (free) | sip (subscription)' }],
     },
+    tradier: {
+      secrets: [{ key: 'TRADIER_ACCESS_TOKEN', label: 'Access token' }],
+      strings: [{ key: 'TRADIER_ACCOUNT_ID', label: 'Account ID' }],
+      bools: [{ key: 'TRADIER_SANDBOX', label: 'Sandbox (paper)', hint: 'Use the sandbox host' }],
+    },
+    ibkr: {
+      secrets: [{ key: 'IBKR_ACCESS_TOKEN', label: 'OAuth token (optional)', hint: 'Only for OAuth gateways' }],
+      strings: [
+        { key: 'IBKR_BASE_URL', label: 'Gateway base URL', hint: 'e.g. https://localhost:5000/v1/api' },
+        { key: 'IBKR_ACCOUNT_ID', label: 'Account ID', hint: 'e.g. U1234567 (optional — auto-resolved)' },
+      ],
+    },
+    schwab: {
+      secrets: [{ key: 'SCHWAB_ACCESS_TOKEN', label: 'OAuth access token' }],
+      strings: [{ key: 'SCHWAB_ACCOUNT_HASH', label: 'Account hash' }],
+    },
+    tradestation: {
+      secrets: [{ key: 'TRADESTATION_ACCESS_TOKEN', label: 'OAuth access token' }],
+      strings: [{ key: 'TRADESTATION_ACCOUNT_ID', label: 'Account ID' }],
+      bools: [{ key: 'TRADESTATION_SIM', label: 'Simulated (paper)', hint: 'Use the sim host' }],
+    },
+    webull: {
+      secrets: [{ key: 'WEBULL_ACCESS_TOKEN', label: 'Access token' }],
+      strings: [
+        { key: 'WEBULL_ACCOUNT_ID', label: 'Account ID' },
+        { key: 'WEBULL_BASE_URL', label: 'Base URL (optional)', hint: 'Region OpenAPI host' },
+      ],
+      bools: [{ key: 'WEBULL_PAPER', label: 'Paper trading' }],
+    },
   } satisfies Record<string, PluginFieldSpec>).map(([id, spec]) => [id, configSchemaFromFieldSpec(spec)]),
 ) as Record<string, ReturnType<typeof configSchemaFromFieldSpec>>;
 
@@ -387,15 +416,105 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
       capabilities: ['chain:base', 'chain:evm', 'venue:0x', 'signer:evm'],
     },
   },
-  // ── Brokers (equities) — first-party, included with b1dz (PRD equities-v1) ──
-  // BLOCKED: @profullstack/pluginstore's PluginKind is
-  // 'connector' | 'strategy' | 'module' and does not yet include 'broker'.
-  // Six broker connectors exist as packages and pass the contract —
-  //   @b1dz/source-{alpaca,tradier,ibkr,schwab,tradestation,webull}
-  // — but their store-facing catalog entries (kind:'broker') can't be listed
-  // until a pluginstore release adds 'broker' to PluginKind. The Alpaca config
-  // schema is staged below as PLUGIN_CONFIG_SCHEMAS.alpaca; the contract and
-  // connectors are complete. Only the catalog listing waits on that bump.
+  // ── Equity Trading Connectors (PRD equities-v1) — first-party, free ────────
+  // Listed with kind:'connector' (the pluginstore-compatible kind) and tagged
+  // 'asset:equity' so the store groups them as "Equity Trading Connectors",
+  // separate from DEX connectors. The runtime objects (@b1dz/source-*) implement
+  // the core BrokerConnectorPlugin (kind:'broker'); these are display/config
+  // records. Per-broker keys + paper toggle come from each config_schema; the
+  // global equity engine settings live in the Equities settings tab.
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'Global equities via Interactive Brokers — installed by default.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.ibkr,
+    config_notes: 'Requires a running IBKR Client Portal gateway; set the gateway base URL. No simple paper flag — use an IBKR paper account.',
+    manifest: {
+      id: 'ibkr',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'Interactive Brokers — Global Equities',
+      author: 'b1dz',
+      description: 'US + international equities (LSE, TSE, XETRA, HKEX, TSX…) via the IBKR Client Portal Web API. Installed by default. Requires a running IBKR gateway session.',
+      capabilities: ['asset:equity', 'venue:ibkr', 'broker:ibkr', 'market:us', 'market:intl', 'feature:fractional'],
+    },
+  },
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'Commission-free US stocks & ETFs via Alpaca — paper-first.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.alpaca,
+    config_notes: 'Paper trading by default. Get keys at alpaca.markets → Paper Trading → API Keys.',
+    manifest: {
+      id: 'alpaca',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'Alpaca — US Equities',
+      author: 'b1dz',
+      description: 'Commission-free US stocks & ETFs via Alpaca. Fractional/notional orders, IEX data (SIP via config), and a paper environment that mirrors live.',
+      capabilities: ['asset:equity', 'venue:alpaca', 'broker:alpaca', 'market:us', 'data:iex', 'feature:fractional', 'feature:paper'],
+    },
+  },
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'US stocks & ETFs via Tradier Brokerage.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.tradier,
+    manifest: {
+      id: 'tradier',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'Tradier — US Equities',
+      author: 'b1dz',
+      description: 'US stocks & ETFs via Tradier Brokerage. REST + streaming, OAuth, sandbox environment. Whole-share orders.',
+      capabilities: ['asset:equity', 'venue:tradier', 'broker:tradier', 'market:us', 'feature:extended-hours', 'feature:paper'],
+    },
+  },
+  {
+    status: 'ready',
+    pricing: { model: 'free' },
+    tagline: 'US stocks & ETFs via Charles Schwab.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.schwab,
+    manifest: {
+      id: 'schwab',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'Charles Schwab — US Equities',
+      author: 'b1dz',
+      description: 'US stocks & ETFs via the Schwab Trader API. OAuth, ~120 req/min.',
+      capabilities: ['asset:equity', 'venue:schwab', 'broker:schwab', 'market:us', 'data:sip'],
+    },
+  },
+  {
+    status: 'preview',
+    pricing: { model: 'free' },
+    tagline: 'US stocks & ETFs via TradeStation.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.tradestation,
+    manifest: {
+      id: 'tradestation',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'TradeStation — US Equities',
+      author: 'b1dz',
+      description: 'US stocks & ETFs via the TradeStation v3 API. OAuth, simulated-trading host.',
+      capabilities: ['asset:equity', 'venue:tradestation', 'broker:tradestation', 'market:us', 'feature:paper'],
+    },
+  },
+  {
+    status: 'preview',
+    pricing: { model: 'free' },
+    tagline: 'US stocks & ETFs via Webull OpenAPI.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.webull,
+    manifest: {
+      id: 'webull',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'Webull — US Equities',
+      author: 'b1dz',
+      description: 'US stocks & ETFs via the Webull OpenAPI. Region-specific host; verify endpoints against the Webull developer portal.',
+      capabilities: ['asset:equity', 'venue:webull', 'broker:webull', 'market:us', 'feature:paper'],
+    },
+  },
 ];
 
 export function listCatalog(kind?: PluginManifest['kind']): CatalogEntry[] {

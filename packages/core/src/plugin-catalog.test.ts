@@ -39,11 +39,17 @@ describe('plugin catalog', () => {
     }
   });
 
-  it('connector capabilities encode a chain and a venue', () => {
+  it('every connector encodes a venue, and DEX connectors also encode a chain', () => {
     for (const entry of listCatalog('connector')) {
       const caps = entry.manifest.capabilities;
-      expect(caps.some((c) => c.startsWith('chain:'))).toBe(true);
+      // venue: is the one invariant across CEX, DEX, and equity connectors.
       expect(caps.some((c) => c.startsWith('venue:'))).toBe(true);
+      // chain: applies only to on-chain (DEX) connectors. CEX (market:spot)
+      // and equity (asset:equity) connectors trade off-chain venues.
+      const isOnChain = !caps.includes('asset:equity') && !caps.includes('market:spot');
+      if (isOnChain) {
+        expect(caps.some((c) => c.startsWith('chain:'))).toBe(true);
+      }
     }
   });
 });

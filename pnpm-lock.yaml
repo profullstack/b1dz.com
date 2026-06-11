@@ -150,12 +150,18 @@ importers:
       '@b1dz/observe-engine':
         specifier: workspace:*
         version: link:../../packages/observe-engine
+      '@b1dz/source-alpaca':
+        specifier: workspace:*
+        version: link:../../packages/source-alpaca
       '@b1dz/source-crypto-arb':
         specifier: workspace:*
         version: link:../../packages/source-crypto-arb
       '@b1dz/source-crypto-trade':
         specifier: workspace:*
         version: link:../../packages/source-crypto-trade
+      '@b1dz/source-ibkr':
+        specifier: workspace:*
+        version: link:../../packages/source-ibkr
       '@b1dz/storage-supabase':
         specifier: workspace:*
         version: link:../../packages/storage-supabase

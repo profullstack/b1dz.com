@@ -60,7 +60,8 @@ export default async function StorePage() {
   const installed = user ? await fetchInstalled() : new Map<string, InstalledRow>();
   const cpOk = coinpayConfigured();
 
-  const connectors = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'connector');
+  const connectors = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'connector' && !e.manifest.capabilities.includes('asset:equity'));
+  const equityConnectors = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'connector' && e.manifest.capabilities.includes('asset:equity'));
   const strategies = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'strategy');
 
   return (
@@ -114,6 +115,15 @@ export default async function StorePage() {
       </section>
 
       <section className="max-w-6xl mx-auto px-6 py-10">
+        <SectionHeader title="Equity Trading Connectors" count={equityConnectors.length} />
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {equityConnectors.map((e) => (
+            <PluginCard key={e.manifest.id} entry={e} loggedIn={!!user} installed={installed.get(e.manifest.id) ?? null} coinpayConfigured={cpOk} />
+          ))}
+        </div>
+      </section>
+
+      <section className="max-w-6xl mx-auto px-6 py-10">
         <SectionHeader title="Strategies" count={strategies.length} />
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
           {strategies.map((e) => (
@@ -161,7 +171,7 @@ function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk }: {
     <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-5 hover:border-orange-500/30 transition">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div>
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{kindLabels[manifest.kind] ?? manifest.kind}</div>
+          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">{manifest.capabilities.includes('asset:equity') ? 'Equity Connector' : kindLabels[manifest.kind] ?? manifest.kind}</div>
           <h3 className="text-lg font-semibold text-zinc-100 leading-tight">{manifest.name}</h3>
           <div className="text-xs text-zinc-500 mt-1">by {manifest.author ?? 'unknown'} · v{manifest.version}</div>
         </div>

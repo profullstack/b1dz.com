@@ -114,6 +114,31 @@ export class DaemonRuntime {
     console.log(`b1dzd: auto-enabled pumpfun-trade for user ${userId.slice(0, 8)}…`);
   }
 
+  /** Install IBKR by default and auto-enable the equities source for a user.
+   *  The equities worker is observe-only (no orders) and inert until the user
+   *  configures a broker, so enabling it by default is safe. Live equity
+   *  execution is separately gated by EQUITY_TRADE_EXECUTION. */
+  private async bootstrapEquitiesFor(userId: string): Promise<void> {
+    // Default-install IBKR (idempotent).
+    await this.supabase.from('user_installed_plugins').upsert(
+      { user_id: userId, plugin_id: 'ibkr', version: '0.1.0', status: 'active', paid_until: null, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,plugin_id' },
+    );
+    // Auto-enable the equities source once (don't clobber a user who turned it off).
+    const { data } = await this.supabase
+      .from('source_state')
+      .select('user_id')
+      .eq('user_id', userId)
+      .eq('source_id', 'equities')
+      .maybeSingle();
+    if (data) return;
+    await this.supabase.from('source_state').upsert(
+      { user_id: userId, source_id: 'equities', payload: { enabled: true }, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,source_id' },
+    );
+    console.log(`b1dzd: installed IBKR + enabled equities for user ${userId.slice(0, 8)}…`);
+  }
+
   /** Find every (user, source) pair that has credentials and ensure a tick is scheduled. */
   async discover() {
     if (this.stopping) return;
@@ -135,6 +160,16 @@ export class DaemonRuntime {
     for (const row of tradeUsers ?? []) {
       try { await this.bootstrapPumpfunFor(row.user_id as string); }
       catch (e) { console.error(`b1dzd: pumpfun bootstrap failed: ${(e as Error).message}`); }
+    }
+
+    // Default-install IBKR + auto-enable equities for every known user.
+    const { data: allRows } = await this.supabase
+      .from('source_state')
+      .select('user_id');
+    const knownUsers = new Set<string>((allRows ?? []).map((r) => r.user_id as string));
+    for (const userId of knownUsers) {
+      try { await this.bootstrapEquitiesFor(userId); }
+      catch (e) { console.error(`b1dzd: equities bootstrap failed: ${(e as Error).message}`); }
     }
 
     for (const source of SOURCES) {
