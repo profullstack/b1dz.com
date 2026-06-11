@@ -44,15 +44,18 @@ interface PrimaryBroker { id: string; connector: BrokerConnectorPlugin; paper: b
 /** Pick the broker to trade through: Alpaca (API-key, paper-friendly) if
  *  configured, else IBKR if a gateway is set. */
 function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
+  const oauthToken = cfg.getSecret('ALPACA_OAUTH_TOKEN');
   const key = cfg.getSecret('ALPACA_API_KEY_ID');
   const secret = cfg.getSecret('ALPACA_API_SECRET_KEY');
-  if (key && secret) {
+  if (oauthToken || (key && secret)) {
     const paper = cfg.getBool('ALPACA_PAPER', true) ?? true;
+    const feed = (cfg.getPlain('ALPACA_FEED') as 'iex' | 'sip' | undefined) ?? 'iex';
     return {
       id: 'alpaca',
       paper,
       supportsFractional: true,
-      connector: createAlpacaConnector({ keyId: key, secretKey: secret, paper, feed: (cfg.getPlain('ALPACA_FEED') as 'iex' | 'sip' | undefined) ?? 'iex' }),
+      // OAuth bearer takes precedence over pasted key/secret.
+      connector: createAlpacaConnector(oauthToken ? { accessToken: oauthToken, paper, feed } : { keyId: key, secretKey: secret, paper, feed }),
     };
   }
   const base = cfg.getPlain('IBKR_BASE_URL');

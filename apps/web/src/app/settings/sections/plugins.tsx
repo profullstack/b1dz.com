@@ -64,6 +64,17 @@ export function PluginsSection({
   const [revealed, setRevealed] = useState<Record<string, true>>({});
   const [plainDrafts, setPlainDrafts] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [oauthProviders, setOauthProviders] = useState<Record<string, { supported: boolean; configured: boolean }>>({});
+
+  // Which plugins support OAuth login (and whether the operator wired it).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/oauth/providers', { cache: 'no-store' });
+        if (res.ok) setOauthProviders(((await res.json()) as { providers?: Record<string, { supported: boolean; configured: boolean }> }).providers ?? {});
+      } catch { /* non-fatal */ }
+    })();
+  }, []);
 
   const cryptoUnavailable = !cryptoKey || (data && data.cryptoConfigured === false);
 
@@ -397,6 +408,26 @@ export function PluginsSection({
                           title={`${name} settings`}
                           onSave={savePlugin(fields)}
                         >
+                        {oauthProviders[row.plugin_id]?.supported && (
+                          <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2">
+                            <span className="text-xs text-sky-200">
+                              Connect with OAuth — no need to paste keys below.
+                              {!oauthProviders[row.plugin_id]?.configured && (
+                                <span className="block text-[11px] text-amber-300/90">Operator hasn’t configured OAuth for this broker yet; paste credentials instead.</span>
+                              )}
+                            </span>
+                            {oauthProviders[row.plugin_id]?.configured ? (
+                              <a
+                                href={`/api/oauth/${row.plugin_id}/start`}
+                                className="shrink-0 rounded-lg bg-sky-500/80 hover:bg-sky-400 px-3 py-1.5 text-xs font-medium text-black transition"
+                              >
+                                Connect {name.split(' — ')[0]}
+                              </a>
+                            ) : (
+                              <span className="shrink-0 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-500">OAuth unavailable</span>
+                            )}
+                          </div>
+                        )}
                         {split.secrets.map(renderSecret)}
                         {split.strings.map(renderPlain)}
                         {split.numbers.map(renderNumber)}

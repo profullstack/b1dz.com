@@ -12,8 +12,11 @@
  */
 
 export interface AlpacaConfig {
-  keyId: string;
-  secretKey: string;
+  /** API key id + secret (paste-creds path). Optional if `accessToken` is set. */
+  keyId?: string;
+  secretKey?: string;
+  /** OAuth bearer access token (OAuth login path). Takes precedence over key/secret. */
+  accessToken?: string;
   /** true → paper-api.alpaca.markets (default), false → api.alpaca.markets */
   paper?: boolean;
   /** Market-data feed. 'iex' is the free dev tier (PRD §9); 'sip' needs a sub. */
@@ -108,8 +111,8 @@ export class AlpacaClient {
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly config: AlpacaConfig) {
-    if (!config.keyId || !config.secretKey) {
-      throw new Error('AlpacaClient: keyId and secretKey are required');
+    if (!config.accessToken && (!config.keyId || !config.secretKey)) {
+      throw new Error('AlpacaClient: provide accessToken (OAuth) or keyId + secretKey');
     }
     this.tradingBase =
       config.tradingBaseUrl ?? (config.paper === false ? LIVE_TRADING : PAPER_TRADING);
@@ -123,9 +126,13 @@ export class AlpacaClient {
   }
 
   private headers(): Record<string, string> {
+    // OAuth bearer takes precedence over key/secret when present.
+    if (this.config.accessToken) {
+      return { Authorization: `Bearer ${this.config.accessToken}`, 'Content-Type': 'application/json' };
+    }
     return {
-      'APCA-API-KEY-ID': this.config.keyId,
-      'APCA-API-SECRET-KEY': this.config.secretKey,
+      'APCA-API-KEY-ID': this.config.keyId!,
+      'APCA-API-SECRET-KEY': this.config.secretKey!,
       'Content-Type': 'application/json',
     };
   }

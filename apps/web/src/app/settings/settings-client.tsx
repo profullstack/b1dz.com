@@ -30,6 +30,21 @@ export function SettingsClient() {
   const [keyError, setKeyError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [oauthNotice, setOauthNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Surface the result of an OAuth redirect (?oauth=success|<error>&plugin=…).
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const result = q.get('oauth');
+    if (!result) return;
+    const plugin = q.get('plugin') ?? 'broker';
+    setOauthNotice(
+      result === 'success'
+        ? { ok: true, text: `Connected ${plugin} via OAuth — token saved.` }
+        : { ok: false, text: `OAuth for ${plugin} did not complete (${result}). You can paste credentials instead.` },
+    );
+    window.history.replaceState(null, '', '/settings');
+  }, []);
 
   const refresh = async () => {
     setLoading(true);
@@ -88,6 +103,12 @@ export function SettingsClient() {
           </p>
         )}
       </header>
+
+      {oauthNotice && (
+        <p className={`rounded-lg border px-3 py-2 text-xs ${oauthNotice.ok ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/40 bg-amber-500/10 text-amber-300'}`}>
+          {oauthNotice.text}
+        </p>
+      )}
 
       <div className="flex flex-wrap gap-1 border-b border-zinc-800">
         {TABS.map((t) => (
