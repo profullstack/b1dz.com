@@ -30,14 +30,49 @@ import {
 import {
   getB1dzVersion,
   etParts,
+  OAUTH_PROVIDERS,
+  isOAuthConfigured,
+  refreshAccessToken,
   type BrokerConnectorPlugin,
   type MarketSnapshot,
   type Signal,
 } from '@b1dz/core';
-import { loadUserConfig, type UserConfig } from '../user-config.js';
+import { loadUserConfig, mergeUserSecret, type UserConfig } from '../user-config.js';
 
 const POLL_INTERVAL_MS = 30_000;
 const HISTORY_CAP = 120;
+const TOKEN_REFRESH_BUFFER_MS = 5 * 60_000; // refresh once within 5 min of expiry
+
+/**
+ * Keep every linked OAuth session alive (the terminal runs 24/7). For each
+ * provider that issues refresh tokens, if the access token is within the buffer
+ * of expiry, swap it for a fresh one and persist it. Returns true if anything
+ * changed (caller reloads config). Runs regardless of the trading switch.
+ */
+async function refreshOauthTokens(userId: string, cfg: UserConfig): Promise<boolean> {
+  const now = Date.now();
+  let refreshed = false;
+  for (const provider of Object.values(OAUTH_PROVIDERS)) {
+    if (!provider.refreshKey || !provider.expiryKey) continue; // e.g. Alpaca tokens don't expire
+    const refreshToken = cfg.getSecret(provider.refreshKey);
+    if (!refreshToken) continue; // not linked via OAuth
+    const expiresMs = Date.parse(cfg.getSecret(provider.expiryKey) ?? '');
+    if (Number.isFinite(expiresMs) && expiresMs - now > TOKEN_REFRESH_BUFFER_MS) continue; // still fresh
+    if (!isOAuthConfigured(provider)) continue; // operator hasn't set client id/secret
+    try {
+      const tok = await refreshAccessToken(provider, refreshToken);
+      const patch: Record<string, string> = { [provider.tokenKey]: tok.access_token };
+      if (tok.refresh_token) patch[provider.refreshKey] = tok.refresh_token;
+      if (tok.expires_in) patch[provider.expiryKey] = new Date(now + tok.expires_in * 1000).toISOString();
+      await mergeUserSecret(userId, patch);
+      refreshed = true;
+      console.log(`[equities] refreshed ${provider.pluginId} OAuth token for ${userId.slice(0, 8)}…`);
+    } catch (e) {
+      console.error(`[equities] ${provider.pluginId} token refresh failed: ${(e as Error).message}`);
+    }
+  }
+  return refreshed;
+}
 
 interface PrimaryBroker { id: string; connector: BrokerConnectorPlugin; paper: boolean; supportsFractional: boolean; }
 
@@ -108,11 +143,15 @@ export const equitiesWorker: SourceWorker = {
     return !!payload?.enabled;
   },
   async tick(ctx: UserContext) {
-    const cfg = await loadUserConfig(ctx.userId);
+    let cfg = await loadUserConfig(ctx.userId);
     const now = new Date();
     const nowIso = now.toISOString();
     const version = getB1dzVersion();
     const payload = ctx.payload as Record<string, unknown>;
+
+    // Keep OAuth sessions alive 24/7 — before the trading gate, so linked
+    // brokers don't expire even when execution is off.
+    if (await refreshOauthTokens(ctx.userId, cfg)) cfg = await loadUserConfig(ctx.userId);
 
     if (cfg.getBool('EQUITIES_ENABLED', false) !== true) {
       await ctx.savePayload({ ...payload, enabled: false, daemon: { lastTickAt: nowIso, worker: 'equities', status: 'disabled', version } });

@@ -30,7 +30,7 @@
  * fine; for high-concurrency multi-user deployments the right fix is
  * to thread UserConfig through every adapter.
  */
-import { createDecipheriv } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ALL_OVERLAY_KEYS } from '@b1dz/core';
 
@@ -228,6 +228,37 @@ export async function loadUserConfig(userId: string): Promise<UserConfig> {
 /** Drop the cached config for a user — next loadUserConfig will refetch. */
 export function refreshUserConfig(userId: string): void {
   cache.delete(userId);
+}
+
+/**
+ * Merge `patch` into the user's encrypted secret blob and persist it
+ * (decrypt → assign → re-encrypt → upsert), then invalidate the cache. Used by
+ * the daemon's OAuth token auto-refresh to write the fresh access token back.
+ * No-op (throws) if SETTINGS_ENCRYPTION_KEY is missing.
+ */
+export async function mergeUserSecret(userId: string, patch: Record<string, string>): Promise<void> {
+  const key = loadEncryptionKey();
+  if (!key) throw new Error('mergeUserSecret: SETTINGS_ENCRYPTION_KEY unavailable');
+  const row = await fetchRow(userId);
+  const existing = row ? decryptBlob(row, key) ?? {} : {};
+  const merged: Record<string, string> = { ...existing, ...patch };
+
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(merged), 'utf8'), cipher.final()]);
+  const client = defaultClient();
+  const { error } = await client.from('user_settings').upsert(
+    {
+      user_id: userId,
+      payload_secret_ciphertext: ct.toString('base64'),
+      payload_secret_iv: iv.toString('base64'),
+      payload_secret_tag: cipher.getAuthTag().toString('base64'),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id' },
+  );
+  if (error) throw new Error(error.message);
+  refreshUserConfig(userId);
 }
 
 /** Test hook: drop all cached entries. */
