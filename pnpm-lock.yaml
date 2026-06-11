@@ -165,9 +165,18 @@ importers:
       '@b1dz/source-ibkr':
         specifier: workspace:*
         version: link:../../packages/source-ibkr
+      '@b1dz/source-schwab':
+        specifier: workspace:*
+        version: link:../../packages/source-schwab
       '@b1dz/source-strategies':
         specifier: workspace:*
         version: link:../../packages/source-strategies
+      '@b1dz/source-tradestation':
+        specifier: workspace:*
+        version: link:../../packages/source-tradestation
+      '@b1dz/source-tradier':
+        specifier: workspace:*
+        version: link:../../packages/source-tradier
       '@b1dz/storage-supabase':
         specifier: workspace:*
         version: link:../../packages/storage-supabase

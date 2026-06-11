@@ -21,6 +21,9 @@
 import type { SourceWorker, UserContext } from '../types.js';
 import { createAlpacaConnector } from '@b1dz/source-alpaca';
 import { createIbkrConnector } from '@b1dz/source-ibkr';
+import { createTradierConnector } from '@b1dz/source-tradier';
+import { createSchwabConnector } from '@b1dz/source-schwab';
+import { createTradeStationConnector } from '@b1dz/source-tradestation';
 import { STRATEGY_PLUGINS } from '@b1dz/source-strategies';
 import {
   decideEquityOrder,
@@ -93,6 +96,45 @@ function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
       connector: createAlpacaConnector(oauthToken ? { accessToken: oauthToken, paper, feed } : { keyId: key, secretKey: secret, paper, feed }),
     };
   }
+  // Tradier (OAuth or pasted token) — whole-share orders.
+  const tradierToken = cfg.getSecret('TRADIER_ACCESS_TOKEN');
+  const tradierAcct = cfg.getPlain('TRADIER_ACCOUNT_ID');
+  if (tradierToken && tradierAcct) {
+    const sandbox = cfg.getBool('TRADIER_SANDBOX', true) ?? true;
+    return {
+      id: 'tradier',
+      paper: sandbox,
+      supportsFractional: false,
+      connector: createTradierConnector({ accessToken: tradierToken, accountId: tradierAcct, sandbox }),
+    };
+  }
+
+  // Charles Schwab (OAuth) — whole-share orders, no paper.
+  const schwabToken = cfg.getSecret('SCHWAB_ACCESS_TOKEN');
+  const schwabHash = cfg.getPlain('SCHWAB_ACCOUNT_HASH');
+  if (schwabToken && schwabHash) {
+    return {
+      id: 'schwab',
+      paper: false,
+      supportsFractional: false,
+      connector: createSchwabConnector({ accessToken: schwabToken, accountHash: schwabHash }),
+    };
+  }
+
+  // TradeStation (OAuth or pasted token) — whole-share orders.
+  const tsToken = cfg.getSecret('TRADESTATION_ACCESS_TOKEN');
+  const tsAcct = cfg.getPlain('TRADESTATION_ACCOUNT_ID');
+  if (tsToken && tsAcct) {
+    const sim = cfg.getBool('TRADESTATION_SIM', true) ?? true;
+    return {
+      id: 'tradestation',
+      paper: sim,
+      supportsFractional: false,
+      connector: createTradeStationConnector({ accessToken: tsToken, accountId: tsAcct, sim }),
+    };
+  }
+
+  // IBKR last (advanced; needs a running gateway).
   const base = cfg.getPlain('IBKR_BASE_URL');
   if (base) {
     return {
