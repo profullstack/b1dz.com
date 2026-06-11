@@ -494,6 +494,86 @@ importers:
         specifier: latest
         version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
 
+  packages/source-ibkr:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 25.9.1
+      typescript:
+        specifier: latest
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
+
+  packages/source-schwab:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 25.9.1
+      typescript:
+        specifier: latest
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
+
+  packages/source-tradestation:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 25.9.1
+      typescript:
+        specifier: latest
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
+
+  packages/source-tradier:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 25.9.1
+      typescript:
+        specifier: latest
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
+
+  packages/source-webull:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 25.9.1
+      typescript:
+        specifier: latest
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.7(@types/node@25.9.1)(vite@8.0.7(@types/node@25.9.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3))
+
   packages/source-crypto-arb:
     dependencies:
       '@b1dz/adapters-evm':

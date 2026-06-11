@@ -390,10 +390,12 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
   // ── Brokers (equities) — first-party, included with b1dz (PRD equities-v1) ──
   // BLOCKED: @profullstack/pluginstore's PluginKind is
   // 'connector' | 'strategy' | 'module' and does not yet include 'broker'.
-  // The Alpaca store listing lands once a pluginstore release adds 'broker'
-  // (config schema staged below as PLUGIN_CONFIG_SCHEMAS.alpaca). The connector
-  // itself (@b1dz/source-alpaca) and the core contract are complete; only the
-  // store-facing catalog entry waits on that dependency bump.
+  // Six broker connectors exist as packages and pass the contract —
+  //   @b1dz/source-{alpaca,tradier,ibkr,schwab,tradestation,webull}
+  // — but their store-facing catalog entries (kind:'broker') can't be listed
+  // until a pluginstore release adds 'broker' to PluginKind. The Alpaca config
+  // schema is staged below as PLUGIN_CONFIG_SCHEMAS.alpaca; the contract and
+  // connectors are complete. Only the catalog listing waits on that bump.
 ];
 
 export function listCatalog(kind?: PluginManifest['kind']): CatalogEntry[] {
