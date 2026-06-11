@@ -114,14 +114,15 @@ export class DaemonRuntime {
     console.log(`b1dzd: auto-enabled pumpfun-trade for user ${userId.slice(0, 8)}…`);
   }
 
-  /** Install IBKR by default and auto-enable the equities source for a user.
-   *  The equities worker is observe-only (no orders) and inert until the user
-   *  configures a broker, so enabling it by default is safe. Live equity
-   *  execution is separately gated by EQUITY_TRADE_EXECUTION. */
+  /** Install Alpaca by default and auto-enable the equities source for a user.
+   *  Alpaca is the default broker (API-key/OAuth + paper sandbox, no gateway);
+   *  IBKR stays available in the store but isn't default. The worker is inert
+   *  until the user links a broker, so enabling it by default is safe; live
+   *  equity execution is separately gated by EQUITY_TRADE_EXECUTION. */
   private async bootstrapEquitiesFor(userId: string): Promise<void> {
-    // Default-install IBKR (idempotent).
+    // Default-install Alpaca (idempotent).
     await this.supabase.from('user_installed_plugins').upsert(
-      { user_id: userId, plugin_id: 'ibkr', version: '0.1.0', status: 'active', paid_until: null, updated_at: new Date().toISOString() },
+      { user_id: userId, plugin_id: 'alpaca', version: '0.1.0', status: 'active', paid_until: null, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,plugin_id' },
     );
     // Auto-enable the equities source once (don't clobber a user who turned it off).
@@ -136,7 +137,7 @@ export class DaemonRuntime {
       { user_id: userId, source_id: 'equities', payload: { enabled: true }, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,source_id' },
     );
-    console.log(`b1dzd: installed IBKR + enabled equities for user ${userId.slice(0, 8)}…`);
+    console.log(`b1dzd: installed Alpaca + enabled equities for user ${userId.slice(0, 8)}…`);
   }
 
   /** Find every (user, source) pair that has credentials and ensure a tick is scheduled. */
