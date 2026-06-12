@@ -27,6 +27,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!data.user) return Response.json({ error: 'no user returned' }, { status: 500 });
+
   const payload = {
     user: { id: data.user.id, email: data.user.email },
     session: data.session && {

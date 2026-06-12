@@ -54,9 +54,9 @@ function ctxBase(over: Partial<DecisionContext>): DecisionContext {
 }
 
 const book = (r: { decisions: Decision[] }, id: number) =>
-  r.decisions.find(d => d.kind === 'book' && d.auctionId === id);
+  r.decisions.find((d): d is Extract<Decision, { kind: 'book' }> => d.kind === 'book' && d.auctionId === id);
 const cancel = (r: { decisions: Decision[] }, id: number) =>
-  r.decisions.find(d => d.kind === 'cancel' && d.auctionId === id);
+  r.decisions.find((d): d is Extract<Decision, { kind: 'cancel' }> => d.kind === 'cancel' && d.auctionId === id);
 
 // ---------- balance state transitions ----------
 

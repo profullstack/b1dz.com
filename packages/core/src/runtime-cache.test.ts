@@ -30,9 +30,11 @@ describe('stripLiveSourceState', () => {
           },
         ],
       },
-      // Heavy/noisy tick data should still be stripped from DB fallback.
+      // Heavy/noisy tick data (prices, rawLog) is stripped from the DB fallback.
       prices: [{ exchange: 'kraken', pair: 'BTC-USD', bid: 101, ask: 102 }],
       rawLog: [{ at: 'now', text: 'noise' }],
+      // tradeState is intentionally KEPT: closedTrades is persistent history the
+      // UI needs even when the runtime cache has expired.
       tradeState: { closedTrades: [{ pair: 'BTC-USD' }] },
     };
 
@@ -42,6 +44,6 @@ describe('stripLiveSourceState', () => {
     expect(stripped.tradeStatus).toEqual(payload.tradeStatus);
     expect(stripped.prices).toBeUndefined();
     expect(stripped.rawLog).toBeUndefined();
-    expect(stripped.tradeState).toBeUndefined();
+    expect(stripped.tradeState).toEqual(payload.tradeState);
   });
 });
