@@ -15,22 +15,14 @@ export async function POST(req: NextRequest) {
 
   if (error) return Response.json({ error: error.message }, { status: 400 });
 
-  // Supabase obfuscates an already-registered email when confirmations are on:
-  // it returns no error, no session, and either a null user or a user with
-  // empty identities. (A real new signup that returns a session is fine.)
-  const alreadyRegistered = !data.session && (!data.user || (data.user.identities?.length ?? 0) === 0);
-  if (alreadyRegistered) {
-    console.warn(`[auth] signup obfuscated/no-user for ${email} — likely already registered (session=${!!data.session})`);
-    return Response.json(
-      { error: 'This email is already registered. Sign in instead, or use “forgot password”. If you never confirmed your email, request a new confirmation link.' },
-      { status: 409 },
-    );
-  }
-
-  if (!data.user) return Response.json({ error: 'no user returned' }, { status: 500 });
-
+  // With email confirmation enabled, Supabase deliberately returns an IDENTICAL
+  // response for a brand-new email and an already-registered one — no error, no
+  // session, and (via supabase-js) a null user — to prevent email enumeration.
+  // We therefore can't (and must not) tell the user "already registered"; we
+  // just report that a confirmation email is on its way. If a session IS present
+  // (confirmation disabled), the user is signed in immediately.
   const payload = {
-    user: { id: data.user.id, email: data.user.email },
+    user: data.user ? { id: data.user.id, email: data.user.email } : null,
     session: data.session && {
       access_token: data.session.access_token,
       refresh_token: data.session.refresh_token,
