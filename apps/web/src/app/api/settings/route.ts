@@ -16,13 +16,7 @@
  */
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
-import {
-  sanitizePlain,
-  PLAIN_STRING_FIELDS,
-  PLAIN_NUMBER_FIELDS,
-  PLAIN_BOOL_FIELDS,
-  type PlainPayload,
-} from '@/lib/settings-fields';
+import { sanitizePlain, type PlainPayload } from '@/lib/settings-fields';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,23 +37,6 @@ interface CipherBlob {
 
 function secretCryptoConfigured(): boolean {
   return !!process.env.SETTINGS_ENCRYPTION_KEY;
-}
-
-function loadEnvDefaults(): PlainPayload {
-  const out: Record<string, unknown> = {};
-  for (const f of PLAIN_STRING_FIELDS) {
-    const v = process.env[f];
-    if (v !== undefined && v !== '') out[f] = v;
-  }
-  for (const f of PLAIN_NUMBER_FIELDS) {
-    const v = process.env[f];
-    if (v !== undefined && v.trim() !== '' && Number.isFinite(Number(v))) out[f] = Number(v);
-  }
-  for (const f of PLAIN_BOOL_FIELDS) {
-    const v = process.env[f];
-    if (v !== undefined) out[f] = v === 'true' || v === '1' || v === 'yes' || v === 'on';
-  }
-  return out as PlainPayload;
 }
 
 async function loadSettingsRow(client: ReturnType<typeof Object>, userId: string): Promise<SettingsRow | null> {
@@ -106,11 +83,15 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: (e as Error).message }, { status: 500 });
   }
 
-  const envDefaults = loadEnvDefaults();
+  // MULTI-TENANT: return ONLY this user's own saved settings. We must NOT merge
+  // the operator's process.env config (loadEnvDefaults) here — on the hosted
+  // b1dz.com that would bleed the operator's wallet addresses / account names /
+  // RPC endpoints into every user's settings page. Operator env is for the
+  // operator's own account only.
   const userPlain = sanitizePlain(row?.payload_plain ?? {});
 
   return Response.json({
-    plain: { ...envDefaults, ...userPlain },
+    plain: userPlain,
     cipher: rowToCipher(row),
     lastUpdatedAt: row?.updated_at ?? null,
     cryptoConfigured: secretCryptoConfigured(),
