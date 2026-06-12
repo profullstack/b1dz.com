@@ -6,6 +6,7 @@ import {
   UniswapLogo, ZeroExLogo, OneInchLogo, JupiterLogo, PumpFunLogo,
   UniswapV4Logo, PancakeSwapLogo, RaydiumLogo, OrcaLogo, AerodromeLogo,
 } from './_components/brand-logos';
+import { SignOutForm } from '@/components/sign-out-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -127,9 +128,7 @@ export default async function LandingPage() {
               <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200 transition">Console</Link>
               <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Settings</Link>
               <span className="text-sm text-zinc-500">{user.email}</span>
-              <form action="/api/auth/logout" method="POST">
-                <button className="text-sm text-zinc-500 hover:text-zinc-300 transition">Sign out</button>
-              </form>
+              <SignOutForm className="text-sm text-zinc-500 hover:text-zinc-300 transition" />
             </>
           ) : (
             <>

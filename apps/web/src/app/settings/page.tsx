@@ -3,6 +3,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import { SettingsClient } from './settings-client';
+import { SignOutForm } from '@/components/sign-out-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,9 +25,7 @@ export default async function SettingsPage() {
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-zinc-400">{user.email}</span>
-          <form action="/api/auth/logout" method="POST">
-            <button className="text-zinc-500 hover:text-zinc-300">Sign out</button>
-          </form>
+          <SignOutForm className="text-zinc-500 hover:text-zinc-300" />
         </div>
       </nav>
       <SettingsClient />

@@ -207,22 +207,24 @@ describe('computeStatusFreshness — stale payload', () => {
 
   it('badges stale once age exceeds the threshold', () => {
     const now = 1_700_000_000_000;
+    const ageMs = TRADE_STALE_AFTER_MS + 42_000; // well past the threshold
     const out = computeStatusFreshness({
       ...BASE,
       dataLoading: false,
-      lastTickMs: now - (TRADE_STALE_AFTER_MS + 42_000), // 52s past last tick
+      lastTickMs: now - ageMs,
       nowMs: now,
     });
+    const sec = Math.round(ageMs / 1000);
     expect(out.isStale).toBe(true);
-    expect(out.staleSec).toBe(52);
-    expect(out.freshnessStr).toContain('stale 52s');
+    expect(out.staleSec).toBe(sec);
+    expect(out.freshnessStr).toContain(`stale ${sec}s`);
   });
 
   it('renders real (stale) PnL so the operator can still see last-known numbers', () => {
     const now = 1_700_000_000_000;
     const out = computeStatusFreshness({
       dataLoading: false,
-      lastTickMs: now - 30_000,
+      lastTickMs: now - (TRADE_STALE_AFTER_MS + 5_000), // clearly past the stale threshold
       nowMs: now,
       realizedPnl: 7.0,
       realizedPnlPct: 1.1,
