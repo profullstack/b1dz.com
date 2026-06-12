@@ -52,6 +52,12 @@ export interface UserConfig {
   getSecret(key: string, fallback?: string): string | undefined;
   /** Lookup with precedence: plain blob → process.env → fallback. (Skips secret blob.) */
   getPlain(key: string, fallback?: string): string | undefined;
+  /** STRICT: this user's secret blob ONLY — no plain, no env. Use for per-user
+   *  credentials so they never fall back to the operator's env keys. */
+  getUserSecret(key: string): string | undefined;
+  /** STRICT: this user's plain blob ONLY — no env. Use for per-user identifiers
+   *  (account ids, gateway URLs) that must not fall back to operator env. */
+  getUserPlain(key: string): string | undefined;
   /** Convenience: parse the resolved string as a number. Returns fallback if missing or not finite. */
   getNumber(key: string, fallback?: number): number | undefined;
   /** Convenience: parse the resolved string as a boolean ("true"/"1"/"yes"/"on"). */
@@ -152,6 +158,18 @@ function buildConfig(userId: string, secret: Record<string, string> | null, plai
     if (s !== undefined && s !== '') return s;
     return getPlain(key, fallback);
   };
+  // STRICT per-user getters: read ONLY this user's encrypted/plain blob — never
+  // process.env. Use these for per-user credentials in a multi-tenant context so
+  // one user's missing keys can't fall back to the operator's env keys (which
+  // would let them act on the operator's broker/exchange accounts).
+  const getUserSecret = (key: string): string | undefined => {
+    const s = secretMap[key];
+    return s !== undefined && s !== '' ? s : undefined;
+  };
+  const getUserPlain = (key: string): string | undefined => {
+    const p = plainAsString(plainMap[key]);
+    return p !== undefined && p !== '' ? p : undefined;
+  };
   const getNumber = (key: string, fallback?: number): number | undefined => {
     const raw = getSecret(key);
     if (raw === undefined) return fallback;
@@ -170,6 +188,8 @@ function buildConfig(userId: string, secret: Record<string, string> | null, plai
     userId,
     getSecret,
     getPlain,
+    getUserSecret,
+    getUserPlain,
     getNumber,
     getBool,
   });

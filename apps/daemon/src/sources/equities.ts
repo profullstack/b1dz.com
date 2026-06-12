@@ -57,9 +57,9 @@ async function refreshOauthTokens(userId: string, cfg: UserConfig): Promise<bool
   let refreshed = false;
   for (const provider of Object.values(OAUTH_PROVIDERS)) {
     if (!provider.refreshKey || !provider.expiryKey) continue; // e.g. Alpaca tokens don't expire
-    const refreshToken = cfg.getSecret(provider.refreshKey);
-    if (!refreshToken) continue; // not linked via OAuth
-    const expiresMs = Date.parse(cfg.getSecret(provider.expiryKey) ?? '');
+    const refreshToken = cfg.getUserSecret(provider.refreshKey);
+    if (!refreshToken) continue; // not linked via OAuth (this user)
+    const expiresMs = Date.parse(cfg.getUserSecret(provider.expiryKey) ?? '');
     if (Number.isFinite(expiresMs) && expiresMs - now > TOKEN_REFRESH_BUFFER_MS) continue; // still fresh
     if (!isOAuthConfigured(provider)) continue; // operator hasn't set client id/secret
     try {
@@ -79,15 +79,27 @@ async function refreshOauthTokens(userId: string, cfg: UserConfig): Promise<bool
 
 interface PrimaryBroker { id: string; connector: BrokerConnectorPlugin; paper: boolean; supportsFractional: boolean; }
 
-/** Pick the broker to trade through: Alpaca (API-key, paper-friendly) if
- *  configured, else IBKR if a gateway is set. */
+/** Strict per-user boolean (this user's plain blob only; never env). */
+function userBool(cfg: UserConfig, key: string, dflt: boolean): boolean {
+  const raw = cfg.getUserPlain(key);
+  if (raw === undefined) return dflt;
+  return ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+
+/**
+ * Pick the broker to trade through, in priority order. ALL credentials and
+ * account identifiers are read with the STRICT per-user getters — never from
+ * process.env. This is the multi-tenant safety boundary: a user who hasn't
+ * entered their own keys gets no broker (worker idles), and can NEVER fall back
+ * to the operator's env credentials and act on the operator's account.
+ */
 function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
-  const oauthToken = cfg.getSecret('ALPACA_OAUTH_TOKEN');
-  const key = cfg.getSecret('ALPACA_API_KEY_ID');
-  const secret = cfg.getSecret('ALPACA_API_SECRET_KEY');
+  const oauthToken = cfg.getUserSecret('ALPACA_OAUTH_TOKEN');
+  const key = cfg.getUserSecret('ALPACA_API_KEY_ID');
+  const secret = cfg.getUserSecret('ALPACA_API_SECRET_KEY');
   if (oauthToken || (key && secret)) {
-    const paper = cfg.getBool('ALPACA_PAPER', true) ?? true;
-    const feed = (cfg.getPlain('ALPACA_FEED') as 'iex' | 'sip' | undefined) ?? 'iex';
+    const paper = userBool(cfg, 'ALPACA_PAPER', true);
+    const feed = (cfg.getUserPlain('ALPACA_FEED') as 'iex' | 'sip' | undefined) ?? 'iex';
     return {
       id: 'alpaca',
       paper,
@@ -97,10 +109,10 @@ function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
     };
   }
   // Tradier (OAuth or pasted token) — whole-share orders.
-  const tradierToken = cfg.getSecret('TRADIER_ACCESS_TOKEN');
-  const tradierAcct = cfg.getPlain('TRADIER_ACCOUNT_ID');
+  const tradierToken = cfg.getUserSecret('TRADIER_ACCESS_TOKEN');
+  const tradierAcct = cfg.getUserPlain('TRADIER_ACCOUNT_ID');
   if (tradierToken && tradierAcct) {
-    const sandbox = cfg.getBool('TRADIER_SANDBOX', true) ?? true;
+    const sandbox = userBool(cfg, 'TRADIER_SANDBOX', true);
     return {
       id: 'tradier',
       paper: sandbox,
@@ -110,8 +122,8 @@ function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
   }
 
   // Charles Schwab (OAuth) — whole-share orders, no paper.
-  const schwabToken = cfg.getSecret('SCHWAB_ACCESS_TOKEN');
-  const schwabHash = cfg.getPlain('SCHWAB_ACCOUNT_HASH');
+  const schwabToken = cfg.getUserSecret('SCHWAB_ACCESS_TOKEN');
+  const schwabHash = cfg.getUserPlain('SCHWAB_ACCOUNT_HASH');
   if (schwabToken && schwabHash) {
     return {
       id: 'schwab',
@@ -122,10 +134,10 @@ function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
   }
 
   // TradeStation (OAuth or pasted token) — whole-share orders.
-  const tsToken = cfg.getSecret('TRADESTATION_ACCESS_TOKEN');
-  const tsAcct = cfg.getPlain('TRADESTATION_ACCOUNT_ID');
+  const tsToken = cfg.getUserSecret('TRADESTATION_ACCESS_TOKEN');
+  const tsAcct = cfg.getUserPlain('TRADESTATION_ACCOUNT_ID');
   if (tsToken && tsAcct) {
-    const sim = cfg.getBool('TRADESTATION_SIM', true) ?? true;
+    const sim = userBool(cfg, 'TRADESTATION_SIM', true);
     return {
       id: 'tradestation',
       paper: sim,
@@ -135,13 +147,13 @@ function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
   }
 
   // IBKR last (advanced; needs a running gateway).
-  const base = cfg.getPlain('IBKR_BASE_URL');
+  const base = cfg.getUserPlain('IBKR_BASE_URL');
   if (base) {
     return {
       id: 'ibkr',
       paper: false,
       supportsFractional: true,
-      connector: createIbkrConnector({ baseUrl: base, accountId: cfg.getPlain('IBKR_ACCOUNT_ID'), accessToken: cfg.getSecret('IBKR_ACCESS_TOKEN') }),
+      connector: createIbkrConnector({ baseUrl: base, accountId: cfg.getUserPlain('IBKR_ACCOUNT_ID'), accessToken: cfg.getUserSecret('IBKR_ACCESS_TOKEN') }),
     };
   }
   return null;
@@ -195,7 +207,7 @@ export const equitiesWorker: SourceWorker = {
     // brokers don't expire even when execution is off.
     if (await refreshOauthTokens(ctx.userId, cfg)) cfg = await loadUserConfig(ctx.userId);
 
-    if (cfg.getBool('EQUITIES_ENABLED', false) !== true) {
+    if (!userBool(cfg, 'EQUITIES_ENABLED', false)) {
       await ctx.savePayload({ ...payload, enabled: false, daemon: { lastTickAt: nowIso, worker: 'equities', status: 'disabled', version } });
       return;
     }
@@ -208,7 +220,7 @@ export const equitiesWorker: SourceWorker = {
 
     const risk = riskConfig(cfg);
     const symbols = watchlist(cfg);
-    const executionEnabled = cfg.getBool('EQUITY_TRADE_EXECUTION', false) ?? false;
+    const executionEnabled = userBool(cfg, 'EQUITY_TRADE_EXECUTION', false);
     const equityUsd = cfg.getNumber('EQUITY_ACCOUNT_EQUITY_USD'); // optional; enables PDT guard
     const shouldExecute = broker.paper || executionEnabled;
     const etDate = etParts(now).yyyymmdd;

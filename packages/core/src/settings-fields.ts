@@ -71,6 +71,16 @@ export const PLAIN_STRING_FIELDS = [
   // DCA coin/exchange lists (comma-separated)
   'DCA_COINS',
   'DCA_EXCHANGES',
+  // Equities — non-secret per-broker identifiers + config
+  'ALPACA_FEED',
+  'TRADIER_ACCOUNT_ID',
+  'SCHWAB_ACCOUNT_HASH',
+  'TRADESTATION_ACCOUNT_ID',
+  'IBKR_BASE_URL',
+  'IBKR_ACCOUNT_ID',
+  'WEBULL_ACCOUNT_ID',
+  'WEBULL_BASE_URL',
+  'EQUITY_WATCHLIST',
 ] as const;
 
 export const PLAIN_NUMBER_FIELDS = [
@@ -148,6 +158,13 @@ export const PLAIN_NUMBER_FIELDS = [
   // Misc
   'ETH_USD_HINT',
   'GEMINI_NONCE_OFFSET',
+  // Equities sizing / risk
+  'MAX_OVERNIGHT_USD',
+  'EQUITY_PER_TRADE_USD',
+  'EQUITY_MAX_POSITION_USD',
+  'EQUITY_MIN_SIGNAL',
+  'EQUITY_ACCOUNT_EQUITY_USD',
+  'EQUITY_CLOSE_BUFFER_MIN',
 ] as const;
 
 export const PLAIN_BOOL_FIELDS = [
@@ -161,6 +178,16 @@ export const PLAIN_BOOL_FIELDS = [
   'TRADING_ENABLED',
   'PUMPFUN_ENABLE_SCRAPE',
   'PUMPFUN_TRADE_EXECUTION',
+  // Equities gates + per-broker paper toggles
+  'EQUITIES_ENABLED',
+  'EQUITY_TRADE_EXECUTION',
+  'ALLOW_OVERNIGHT',
+  'EQUITY_EXTENDED_HOURS',
+  'EQUITY_PDT_GUARD',
+  'ALPACA_PAPER',
+  'TRADIER_SANDBOX',
+  'TRADESTATION_SIM',
+  'WEBULL_PAPER',
 ] as const;
 
 export type PlainStringField = typeof PLAIN_STRING_FIELDS[number];
