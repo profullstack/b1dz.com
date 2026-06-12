@@ -26,6 +26,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ArbState, ArbPipelineState, PumpfunState, TradeState, UiSettings } from './source-state-types';
+import { createBrowserSupabase } from './supabase';
 
 export interface SourceStateBundle {
   arb: ArbState | null;
@@ -38,7 +39,11 @@ export interface SourceStateBundle {
   error: string | null;
 }
 
-const LS_KEY = 'b1dz:source-state';
+// Pre-multitenant cache was a single global key shared by every account on the
+// browser — switching accounts showed the previous user's metrics. Now the
+// cache is scoped per user id, and the legacy global key is purged on load.
+const LS_PREFIX = 'b1dz:source-state';
+const LEGACY_LS_KEY = 'b1dz:source-state';
 
 type LsData = {
   arb: ArbState | null;
@@ -49,70 +54,85 @@ type LsData = {
   savedAt: number;
 };
 
-function readLs(): LsData | null {
+function lsKey(userId: string): string {
+  return `${LS_PREFIX}:${userId}`;
+}
+
+function readLs(userId: string): LsData | null {
   try {
-    const raw = window.localStorage.getItem(LS_KEY);
+    const raw = window.localStorage.getItem(lsKey(userId));
     return raw ? (JSON.parse(raw) as LsData) : null;
   } catch {
     return null;
   }
 }
 
-function writeLs(d: Omit<LsData, 'savedAt'>) {
+function writeLs(userId: string, d: Omit<LsData, 'savedAt'>) {
   try {
-    window.localStorage.setItem(LS_KEY, JSON.stringify({ ...d, savedAt: Date.now() }));
+    window.localStorage.setItem(lsKey(userId), JSON.stringify({ ...d, savedAt: Date.now() }));
   } catch { /* quota / private mode */ }
 }
 
-function fromLs(): SourceStateBundle {
-  if (typeof window === 'undefined') {
-    return { arb: null, trade: null, settings: null, pipeline: null, pumpfun: null, loading: true, lastFetched: null, error: null };
-  }
-  const c = readLs();
-  return {
-    arb: c?.arb ?? null,
-    trade: c?.trade ?? null,
-    settings: c?.settings ?? null,
-    pipeline: c?.pipeline ?? null,
-    pumpfun: c?.pumpfun ?? null,
-    loading: c === null,
-    lastFetched: c?.savedAt ?? null,
-    error: null,
-  };
-}
+const EMPTY_BUNDLE: SourceStateBundle = {
+  arb: null, trade: null, settings: null, pipeline: null, pumpfun: null,
+  loading: true, lastFetched: null, error: null,
+};
 
 export function useSourceState(): SourceStateBundle {
-  const [bundle, setBundle] = useState<SourceStateBundle>(fromLs);
+  // Start empty (no synchronous hydrate from a global key) so one account never
+  // paints another account's cached metrics.
+  const [bundle, setBundle] = useState<SourceStateBundle>(EMPTY_BUNDLE);
   const stateRef = useRef<Omit<LsData, 'savedAt'>>({
     arb: null, trade: null, settings: null, pipeline: null, pumpfun: null,
   });
 
   useEffect(() => {
-    const seed = readLs();
-    stateRef.current = {
-      arb: seed?.arb ?? null,
-      trade: seed?.trade ?? null,
-      settings: seed?.settings ?? null,
-      pipeline: seed?.pipeline ?? null,
-      pumpfun: seed?.pumpfun ?? null,
-    };
+    let es: EventSource | null = null;
+    let cancelled = false;
 
-    const patch = <K extends keyof typeof stateRef.current>(
-      key: K,
-      val: (typeof stateRef.current)[K],
-    ) => {
-      stateRef.current[key] = val;
-      setBundle((prev) => ({
-        ...prev,
-        [key]: val,
-        loading: false,
-        lastFetched: Date.now(),
-        error: null,
-      }));
-      writeLs(stateRef.current);
-    };
+    void (async () => {
+      // Purge the legacy un-scoped cache that bled across accounts.
+      try { window.localStorage.removeItem(LEGACY_LS_KEY); } catch { /* ignore */ }
 
-    const es = new EventSource('/api/stream');
+      // Resolve the signed-in user so the cache is scoped to this account.
+      let userId: string | null = null;
+      try {
+        const { data } = await createBrowserSupabase().auth.getUser();
+        userId = data.user?.id ?? null;
+      } catch { /* unauthenticated */ }
+      if (cancelled) return;
+      if (!userId) { setBundle((prev) => ({ ...prev, loading: false })); return; }
+
+      const seed = readLs(userId);
+      stateRef.current = {
+        arb: seed?.arb ?? null,
+        trade: seed?.trade ?? null,
+        settings: seed?.settings ?? null,
+        pipeline: seed?.pipeline ?? null,
+        pumpfun: seed?.pumpfun ?? null,
+      };
+      if (seed) {
+        setBundle({ ...stateRef.current, loading: false, lastFetched: seed.savedAt, error: null });
+      } else {
+        setBundle((prev) => ({ ...prev, loading: false }));
+      }
+
+      const patch = <K extends keyof typeof stateRef.current>(
+        key: K,
+        val: (typeof stateRef.current)[K],
+      ) => {
+        stateRef.current[key] = val;
+        setBundle((prev) => ({
+          ...prev,
+          [key]: val,
+          loading: false,
+          lastFetched: Date.now(),
+          error: null,
+        }));
+        writeLs(userId!, stateRef.current);
+      };
+
+      es = new EventSource('/api/stream');
 
     es.addEventListener('state:arb', (e: MessageEvent) => {
       try { patch('arb', JSON.parse(e.data) as ArbState); } catch {}
@@ -130,15 +150,17 @@ export function useSourceState(): SourceStateBundle {
       try { patch('settings', JSON.parse(e.data) as UiSettings); } catch {}
     });
 
-    es.onerror = () => {
-      setBundle((prev) => {
-        if (prev.lastFetched !== null) return prev;
-        return { ...prev, error: 'stream error — reconnecting' };
-      });
-    };
+      es.onerror = () => {
+        setBundle((prev) => {
+          if (prev.lastFetched !== null) return prev;
+          return { ...prev, error: 'stream error — reconnecting' };
+        });
+      };
+    })();
 
     return () => {
-      es.close();
+      cancelled = true;
+      es?.close();
     };
   }, []);
 
