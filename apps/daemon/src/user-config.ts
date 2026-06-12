@@ -32,7 +32,7 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { ALL_OVERLAY_KEYS } from '@b1dz/core';
+import { ALL_OVERLAY_KEYS, SECRET_SET } from '@b1dz/core';
 
 const ALGORITHM = 'aes-256-gcm';
 const CACHE_TTL_MS = 60_000;
@@ -324,6 +324,17 @@ const OVERLAY_KEYS: readonly string[] = [
   ...new Set([...ALL_OVERLAY_KEYS, ...EXTRA_OVERLAY_KEYS]),
 ];
 
+/** Credential keys that must NEVER fall back to the operator's process.env for a
+ *  user who hasn't set their own — SECRET_FIELDS plus the secret extras. (The
+ *  non-credential extras like PUMPFUN_TRADE_SOL are operator-level config and
+ *  keep their env default.) */
+const CREDENTIAL_OVERLAY_KEYS = new Set<string>([
+  ...SECRET_SET,
+  'COINBASE_EC_KEY_B64',
+  'COINBASE_API_PRIVATE_KEY_B64',
+  'ZEROX_API_KEY',
+]);
+
 /** Exposed for tests — verifies the overlay covers every user-settable
  *  catalog key plus the extras. The list itself is stable across
  *  daemon lifetimes; tests guard against silent drift. */
@@ -354,9 +365,18 @@ export async function applyEnvOverlay<T>(config: UserConfig, fn: () => Promise<T
 
   try {
     for (const k of OVERLAY_KEYS) {
-      const v = config.getSecret(k);
-      if (v !== undefined && v !== '') process.env[k] = v;
-      // If the user's config has nothing for k, leave the original env value alone.
+      const isCredential = CREDENTIAL_OVERLAY_KEYS.has(k);
+      // Credentials: this user's secret blob ONLY. Non-credentials (RPC URLs,
+      // thresholds): the user's plain value, else keep the operator default.
+      const v = isCredential ? config.getUserSecret(k) : config.getUserPlain(k);
+      if (v !== undefined && v !== '') {
+        process.env[k] = v;
+      } else if (isCredential) {
+        // No per-user credential → strip the operator's env value so it can't
+        // leak into this user's tick (they'd otherwise act on the operator's
+        // exchange/broker/wallet). Non-credentials keep the operator default.
+        delete process.env[k];
+      }
     }
     return await fn();
   } finally {
