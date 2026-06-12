@@ -9,6 +9,8 @@
     "pnpm": ">=10"
   },
   "scripts": {
+    "lint:oxlint": "oxlint",
+    "lint:oxlint:fix": "oxlint --fix",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
@@ -40,6 +42,7 @@
   "devDependencies": {
     "@eslint/js": "latest",
     "eslint": "latest",
+    "oxlint": "^1.69.0",
     "turbo": "latest",
     "typescript": "latest",
     "typescript-eslint": "latest",
