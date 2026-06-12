@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import { ConsoleClient } from './console-client';
 import { RenewalBanner } from '@/components/renewal-banner';
+import { SignOutForm } from '@/components/sign-out-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,9 +27,7 @@ export default async function ConsolePage() {
           <Link href="/store" className="text-zinc-400 hover:text-zinc-200">Store</Link>
           <Link href="/settings" className="text-zinc-400 hover:text-zinc-200">Settings</Link>
           <span className="text-zinc-400">{user.email}</span>
-          <form action="/api/auth/logout" method="POST">
-            <button className="text-zinc-500 hover:text-zinc-300">Sign out</button>
-          </form>
+          <SignOutForm className="text-zinc-500 hover:text-zinc-300" />
         </div>
       </nav>
       <RenewalBanner userId={user.id} />

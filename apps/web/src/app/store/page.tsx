@@ -5,6 +5,7 @@ import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
 import { createServerSupabase } from '@/lib/supabase';
 import { coinpayConfigured } from '@/lib/coinpay-client';
 import { InstallButton } from './install-button';
+import { SignOutForm } from '@/components/sign-out-form';
 
 export const metadata: Metadata = {
   title: 'b1dz Store — Plugin Marketplace',
@@ -78,9 +79,7 @@ export default async function StorePage() {
               <Link href="/dashboard" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Dashboard</Link>
               <Link href="/settings" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Settings</Link>
               <span className="text-sm text-zinc-500">{user.email}</span>
-              <form action="/api/auth/logout" method="POST">
-                <button className="text-sm text-zinc-500 hover:text-zinc-300 transition">Sign out</button>
-              </form>
+              <SignOutForm className="text-sm text-zinc-500 hover:text-zinc-300 transition" />
             </>
           ) : (
             <>
