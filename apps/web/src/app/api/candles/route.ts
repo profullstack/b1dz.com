@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server';
+import { authenticate, unauthorized } from '@/lib/api-auth';
 
 interface Bar {
   time: number;
@@ -136,6 +137,9 @@ async function fromGemini(pair: string, timeframe: string, limit: number): Promi
 }
 
 export async function GET(req: NextRequest) {
+  const auth = await authenticate(req);
+  if (!auth) return unauthorized();
+
   const { searchParams } = new URL(req.url);
   const pair = (searchParams.get('pair') ?? '').toUpperCase();
   const exchange = (searchParams.get('exchange') ?? '').toLowerCase();
