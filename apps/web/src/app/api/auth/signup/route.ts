@@ -13,7 +13,10 @@ export async function POST(req: NextRequest) {
     options: { emailRedirectTo: `${siteOrigin(req)}/auth/callback?next=/dashboard` },
   });
 
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) {
+    console.error('[signup] error:', error.message);
+    return Response.json({ error: 'Signup failed' }, { status: 400 });
+  }
 
   // With email confirmation enabled, Supabase deliberately returns an IDENTICAL
   // response for a brand-new email and an already-registered one — no error, no

@@ -11,7 +11,10 @@ export async function POST(req: NextRequest) {
   if (userError || !user) return Response.json({ error: 'reset session expired; request another password reset email' }, { status: 401 });
 
   const { error } = await supabase.auth.updateUser({ password: body.password });
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) {
+    console.error('[update-password] error:', error.message);
+    return Response.json({ error: 'Password update failed' }, { status: 400 });
+  }
 
   return withAuthCookies(response, { ok: true });
 }
