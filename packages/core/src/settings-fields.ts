@@ -45,6 +45,9 @@ export const SECRET_FIELDS = [
   // Proxy creds
   'PROXY_USERNAME',
   'PROXY_PASSWORD',
+  // AI analyzer — per-user BYO inference keys (strict; never operator env)
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
 ] as const;
 
 export type SecretField = typeof SECRET_FIELDS[number];
@@ -81,6 +84,8 @@ export const PLAIN_STRING_FIELDS = [
   'WEBULL_ACCOUNT_ID',
   'WEBULL_BASE_URL',
   'EQUITY_WATCHLIST',
+  // AI analyzer
+  'AI_PROVIDER',
 ] as const;
 
 export const PLAIN_NUMBER_FIELDS = [
@@ -165,6 +170,8 @@ export const PLAIN_NUMBER_FIELDS = [
   'EQUITY_MIN_SIGNAL',
   'EQUITY_ACCOUNT_EQUITY_USD',
   'EQUITY_CLOSE_BUFFER_MIN',
+  // AI analyzer
+  'AI_MAX_CALLS_PER_MIN',
 ] as const;
 
 export const PLAIN_BOOL_FIELDS = [
@@ -188,6 +195,8 @@ export const PLAIN_BOOL_FIELDS = [
   'TRADIER_SANDBOX',
   'TRADESTATION_SIM',
   'WEBULL_PAPER',
+  // AI analyzer
+  'AI_ANALYZER_ENABLED',
 ] as const;
 
 export type PlainStringField = typeof PLAIN_STRING_FIELDS[number];

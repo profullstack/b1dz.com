@@ -164,6 +164,12 @@ export interface ArbPipelineState {
 export interface UiSettings {
   tradingEnabled?: boolean | null;
   dailyLossLimitPct?: number | null;
+  /** Rolling crypto spend (buy) budget in USD. null/0 = unlimited. */
+  spendBudgetUsd?: number | null;
+  /** Window the spend budget resets on. */
+  budgetWindow?: 'daily' | 'weekly' | 'monthly' | null;
+  /** Per-user override of the per-position cap (USD). null = engine default. */
+  maxPositionUsd?: number | null;
 }
 
 export interface PumpfunPosition {

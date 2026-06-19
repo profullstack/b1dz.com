@@ -8,15 +8,21 @@ import { StrategiesSection } from './sections/strategies';
 import { TogglesSection } from './sections/toggles';
 import { PluginsSection } from './sections/plugins';
 import { EquitiesSection } from './sections/equities';
+import { CryptoBudgetSection } from './sections/crypto-budget';
+import { AiAnalyzerSection } from './sections/ai-analyzer';
+import { AgentsSection } from './sections/agents';
 import type { SettingsResponse } from './shared';
 import { importKey } from '@/lib/browser-crypto';
 
-type Tab = 'plugins' | 'wallets' | 'equities' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
+type Tab = 'plugins' | 'wallets' | 'equities' | 'budget' | 'ai' | 'agents' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'plugins', label: 'Plugins' },
   { id: 'wallets', label: 'Wallets' },
   { id: 'equities', label: 'Equities' },
+  { id: 'budget', label: 'Budget' },
+  { id: 'ai', label: 'AI Analyzer' },
+  { id: 'agents', label: 'Agents' },
   { id: 'solana', label: 'Solana' },
   { id: 'thresholds', label: 'Thresholds' },
   { id: 'strategies', label: 'Strategies' },
@@ -135,6 +141,9 @@ export function SettingsClient() {
         <div>
           {tab === 'wallets' && <WalletsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'equities' && <EquitiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
+          {tab === 'budget' && <CryptoBudgetSection />}
+          {tab === 'ai' && <AiAnalyzerSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
+          {tab === 'agents' && <AgentsSection />}
           {tab === 'solana' && <SolanaSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'thresholds' && <ThresholdsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'strategies' && <StrategiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}

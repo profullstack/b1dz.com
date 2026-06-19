@@ -63,7 +63,23 @@ import {
   hardStopPctFromEnv,
 } from './trade-config.js';
 import { decideExit } from './exit-decision.js';
+import {
+  type BudgetWindow,
+  type SpendBudgetState,
+  checkSpendBudget,
+  recordSpend as recordSpendState,
+  freshBudgetState,
+} from './spend-budget.js';
 
+export {
+  type BudgetWindow,
+  type SpendBudgetState,
+  type BudgetDecision,
+  checkSpendBudget,
+  windowStartFor,
+  isBudgetWindow,
+  BUDGET_WINDOWS,
+} from './spend-budget.js';
 export { dcaConfigFromEnv, perExchangeAllocationPct, DCA_DEFAULTS, type DcaConfig } from './dca-config.js';
 export { decideDcaBuys, type DcaBuy, type DcaPlannerInput } from './dca-planner.js';
 export { runDcaBacktest, type DcaBacktestInput, type DcaBacktestResult, type DcaBacktestPosition } from './dca-backtest.js';
@@ -1764,6 +1780,253 @@ function isDailyLossLimitHit(): boolean {
 }
 
 /**
+ * Crypto spend budget — the rolling USD cap on BUYS (engine + AI + agent),
+ * the single safety primitive enforced before every entry. `null` = no cap.
+ * Set per-user from the daemon via `crypto-ui-settings` (NOT env), same channel
+ * as the daily loss limit. The live spend ledger persists in the DB; this
+ * in-memory state is the fast path and is reconciled from the daemon each tick.
+ */
+let spendBudgetUsd: number | null = null;
+let spendBudgetWindow: BudgetWindow = 'daily';
+let spendBudgetState: SpendBudgetState = freshBudgetState('daily', Date.now());
+/** Per-user override of the per-position cap. null → MAX_POSITION_USD default. */
+let maxPositionUsdRuntime: number | null = null;
+let lastBudgetBlockLogAt = 0;
+
+export function setSpendBudget(usd: number | null, window: BudgetWindow = 'daily'): void {
+  const next = usd != null && Number.isFinite(usd) && usd > 0 ? usd : null;
+  if (window !== spendBudgetWindow) {
+    spendBudgetWindow = window;
+    spendBudgetState = freshBudgetState(window, Date.now());
+  }
+  if (next !== spendBudgetUsd) {
+    spendBudgetUsd = next;
+    console.log(`[trade] crypto spend budget → ${next == null ? 'unlimited' : `$${next.toFixed(2)}/${window}`}`);
+  }
+}
+
+/**
+ * Reconcile the in-memory spent counter from the authoritative DB ledger.
+ * The daemon passes the summed spend for the current window so the budget
+ * survives daemon restarts (the in-memory counter alone would reset to 0).
+ */
+export function syncSpendLedger(spentUsd: number): void {
+  if (Number.isFinite(spentUsd) && spentUsd >= 0) {
+    spendBudgetState = { spentUsd, windowStart: spendBudgetState.windowStart };
+  }
+}
+
+export function setMaxPositionUsd(usd: number | null): void {
+  const next = usd != null && Number.isFinite(usd) && usd > 0 ? usd : null;
+  if (next !== maxPositionUsdRuntime) {
+    maxPositionUsdRuntime = next;
+    console.log(`[trade] crypto max position → ${next == null ? `$${MAX_POSITION_USD} (default)` : `$${next.toFixed(2)}`}`);
+  }
+}
+
+/** Effective per-position cap: per-user override, else the package default. */
+function effectiveMaxPositionUsd(): number {
+  return maxPositionUsdRuntime != null && maxPositionUsdRuntime > 0
+    ? maxPositionUsdRuntime
+    : MAX_POSITION_USD;
+}
+
+/**
+ * AI analyzer size overlay — a multiplier on the base buy size, set by the
+ * daemon's AI worker from the user's own model. Clamped [0.25, 1.5]; the spend
+ * budget is still the hard cap downstream, so this can only resize a buy the
+ * deterministic strategy already wants, never create or uncap one.
+ */
+let aiSizeMultiplierRuntime = 1;
+export function setAiSizeMultiplier(mult: number | null): void {
+  const next = mult != null && Number.isFinite(mult) ? Math.max(0.25, Math.min(1.5, mult)) : 1;
+  if (next !== aiSizeMultiplierRuntime) {
+    aiSizeMultiplierRuntime = next;
+    console.log(`[trade] AI size multiplier → ${next.toFixed(2)}×`);
+  }
+}
+export function getAiSizeMultiplier(): number {
+  return aiSizeMultiplierRuntime;
+}
+
+/** Per-position cap scaled by the AI overlay (still inside Math.min(available,…)
+ *  at every call site, so it can never exceed the wallet/quote balance). */
+function aiAdjustedMaxPositionUsd(): number {
+  return effectiveMaxPositionUsd() * aiSizeMultiplierRuntime;
+}
+
+export function getSpendBudgetStatus(): {
+  budgetUsd: number | null;
+  window: BudgetWindow;
+  spentUsd: number;
+  remainingUsd: number | null;
+  maxPositionUsd: number;
+} {
+  const remaining = spendBudgetUsd == null ? null : Math.max(0, spendBudgetUsd - spendBudgetState.spentUsd);
+  return {
+    budgetUsd: spendBudgetUsd,
+    window: spendBudgetWindow,
+    spentUsd: spendBudgetState.spentUsd,
+    remainingUsd: remaining,
+    maxPositionUsd: effectiveMaxPositionUsd(),
+  };
+}
+
+/**
+ * Clamp a desired buy notional to what the spend budget allows.
+ * Returns the amount that may actually be spent (0 = blocked). Logs a
+ * throttled line when a buy is blocked or clamped so operators see why.
+ */
+function applySpendBudget(orderUsd: number, label: string): number {
+  const decision = checkSpendBudget({
+    budgetUsd: spendBudgetUsd,
+    state: spendBudgetState,
+    orderUsd,
+    window: spendBudgetWindow,
+    now: Date.now(),
+    minOrderUsd: 1,
+  });
+  spendBudgetState = decision.state; // persist rollover
+  if (!decision.allowed || decision.allowedUsd < orderUsd) {
+    const now = Date.now();
+    if (now - lastBudgetBlockLogAt >= 60_000) {
+      lastBudgetBlockLogAt = now;
+      console.log(`[trade] ${label} ${decision.reason}`);
+    }
+  }
+  return decision.allowed ? decision.allowedUsd : 0;
+}
+
+/** A confirmed BUY, buffered for the daemon to persist to the spend ledger. */
+export interface SpendLedgerEntry {
+  ts: number;
+  usd: number;
+  exchange: string;
+  pair: string;
+  source: 'engine' | 'ai' | 'agent';
+  /** set when an agent token initiated the buy (for per-token budget sums). */
+  tokenId?: string | null;
+}
+let spendLedgerBuffer: SpendLedgerEntry[] = [];
+
+/** Record a confirmed BUY against the in-memory window state + ledger buffer. */
+function recordSpend(usd: number, meta?: { exchange?: string; pair?: string; source?: SpendLedgerEntry['source']; tokenId?: string | null }): void {
+  if (!Number.isFinite(usd) || usd <= 0) return;
+  spendBudgetState = recordSpendState(spendBudgetState, usd, spendBudgetWindow, Date.now());
+  spendLedgerBuffer.push({
+    ts: Date.now(),
+    usd,
+    exchange: meta?.exchange ?? 'unknown',
+    pair: meta?.pair ?? 'unknown',
+    source: meta?.source ?? 'engine',
+    tokenId: meta?.tokenId ?? null,
+  });
+}
+
+/** Drain buffered spend-ledger entries (the daemon persists these to the DB). */
+export function drainSpendLedger(): SpendLedgerEntry[] {
+  const out = spendLedgerBuffer;
+  spendLedgerBuffer = [];
+  return out;
+}
+
+export interface AgentBuyArgs {
+  pair: string;        // e.g. BTC-USD
+  exchange?: string;   // optional venue hint; else first CEX with a live price
+  usd: number;
+  tokenId: string;
+}
+export interface AgentBuyResult {
+  ok: boolean;
+  message: string;
+  pair: string;
+  exchange?: string;
+  filledUsd?: number;
+  price?: number;
+}
+
+const AGENT_BUY_VENUES = ['kraken', 'coinbase', 'binance-us', 'gemini'] as const;
+
+/**
+ * Execute an agent-initiated market BUY (the "Coinbase for Agents" fill path).
+ * IOC limit at ask+slippage on a CEX with a live price, hard-capped by the
+ * spend budget, honoring the trading-halt override. Records the spend tagged
+ * `source='agent'` + token id so per-token budgets reconcile, and registers the
+ * position so the normal exit rules manage it. Reuses the same order clients +
+ * position tracking as the strategy path — no separate execution semantics.
+ */
+export async function executeAgentMarketBuy(args: AgentBuyArgs): Promise<AgentBuyResult> {
+  const pair = args.pair.toUpperCase();
+  if (tradingOverride === false) {
+    return { ok: false, message: 'trading disabled by user override', pair };
+  }
+  const venues = args.exchange ? [args.exchange] : [...AGENT_BUY_VENUES];
+  let exchange: string | null = null;
+  let snap: MarketSnapshot | null = null;
+  for (const v of venues) {
+    const s = latestSnapshotFor(v, pair);
+    if (s && s.ask > 0) { exchange = v; snap = s; break; }
+  }
+  if (!exchange || !snap) {
+    return { ok: false, message: `no live price for ${pair} on ${args.exchange ?? 'any venue'}`, pair };
+  }
+
+  const allowed = applySpendBudget(args.usd, `AGENT-BUY ${exchange}:${pair} blocked —`);
+  if (allowed <= 0) {
+    return { ok: false, message: 'crypto spend budget reached', pair, exchange };
+  }
+
+  const feeRate = feeRateForExchange(exchange);
+  const price = snap.ask;
+  const slippageBps = buySlippageBpsFromEnv();
+  const aggressivePrice = price * (1 + slippageBps / 10_000);
+  const volumeAtAggressive = allowed / aggressivePrice;
+
+  console.log(`[trade] ATTEMPT AGENT BUY ${exchange}:${pair} vol=${volumeAtAggressive.toFixed(8)} @ $${aggressivePrice.toFixed(6)} spend=$${allowed.toFixed(2)} (token ${args.tokenId})`);
+  try {
+    let txInfo = '';
+    if (exchange === 'kraken') {
+      const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      const result = await placeKrakenOrder({ pair: krakenPair, type: 'buy', ordertype: 'limit', volume: volumeAtAggressive.toFixed(8), price: aggressivePrice.toFixed(2), timeinforce: 'IOC' });
+      txInfo = `${result.descr.order} txid=${result.txid}`;
+    } else if (exchange === 'coinbase') {
+      const result = await placeCoinbaseOrder({ productId: pair, side: 'BUY', size: volumeAtAggressive.toFixed(8), limitPrice: String(aggressivePrice), ioc: true });
+      txInfo = `orderId=${result.order_id}`;
+    } else if (exchange === 'binance-us') {
+      const result = await placeBinanceOrder({ symbol: pair.replace('-', ''), side: 'BUY', type: 'LIMIT', quantity: volumeAtAggressive.toFixed(8), price: aggressivePrice.toFixed(2), timeInForce: 'IOC' });
+      txInfo = `orderId=${result.orderId}`;
+    } else if (exchange === 'gemini') {
+      const result = await placeGeminiOrder({ symbol: pair.replace('-', '').toLowerCase(), side: 'buy', amount: volumeAtAggressive.toFixed(8), price: aggressivePrice.toFixed(2), options: ['immediate-or-cancel'] });
+      txInfo = `order_id=${result.order_id} executed=${result.executed_amount}`;
+    } else {
+      return { ok: false, message: `unsupported venue ${exchange}`, pair, exchange };
+    }
+
+    const posKey = `${exchange}:${pair}`;
+    const entryFeeUsd = aggressivePrice * volumeAtAggressive * feeRate;
+    openPositions.set(posKey, {
+      pair,
+      exchange,
+      entryPrice: aggressivePrice,
+      volume: volumeAtAggressive,
+      entryTime: Date.now(),
+      highWaterMark: aggressivePrice,
+      strategyId: 'agent',
+      entryFee: entryFeeUsd,
+      priceSamples: [aggressivePrice],
+    });
+    recordDailyFee(entryFeeUsd);
+    recordSpend(aggressivePrice * volumeAtAggressive, { exchange, pair, source: 'agent', tokenId: args.tokenId });
+    console.log(`[trade] AGENT BUY placed ${exchange}:${pair} ${txInfo}`);
+    return { ok: true, message: `bought ~${volumeAtAggressive.toFixed(8)} ${pair} on ${exchange}`, pair, exchange, filledUsd: aggressivePrice * volumeAtAggressive, price: aggressivePrice };
+  } catch (e) {
+    const msg = (e as Error).message;
+    console.error(`[trade] AGENT BUY FAILED ${exchange}:${pair}: ${msg}`);
+    return { ok: false, message: msg, pair, exchange };
+  }
+}
+
+/**
  * Manual trading override set by the user via TUI.
  *   null  → default behaviour (respect daily loss limit)
  *   true  → bypass daily loss limit, keep trading
@@ -2080,7 +2343,13 @@ async function actOnDex(args: {
   if (availableQuote < MIN_SPENDABLE_QUOTE_USD) {
     return { ok: false, message: `insufficient USDC on ${exchange} ($${availableQuote.toFixed(2)})` };
   }
-  const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * 0.98;
+  const spendBudget = applySpendBudget(
+    Math.min(availableQuote, aiAdjustedMaxPositionUsd()) * 0.98,
+    `DEX-BUY ${exchange}:${pair} blocked —`,
+  );
+  if (spendBudget <= 0) {
+    return { ok: false, message: `crypto spend budget reached on ${exchange}` };
+  }
   if (spendBudget < MIN_SPENDABLE_QUOTE_USD) {
     return { ok: false, message: `spend budget too small on ${exchange} ($${spendBudget.toFixed(2)})` };
   }
@@ -2105,6 +2374,7 @@ async function actOnDex(args: {
     }
     const entryPrice = result.fillPrice ?? price;
     const baseVolume = result.baseVolume ?? estVolume;
+    recordSpend(entryPrice * baseVolume, { exchange, pair, source: 'engine' }); // count this buy against the spend budget
     const posKey = `${exchange}:${pair}`;
     openPositions.set(posKey, {
       pair,
@@ -2454,7 +2724,13 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
       }
       if (spendableQuote < MIN_SPENDABLE_QUOTE_USD) return null;
-      const spendBudget = Math.min(spendableQuote, MAX_POSITION_USD) * 0.98;
+      // Spend budget gate — don't even emit a buy signal once the rolling
+      // crypto spend budget is exhausted (act() re-checks authoritatively).
+      const spendBudget = applySpendBudget(
+        Math.min(spendableQuote, aiAdjustedMaxPositionUsd()) * 0.98,
+        `BUY ${tradeExchange}:${item.pair} blocked —`,
+      );
+      if (spendBudget <= 0) return null;
       const minExecutableUsd = minExecutableUsdByMarket.get(`${tradeExchange}:${item.pair}`) ?? 0;
       if (minExecutableUsd > 0 && spendBudget < minExecutableUsd) return null;
 
@@ -2660,7 +2936,13 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
       const feeRate = feeRateForExchange(exchange);
-      const spendBudget = Math.min(availableQuote, MAX_POSITION_USD) * Math.max(0.9, 1 - feeRate - 0.02);
+      const spendBudget = applySpendBudget(
+        Math.min(availableQuote, aiAdjustedMaxPositionUsd()) * Math.max(0.9, 1 - feeRate - 0.02),
+        `BUY ${exchange}:${pair} blocked —`,
+      );
+      if (spendBudget <= 0) {
+        return { ok: false, message: `crypto spend budget reached on ${exchange}` };
+      }
       if (spendBudget < 5) {
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
@@ -2765,6 +3047,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
           priceSamples: [aggressivePrice],
         });
         recordDailyFee(entryFeeUsd);
+        recordSpend(aggressivePrice * volumeAtAggressive, { exchange, pair, source: 'engine' }); // count buy against spend budget
         console.log(`[trade] BUY placed ${exchange}: ${txInfo}`);
         return { ok: true, message: `bought up to ${volumeAtAggressive.toFixed(8)} on ${exchange} @ ≤$${aggressivePrice.toFixed(6)}` };
       } catch (e) {

@@ -53,3 +53,51 @@ export async function authenticate(req: NextRequest): Promise<AuthedRequest | nu
 export function unauthorized() {
   return Response.json({ error: 'unauthorized' }, { status: 401 });
 }
+
+/**
+ * Agent-token auth (the "Coinbase for Agents" sub-account). Verifies an
+ * `Authorization: Bearer b1dz_agent_…` token against the agent_tokens table.
+ *
+ * Agent tokens are NOT Supabase JWTs, so RLS-via-user-JWT does not apply — we
+ * resolve a service-role (admin) client and the caller MUST scope every query
+ * by `userId` explicitly. Fails closed: revoked/expired/unknown → null.
+ */
+export interface AuthedAgent {
+  admin: SupabaseClient;
+  userId: string;
+  tokenId: string;
+  scopes: string[];
+  /** Full row (budget/window/allowlist) for downstream policy checks. */
+  token: import('@b1dz/core').AgentTokenRow;
+}
+
+export async function authenticateAgent(req: NextRequest): Promise<AuthedAgent | null> {
+  const auth = req.headers.get('authorization');
+  if (!auth?.startsWith('Bearer ')) return null;
+  const raw = auth.slice(7);
+  const { isAgentToken } = await import('@b1dz/core');
+  if (!isAgentToken(raw)) return null;
+
+  const { hashAgentToken } = await import('./agent-tokens');
+  const { createAdminSupabase } = await import('./supabase');
+  const admin = createAdminSupabase();
+  const hash = hashAgentToken(raw);
+  const { data, error } = await admin
+    .from('agent_tokens')
+    .select('*')
+    .eq('token_hash', hash)
+    .is('revoked_at', null)
+    .maybeSingle();
+  if (error || !data) return null;
+
+  // best-effort last_used_at touch (don't block on it)
+  void admin.from('agent_tokens').update({ last_used_at: new Date().toISOString() }).eq('id', data.id);
+
+  return {
+    admin,
+    userId: data.user_id,
+    tokenId: data.id,
+    scopes: Array.isArray(data.scopes) ? data.scopes : [],
+    token: data as import('@b1dz/core').AgentTokenRow,
+  };
+}
