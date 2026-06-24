@@ -48,7 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ServiceWorkerRegister />
         {children}
-      </body>
+      <script async src="https://feedback.profullstack.com/embed/profullstack-feedback.js" data-property="b1dz.com"></script></body>
     </html>
   );
 }
