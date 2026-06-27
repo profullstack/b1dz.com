@@ -31,9 +31,39 @@ function loadRootEnv() {
 }
 loadRootEnv();
 
+// Pragmatic CSP: Next.js injects inline bootstrap/JSON-LD scripts, so script-src
+// keeps 'unsafe-inline'. connect-src stays broad (https/wss) for Supabase auth and
+// exchange WebSocket feeds. frame-ancestors covers clickjacking.
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://crawlproof.com https://feedback.profullstack.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https: wss:",
+  "frame-src 'self' https://feedback.profullstack.com",
+  "frame-ancestors 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join('; ');
+
+const securityHeaders = [
+  { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+  { key: 'Content-Security-Policy', value: contentSecurityPolicy },
+];
+
 const config: NextConfig = {
   reactStrictMode: true,
+  poweredByHeader: false,
   typescript: { ignoreBuildErrors: true },
+  async headers() {
+    return [{ source: '/:path*', headers: securityHeaders }];
+  },
   transpilePackages: [
     '@b1dz/core',
     '@b1dz/sdk',
