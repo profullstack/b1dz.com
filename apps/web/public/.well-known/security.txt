@@ -1,0 +1,3 @@
+Contact: mailto:security@b1dz.com
+Preferred-Languages: en
+Canonical: https://b1dz.com/.well-known/security.txt

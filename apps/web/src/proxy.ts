@@ -8,7 +8,12 @@ import { createServerClient } from '@supabase/ssr';
 
 // API routes self-authenticate via Bearer header or cookie, so the proxy
 // doesn't gate them. /login + /signup are always public.
-const PUBLIC_PATHS = ['/login', '/signup', '/forgot-password', '/reset-password', '/auth', '/api', '/manifest.webmanifest', '/sw.js'];
+const PUBLIC_PATHS = [
+  '/login', '/signup', '/forgot-password', '/reset-password', '/auth', '/api',
+  '/manifest.webmanifest', '/sw.js',
+  // Crawler / AEO well-known files — must never redirect to /login.
+  '/robots.txt', '/sitemap.xml', '/llms.txt', '/llms-full.txt', '/skill.md', '/.well-known',
+];
 const PUBLIC_EXACT = new Set(['/']);
 let loggedVersion = false;
 
@@ -63,5 +68,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|txt|xml|md|json|webmanifest|ico|woff2?)$).*)'],
 };

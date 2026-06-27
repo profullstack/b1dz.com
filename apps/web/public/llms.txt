@@ -1,0 +1,35 @@
+# b1dz
+
+> b1dz is an AI-powered crypto arbitrage terminal for realtime auto-trading across multiple centralized and decentralized exchanges. It finds price gaps and executes trades automatically using a deterministic analysis engine.
+
+b1dz connects to centralized exchanges (Kraken, Coinbase, Binance.US, Gemini) and DEXes (Uniswap V3, 0x, Jupiter, Pump.fun, with more coming soon) over persistent WebSocket feeds. A deterministic analysis engine (EMA, RSI, MACD, ATR, VWAP, volume checks, and market-regime classification) scores setups before execution. Signal-only plugins mean plugin authors never touch your exchange keys.
+
+## Product
+
+- [Home](https://b1dz.com/): AI Arbitrage Terminal overview, features, strategies, and supported exchanges.
+- [Plugin Store](https://b1dz.com/store): DEX connectors and trading strategies. Authoring SDK opening soon.
+- [Sign up](https://b1dz.com/signup): Create an account and start trading.
+- [Sign in](https://b1dz.com/login): Log in to the dashboard and console.
+
+## Features
+
+- Realtime Multi-Exchange Data: Persistent WebSocket feeds for prices, balances, spreads, and activity logs.
+- Deterministic Analysis Engine: Indicator- and regime-based scoring before any execution.
+- Spread Arbitrage and Inventory Arbitrage: Separate cross-exchange and inventory-aware paths.
+- Backtesting + Analytics: Validate strategies against historical data.
+- OHLC Charts + Trade Context: Candlestick charts with the context behind each trade.
+- Risk Controls: Trailing stops and position limits (one position per exchange).
+
+## Trading strategies
+
+- Trend Continuation, Mean Reversion, Breakout/Breakdown (directional, deterministic setup scoring).
+- Spread Arbitrage and Inventory Arbitrage (cross-exchange and inventory-aware).
+- Legacy Multi-Signal Fallback (composite heuristics as a fallback path).
+
+## About
+
+- Source / org: [github.com/profullstack/b1dz.com](https://github.com/profullstack/b1dz.com)
+
+## Notes
+
+- Trading cryptocurrency involves substantial risk. b1dz automates execution; it does not guarantee profit.
