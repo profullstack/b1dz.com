@@ -148,6 +148,12 @@ export default async function LandingPage() {
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
+      <a
+        href="#content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-orange-500 focus:px-4 focus:py-2 focus:text-black"
+      >
+        Skip to main content
+      </a>
       {/* Nav */}
       <nav className="flex items-center justify-between max-w-6xl mx-auto px-6 py-4">
         <div className="flex items-center">
@@ -173,15 +179,18 @@ export default async function LandingPage() {
       </nav>
 
       {/* Hero */}
-      <section className="max-w-6xl mx-auto px-6 pt-20 pb-16 text-center">
+      <section id="content" className="max-w-6xl mx-auto px-6 pt-20 pb-16 text-center">
         <div className="mb-8">
           <Image src="/favicon.svg" alt="b1dz" width={120} height={120} className="mx-auto" />
         </div>
         <h1 className="text-5xl md:text-6xl font-bold mb-4 leading-tight">
           <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">AI Arbitrage Terminal</span>
         </h1>
-        <p className="text-xl md:text-2xl text-zinc-400 mb-8 max-w-2xl mx-auto">
+        <p className="text-xl md:text-2xl text-zinc-400 mb-4 max-w-2xl mx-auto">
           Realtime auto-trading across multiple exchanges. Find price gaps. Execute instantly. Profit automatically.
+        </p>
+        <p className="text-base text-zinc-500 mb-8 max-w-2xl mx-auto">
+          Built for active crypto traders who want automated, multi-exchange execution with deterministic strategy scoring, backtesting, and risk controls — without running their own server.
         </p>
         <div className="flex items-center justify-center gap-4 flex-wrap">
           <Link href="/signup" className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-semibold px-8 py-3 rounded-lg text-lg transition">
@@ -230,7 +239,7 @@ export default async function LandingPage() {
 
       {/* Terminal Screenshot */}
       <section className="max-w-5xl mx-auto px-6 pb-8">
-        <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Terminal Interface</h3>
+        <h2 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Terminal Interface</h2>
         <Image
           src="/images/gallery-1.png"
           alt="Terminal Interface"
@@ -243,7 +252,7 @@ export default async function LandingPage() {
 
       {/* Web Dashboard Mock */}
       <section className="max-w-5xl mx-auto px-6 pb-16">
-        <h3 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Web Dashboard</h3>
+        <h2 className="text-center text-sm text-zinc-500 uppercase tracking-wide mb-4">Web Dashboard</h2>
         <Image
           src="/images/gallery-2.png"
           alt="Web Dashboard"
@@ -310,6 +319,24 @@ export default async function LandingPage() {
             <div className="text-sm">0.40% taker fee</div>
           </div>
         </div>
+
+        {/* Machine-readable / snippet-ready summary of the data above. */}
+        <table className="sr-only">
+          <caption>Supported centralized exchanges and their taker fees on b1dz</caption>
+          <thead>
+            <tr>
+              <th scope="col">Exchange</th>
+              <th scope="col">Type</th>
+              <th scope="col">Taker fee</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Kraken</th><td>Centralized exchange (CEX)</td><td>0.26%</td></tr>
+            <tr><th scope="row">Coinbase</th><td>Centralized exchange (CEX)</td><td>0.60%</td></tr>
+            <tr><th scope="row">Binance.US</th><td>Centralized exchange (CEX)</td><td>0.10%</td></tr>
+            <tr><th scope="row">Gemini</th><td>Centralized exchange (CEX)</td><td>0.40%</td></tr>
+          </tbody>
+        </table>
 
         <h3 className="text-2xl font-bold mt-16 mb-8">
           <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Supported DEXes</span>
