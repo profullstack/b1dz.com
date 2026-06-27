@@ -10,7 +10,10 @@ export async function POST(req: NextRequest) {
     redirectTo: `${siteOrigin(req)}/auth/callback?next=/reset-password`,
   });
 
-  if (error) return Response.json({ error: error.message }, { status: 400 });
+  if (error) {
+    console.error('[reset-password] error:', error.message);
+    return Response.json({ error: 'Password reset request failed' }, { status: 400 });
+  }
 
   return withAuthCookies(response, { ok: true });
 }

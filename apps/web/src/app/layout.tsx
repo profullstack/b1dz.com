@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { ServiceWorkerRegister } from './sw-register';
 import { datatypeFont } from '@/lib/datatype-font';
+import Script from "next/script";
 
 const SITE_URL = 'https://b1dz.com';
 const SITE_TITLE = 'b1dz — AI Arbitrage Terminal';
@@ -116,6 +117,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
         <ServiceWorkerRegister />
         {children}
+      <script async src="https://feedback.profullstack.com/embed/profullstack-feedback.js" data-property="b1dz.com"></script>        <Script data-site="44a33af1-ba08-469e-a0da-6771d8b44e3d" src="https://crawlproof.com/stats.js" strategy="afterInteractive" />
       </body>
     </html>
   );

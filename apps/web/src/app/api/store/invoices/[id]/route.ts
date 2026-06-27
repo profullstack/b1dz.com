@@ -38,6 +38,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     from: (t: string) => {
       select: (s: string) => {
         eq: (col: string, val: string) => {
+          eq: (col: string, val: string) => {
+            maybeSingle: () => Promise<{ data: InvoiceRow | null; error: { message: string } | null }>;
+          };
           maybeSingle: () => Promise<{ data: InvoiceRow | null; error: { message: string } | null }>;
         };
       };
@@ -46,10 +49,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const { data, error } = await c.from('plugin_invoices')
     .select('id, user_id, plugin_id, coinpay_payment_id, amount_usd, blockchain, payment_address, crypto_amount, qr_code, status, expires_at, paid_at, forwarded_at, created_at, updated_at')
     .eq('id', id)
+    .eq('user_id', auth.userId)
     .maybeSingle();
-  if (error) return Response.json({ error: error.message }, { status: 500 });
+  if (error) return Response.json({ error: 'Failed to fetch invoice' }, { status: 500 });
   if (!data) return Response.json({ error: 'invoice not found' }, { status: 404 });
-  if (data.user_id !== auth.userId) return Response.json({ error: 'unauthorized' }, { status: 403 });
 
   // Optionally refresh status from Coinpay so the UI shows fast progress
   // without waiting for the webhook to land.
