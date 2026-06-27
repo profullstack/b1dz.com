@@ -109,6 +109,39 @@ const supportedStrategies = [
   },
 ];
 
+const faqs = [
+  {
+    q: 'What is b1dz?',
+    a: 'b1dz is an AI-powered crypto arbitrage terminal. It runs realtime auto-trading across multiple centralized exchanges (Kraken, Coinbase, Binance.US, Gemini) and decentralized exchanges (Uniswap V3, 0x, Jupiter, Pump.fun), finding price gaps and executing trades automatically.',
+  },
+  {
+    q: 'Which exchanges and DEXes does b1dz support?',
+    a: 'Centralized exchanges: Kraken, Coinbase, Binance.US, and Gemini. Decentralized exchanges live today: Uniswap V3, 0x, Jupiter, and Pump.fun, with 1inch, Uniswap V4, PancakeSwap, Raydium, Orca, and Aerodrome coming soon.',
+  },
+  {
+    q: 'How does the analysis engine work?',
+    a: 'A deterministic analysis engine scores setups using EMA, RSI, MACD, ATR, VWAP, volume checks, and market-regime classification before any trade reaches execution. Plugins are signal-only, so plugin authors never touch your exchange keys.',
+  },
+  {
+    q: 'Who is b1dz for?',
+    a: 'b1dz is built for active crypto traders who want automated, multi-exchange execution with deterministic strategy scoring, backtesting, and risk controls — without running and babysitting their own server.',
+  },
+  {
+    q: 'How much capital do I need to start?',
+    a: 'You can start with as little as $100, with one position per exchange. Cryptocurrency trading carries substantial risk; b1dz automates execution but does not guarantee profit.',
+  },
+];
+
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map((f) => ({
+    '@type': 'Question',
+    name: f.q,
+    acceptedAnswer: { '@type': 'Answer', text: f.a },
+  })),
+};
+
 export default async function LandingPage() {
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
@@ -162,7 +195,7 @@ export default async function LandingPage() {
           </Link>
         </div>
         <p className="mt-8 max-w-3xl mx-auto text-sm md:text-base italic text-zinc-500">
-          “If you don't find a way to make money while you sleep, you will work until you die.” -- Warren Buffet
+          “If you don't find a way to make money while you sleep, you will work until you die.” -- Warren Buffett
         </p>
       </section>
 
@@ -355,6 +388,25 @@ export default async function LandingPage() {
               Become an author
             </Link>
           </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section className="max-w-3xl mx-auto px-6 py-16">
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
+        />
+        <h2 className="text-3xl font-bold text-center mb-10">
+          <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Frequently asked questions</span>
+        </h2>
+        <div className="space-y-4">
+          {faqs.map((f) => (
+            <details key={f.q} className="rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-4">
+              <summary className="cursor-pointer text-lg font-semibold text-zinc-100">{f.q}</summary>
+              <p className="mt-3 text-sm leading-relaxed text-zinc-400">{f.a}</p>
+            </details>
+          ))}
         </div>
       </section>
 
