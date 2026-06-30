@@ -14,9 +14,10 @@
  *   - Crypto → Kraken daily OHLC via @b1dz/source-crypto-trade's
  *     fetchHistoricalCandles (keyless; the same path the daemon + /api/backtest
  *     use, proven to work from Railway).
- *   - Equities → Yahoo Finance (best-effort). Yahoo is frequently blocked from
- *     datacenter IPs, so equities may return no data until a broker market-data
- *     key (e.g. Alpaca) is wired in; crypto is unaffected.
+ *   - Equities → Alpaca daily bars (when ALPACA_API_KEY_ID/SECRET are set),
+ *     falling back to Yahoo best-effort. Yahoo is frequently blocked from
+ *     datacenter IPs, so without Alpaca keys equities may return no data;
+ *     crypto is unaffected.
  */
 import type { NextRequest } from 'next/server';
 import { fetchHistoricalCandles } from '@b1dz/source-crypto-trade';
@@ -78,17 +79,53 @@ async function fetchCryptoCloses(symbol: string, startMs: number, endMs: number)
     .map((c) => ({ ts: c.time, close: c.close }));
 }
 
+/** Equity daily closes via Alpaca market data. Throws if keys aren't configured. */
+async function fetchAlpacaCloses(symbol: string, startMs: number, endMs: number): Promise<DailyClose[]> {
+  const keyId = process.env.ALPACA_API_KEY_ID;
+  const secret = process.env.ALPACA_API_SECRET_KEY;
+  if (!keyId || !secret) throw new Error('Alpaca keys not configured');
+  const feed = process.env.ALPACA_FEED || 'iex';
+  const start = new Date(startMs - 7 * DAY_MS).toISOString().slice(0, 10);
+  const end = new Date(endMs).toISOString().slice(0, 10);
+  const url =
+    `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars` +
+    `?timeframe=1Day&start=${start}&end=${end}&adjustment=raw&feed=${feed}&limit=1000`;
+  const res = await fetch(url, { headers: { 'APCA-API-KEY-ID': keyId, 'APCA-API-SECRET-KEY': secret } });
+  if (!res.ok) throw new Error(`Alpaca HTTP ${res.status}`);
+  const json = (await res.json()) as { bars?: { t: string; c: number }[] };
+  const rows = (json.bars ?? [])
+    .filter((b) => Number.isFinite(b.c))
+    .map((b) => ({ ts: Date.parse(b.t), close: b.c }))
+    .filter((r) => Number.isFinite(r.ts));
+  if (rows.length === 0) throw new Error('Alpaca returned no bars');
+  return rows;
+}
+
 /**
- * Route closes by asset class: crypto via Kraken (reliable from Railway),
- * equities via Yahoo best-effort. Returns [] if the source fails.
+ * Route closes by asset class:
+ *   - crypto → Kraken (reliable from Railway, keyless).
+ *   - equities → Alpaca (if keys set) → Yahoo fallback.
+ * Returns [] only if every source for that symbol fails.
  */
 const fetchCloses: FetchCloses = async (symbol, startMs, endMs) => {
-  const isCrypto = symbol.includes('-USD');
+  if (symbol.includes('-USD')) {
+    try {
+      return await fetchCryptoCloses(symbol, startMs, endMs);
+    } catch (err) {
+      console.warn(`[backtest] no crypto data for ${symbol} (kraken): ${(err as Error).message}`);
+      return [];
+    }
+  }
+  // Equity: Alpaca first, then Yahoo.
   try {
-    return isCrypto ? await fetchCryptoCloses(symbol, startMs, endMs) : await fetchYahoo(symbol, startMs, endMs);
-  } catch (err) {
-    console.warn(`[backtest] no price data for ${symbol} (${isCrypto ? 'kraken' : 'yahoo'}): ${(err as Error).message}`);
-    return [];
+    return await fetchAlpacaCloses(symbol, startMs, endMs);
+  } catch (alpacaErr) {
+    try {
+      return await fetchYahoo(symbol, startMs, endMs);
+    } catch (yahooErr) {
+      console.warn(`[backtest] no equity data for ${symbol}: alpaca=${(alpacaErr as Error).message} yahoo=${(yahooErr as Error).message}`);
+      return [];
+    }
   }
 };
 
