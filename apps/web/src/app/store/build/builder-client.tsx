@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import {
   buildDefinition,
+  builderStateFromDefinition,
   defaultBuilderState,
   slugify,
   TEMPLATE_PARAM_DEFAULTS,
@@ -27,6 +28,20 @@ const inputCls = 'w-full rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py
 const labelCls = 'block text-xs uppercase tracking-wider text-zinc-500 mb-1';
 const btnGhost = 'rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:border-orange-500/40 hover:text-zinc-100 transition';
 
+interface Knobs {
+  risk: number;
+  horizon: number;
+  frequency: number;
+  assetFocus: number;
+}
+
+const KNOBS: { key: keyof Knobs; label: string; low: string; high: string }[] = [
+  { key: 'risk', label: 'Risk / aggressiveness', low: 'conservative', high: 'extreme' },
+  { key: 'horizon', label: 'Time horizon', low: 'scalp', high: 'long-term' },
+  { key: 'frequency', label: 'Trade frequency', low: 'rare', high: 'constant' },
+  { key: 'assetFocus', label: 'Asset focus', low: 'equities', high: 'crypto' },
+];
+
 export function StrategyBuilder() {
   const [state, setState] = useState<BuilderState>(defaultBuilderState);
   const [amount, setAmount] = useState(100);
@@ -35,7 +50,39 @@ export function StrategyBuilder() {
   const [errors, setErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // AI assist
+  const [niches, setNiches] = useState('');
+  const [goal, setGoal] = useState('');
+  const [knobs, setKnobs] = useState<Knobs>({ risk: 5, horizon: 5, frequency: 5, assetFocus: 5 });
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [aiNote, setAiNote] = useState('');
+
   const doc = useMemo(() => buildDefinition(state), [state]);
+
+  async function generateWithAI() {
+    setAiLoading(true);
+    setAiError('');
+    try {
+      const res = await fetch('/api/strategies/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ niches, goal, knobs }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setAiError(body.error ?? `request failed (${res.status})`);
+        return;
+      }
+      setState(builderStateFromDefinition(body.definition));
+      setAiNote(body.description ?? '');
+      setResult(null);
+    } catch (e) {
+      setAiError((e as Error).message);
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   function patch(p: Partial<BuilderState>) {
     setState((s) => ({ ...s, ...p }));
@@ -68,6 +115,44 @@ export function StrategyBuilder() {
     <section className="max-w-6xl mx-auto px-6 pb-20 grid lg:grid-cols-2 gap-6">
       {/* ── left: the form ── */}
       <div className="space-y-6">
+        <Card title="✨ Start with AI (optional)">
+          <p className="text-xs text-zinc-400 -mt-1 mb-1">Answer a couple of questions, set the knobs, and let AI draft a strategy you can then tweak below.</p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Niche(s) / themes</label>
+              <input className={inputCls} value={niches} placeholder="AI, semiconductors, BTC" onChange={(e) => setNiches(e.target.value)} />
+            </div>
+            <div>
+              <label className={labelCls}>Investment goal</label>
+              <input className={inputCls} value={goal} placeholder="steady growth, income, momentum…" onChange={(e) => setGoal(e.target.value)} />
+            </div>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-x-5 gap-y-3 mt-1">
+            {KNOBS.map((k) => (
+              <Slider
+                key={k.key}
+                label={k.label}
+                low={k.low}
+                high={k.high}
+                value={knobs[k.key]}
+                onChange={(v) => setKnobs((s) => ({ ...s, [k.key]: v }))}
+              />
+            ))}
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={generateWithAI}
+              disabled={aiLoading}
+              className="rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400 disabled:opacity-50 text-white font-medium px-4 py-2 text-sm transition"
+            >
+              {aiLoading ? 'Generating…' : '✨ Generate with AI'}
+            </button>
+            <span className="text-[11px] text-zinc-500">Tweak the knobs and regenerate anytime.</span>
+          </div>
+          {aiError && <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">{aiError}</div>}
+          {aiNote && <div className="rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">{aiNote}</div>}
+        </Card>
+
         <Card title="1 · Strategy details">
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
@@ -174,6 +259,30 @@ export function StrategyBuilder() {
         </div>
       </div>
     </section>
+  );
+}
+
+function Slider({ label, low, high, value, onChange }: { label: string; low: string; high: string; value: number; onChange: (v: number) => void }) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <span className="text-xs text-zinc-300">{label}</span>
+        <span className="text-xs font-mono text-violet-300">{value}/10</span>
+      </div>
+      <input
+        type="range"
+        min={1}
+        max={10}
+        step={1}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full accent-violet-500"
+      />
+      <div className="flex justify-between text-[10px] text-zinc-600">
+        <span>{low}</span>
+        <span>{high}</span>
+      </div>
+    </div>
   );
 }
 

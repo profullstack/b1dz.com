@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { tsp } from '@b1dz/source-strategies';
 import {
   buildDefinition,
+  builderStateFromDefinition,
   coerceOperand,
   slugify,
   defaultBuilderState,
@@ -84,5 +85,43 @@ describe('buildDefinition (rules)', () => {
     const doc = buildDefinition(s);
     expect('indicators' in (doc.definition as object)).toBe(false);
     expect(tsp.validateDefinition(doc).ok).toBe(true);
+  });
+});
+
+describe('builderStateFromDefinition (round-trip)', () => {
+  it('hydrates a template document', () => {
+    const doc = { tsp: '0.1', id: 'mr', name: 'MR', assetClasses: ['equity'], definition: { kind: 'template', template: 'breakout', params: { lookback: 12 } } };
+    const state = builderStateFromDefinition(doc);
+    expect(state.mode).toBe('template');
+    expect(state.template.template).toBe('breakout');
+    expect(state.template.params.lookback).toBe(12);
+    expect(state.assetClasses).toEqual(['equity']);
+    // and it rebuilds to an equivalent valid doc
+    expect(tsp.validateDefinition(buildDefinition(state)).ok).toBe(true);
+  });
+
+  it('hydrates a rules document, flattening an AND condition into rows', () => {
+    const doc = {
+      tsp: '0.1', id: 'r', name: 'R',
+      definition: {
+        kind: 'rules',
+        indicators: { rsi14: { fn: 'rsi', period: 14 }, ema50: { fn: 'ema', period: 50 } },
+        rules: [{ when: { and: [{ lt: ['rsi14', 30] }, { gt: ['price', 'ema50'] }] }, signal: { side: 'buy', strength: 0.9, reason: 'dip' } }],
+      },
+    };
+    const state = builderStateFromDefinition(doc);
+    expect(state.mode).toBe('rules');
+    expect(state.rules.indicators.map((i) => i.name)).toEqual(['rsi14', 'ema50']);
+    expect(state.rules.rules[0]!.conditions).toEqual([
+      { left: 'rsi14', op: 'lt', right: '30' },
+      { left: 'price', op: 'gt', right: 'ema50' },
+    ]);
+    expect(state.rules.rules[0]!.side).toBe('buy');
+    expect(tsp.validateDefinition(buildDefinition(state)).ok).toBe(true);
+  });
+
+  it('falls back to defaults for an unrecognized document', () => {
+    const state = builderStateFromDefinition({ junk: true });
+    expect(state).toEqual(defaultBuilderState());
   });
 });
