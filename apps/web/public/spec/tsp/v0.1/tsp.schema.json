@@ -1,5 +1,5 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://b1dz.com/spec/tsp/v0.1/tsp.schema.json",
   "title": "Trading Strategy Protocol (TSP) v0.1",
   "description": "An open, vendor-neutral, declarative JSON protocol for signals-only equities & crypto trading strategies. A TSP document reads a market-data stream and emits buy/sell signals; it executes no code, so user-authored strategies are safe to run and publish.",
@@ -27,12 +27,12 @@
     },
     "definition": {
       "oneOf": [
-        { "$ref": "#/$defs/templateDefinition" },
-        { "$ref": "#/$defs/rulesDefinition" }
+        { "$ref": "#/definitions/templateDefinition" },
+        { "$ref": "#/definitions/rulesDefinition" }
       ]
     }
   },
-  "$defs": {
+  "definitions": {
     "templateDefinition": {
       "type": "object",
       "required": ["kind", "template"],
@@ -54,12 +54,12 @@
         "kind": { "const": "rules" },
         "indicators": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/indicator" }
+          "additionalProperties": { "$ref": "#/definitions/indicator" }
         },
         "rules": {
           "type": "array",
           "minItems": 1,
-          "items": { "$ref": "#/$defs/rule" }
+          "items": { "$ref": "#/definitions/rule" }
         }
       }
     },
@@ -97,8 +97,8 @@
       "required": ["when", "signal"],
       "additionalProperties": false,
       "properties": {
-        "when": { "$ref": "#/$defs/condition" },
-        "signal": { "$ref": "#/$defs/signal" }
+        "when": { "$ref": "#/definitions/condition" },
+        "signal": { "$ref": "#/definitions/signal" }
       }
     },
     "signal": {
@@ -121,40 +121,40 @@
       "maxProperties": 1,
       "additionalProperties": false,
       "properties": {
-        "gt": { "$ref": "#/$defs/operandPair" },
-        "gte": { "$ref": "#/$defs/operandPair" },
-        "lt": { "$ref": "#/$defs/operandPair" },
-        "lte": { "$ref": "#/$defs/operandPair" },
-        "eq": { "$ref": "#/$defs/operandPair" },
-        "neq": { "$ref": "#/$defs/operandPair" }
+        "gt": { "$ref": "#/definitions/operandPair" },
+        "gte": { "$ref": "#/definitions/operandPair" },
+        "lt": { "$ref": "#/definitions/operandPair" },
+        "lte": { "$ref": "#/definitions/operandPair" },
+        "eq": { "$ref": "#/definitions/operandPair" },
+        "neq": { "$ref": "#/definitions/operandPair" }
       }
     },
     "operandPair": {
       "type": "array",
       "minItems": 2,
       "maxItems": 2,
-      "items": { "$ref": "#/$defs/operand" }
+      "items": { "$ref": "#/definitions/operand" }
     },
     "condition": {
       "oneOf": [
-        { "$ref": "#/$defs/comparison" },
+        { "$ref": "#/definitions/comparison" },
         {
           "type": "object",
           "required": ["and"],
           "additionalProperties": false,
-          "properties": { "and": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } } }
+          "properties": { "and": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/condition" } } }
         },
         {
           "type": "object",
           "required": ["or"],
           "additionalProperties": false,
-          "properties": { "or": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/condition" } } }
+          "properties": { "or": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/condition" } } }
         },
         {
           "type": "object",
           "required": ["not"],
           "additionalProperties": false,
-          "properties": { "not": { "$ref": "#/$defs/condition" } }
+          "properties": { "not": { "$ref": "#/definitions/condition" } }
         }
       ]
     }
