@@ -68,6 +68,9 @@ importers:
       '@b1dz/source-crypto-trade':
         specifier: workspace:*
         version: link:../../packages/source-crypto-trade
+      '@b1dz/source-strategies':
+        specifier: workspace:*
+        version: link:../../packages/source-strategies
       '@b1dz/storage-b1dz-api':
         specifier: workspace:*
         version: link:../../packages/storage-b1dz-api

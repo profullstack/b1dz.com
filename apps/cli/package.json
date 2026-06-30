@@ -19,6 +19,7 @@
     "@b1dz/storage-supabase": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
+    "@b1dz/source-strategies": "workspace:*",
     "@b1dz/storage-b1dz-api": "workspace:*",
     "@b1dz/sdk": "workspace:*",
     "@b1dz/venue-types": "workspace:*",
