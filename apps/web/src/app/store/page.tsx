@@ -6,6 +6,7 @@ import { createServerSupabase } from '@/lib/supabase';
 import { coinpayConfigured } from '@/lib/coinpay-client';
 import { InstallButton } from './install-button';
 import { SignOutForm } from '@/components/sign-out-form';
+import backtestData from '@/data/strategy-backtests.json';
 
 export const metadata: Metadata = {
   title: 'b1dz Store — Plugin Marketplace',
@@ -41,6 +42,27 @@ interface InstalledRow {
   status: string;
   paid_until: string | null;
 }
+
+// Backtest results published by ~/bin/backtest.js — a long-only replay of each
+// strategy plugin's own buy/sell signals over a fixed crypto+equity basket.
+interface BacktestHorizon {
+  label: string;
+  startYmd: string;
+  endYmd: string;
+  trades: number;
+  returnPct: number;
+  winRate: number;
+  profit: number;
+  maxDrawdown: number;
+}
+interface BacktestStrategy {
+  strategyId: string;
+  name: string;
+  tagline: string;
+  horizons: BacktestHorizon[];
+}
+const backtestResults = (backtestData.results ?? {}) as Record<string, BacktestStrategy>;
+const backtestGeneratedAt = backtestData.generatedAt as string | undefined;
 
 async function fetchInstalled(): Promise<Map<string, InstalledRow>> {
   const supabase = await createServerSupabase();
@@ -126,7 +148,7 @@ export default async function StorePage() {
         <SectionHeader title="Strategies" count={strategies.length} />
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
           {strategies.map((e) => (
-            <PluginCard key={e.manifest.id} entry={e} loggedIn={!!user} installed={installed.get(e.manifest.id) ?? null} coinpayConfigured={cpOk} />
+            <PluginCard key={e.manifest.id} entry={e} loggedIn={!!user} installed={installed.get(e.manifest.id) ?? null} coinpayConfigured={cpOk} backtest={backtestResults[e.manifest.id] ?? null} />
           ))}
         </div>
       </section>
@@ -159,11 +181,12 @@ function SectionHeader({ title, count }: { title: string; count: number }) {
   );
 }
 
-function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk }: {
+function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk, backtest = null }: {
   entry: CatalogEntry;
   loggedIn: boolean;
   installed: InstalledRow | null;
   coinpayConfigured: boolean;
+  backtest?: BacktestStrategy | null;
 }) {
   const { manifest, status, pricing, tagline } = entry;
   return (
@@ -180,6 +203,7 @@ function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk }: {
       </div>
       {tagline && <p className="text-sm text-zinc-300 mb-2">{tagline}</p>}
       {manifest.description && <p className="text-sm text-zinc-400 leading-relaxed mb-4">{manifest.description}</p>}
+      {backtest && <BacktestSummary backtest={backtest} />}
       <div className="mt-auto flex items-center justify-between pt-3 border-t border-zinc-800 gap-3">
         <div className="flex flex-wrap gap-1.5">
           {manifest.capabilities.slice(0, 3).map((c) => (
@@ -193,6 +217,53 @@ function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk }: {
           <InstallButton entry={entry} loggedIn={loggedIn} installed={installed} coinpayConfigured={cpOk} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function fmtPct(n: number): string {
+  return `${n >= 0 ? '+' : ''}${(n * 100).toFixed(1)}%`;
+}
+
+/**
+ * Compact backtest readout for a strategy card. Shows return + win-rate across
+ * the same horizons the daemon trades, from the latest ~/bin/backtest.js run.
+ * Horizons with zero trades are hidden to keep the card tight.
+ */
+function BacktestSummary({ backtest }: { backtest: BacktestStrategy }) {
+  const rows = backtest.horizons.filter((h) => h.trades > 0);
+  if (rows.length === 0) return null;
+  const generated = backtestGeneratedAt ? new Date(backtestGeneratedAt).toLocaleDateString() : null;
+
+  return (
+    <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2.5">
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">Backtest · signals replay</span>
+        {generated && <span className="text-[10px] text-zinc-600">{generated}</span>}
+      </div>
+      <table className="w-full text-[11px]">
+        <thead>
+          <tr className="text-zinc-500">
+            <th className="text-left font-normal pb-1">Window</th>
+            <th className="text-right font-normal pb-1">Return</th>
+            <th className="text-right font-normal pb-1">Win</th>
+            <th className="text-right font-normal pb-1">Trades</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {rows.map((h) => (
+            <tr key={h.label}>
+              <td className="text-left text-zinc-400 py-0.5">{h.label}</td>
+              <td className={`text-right py-0.5 ${h.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtPct(h.returnPct)}</td>
+              <td className="text-right text-zinc-300 py-0.5">{Math.round(h.winRate * 100)}%</td>
+              <td className="text-right text-zinc-500 py-0.5">{h.trades}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-1.5 text-[10px] text-zinc-600 leading-snug">
+        Long-only replay of this plugin&apos;s own signals over a fixed basket. Excludes fees/slippage. Not financial advice.
+      </p>
     </div>
   );
 }
