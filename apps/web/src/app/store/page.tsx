@@ -136,6 +136,16 @@ export default async function StorePage() {
 
       <section className="max-w-6xl mx-auto px-6 py-10">
         <SectionHeader title="Strategies" count={strategies.length} />
+        <Link
+          href="/store/build"
+          className="mb-6 flex items-center justify-between rounded-xl border border-orange-500/30 bg-gradient-to-r from-orange-500/10 to-amber-500/5 px-6 py-4 hover:border-orange-500/50 transition"
+        >
+          <div>
+            <div className="text-sm font-semibold text-orange-300">Build your own strategy →</div>
+            <div className="text-xs text-zinc-400 mt-0.5">No code — describe it with the Trading Strategy Protocol and backtest instantly on crypto &amp; equities.</div>
+          </div>
+          <span className="text-2xl">🛠️</span>
+        </Link>
         <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
           {strategies.map((e) => (
             <PluginCard key={e.manifest.id} entry={e} loggedIn={!!user} installed={installed.get(e.manifest.id) ?? null} coinpayConfigured={cpOk} backtest={backtestResults[e.manifest.id] ?? null} />
