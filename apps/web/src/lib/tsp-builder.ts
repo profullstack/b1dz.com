@@ -104,6 +104,86 @@ export interface BuiltStrategy {
   definition: Record<string, unknown>;
 }
 
+/** Render a single operand back to its editable string form. */
+function operandToString(op: unknown): string {
+  return typeof op === 'number' ? String(op) : String(op ?? '');
+}
+
+/** Flatten a TSP condition into the wizard's AND-list of comparisons. A bare
+ *  comparison → one row; an `and` → its rows; `or`/`not` collapse to their
+ *  inner comparisons (a lossy but editable approximation). */
+function conditionToRows(cond: unknown): ComparisonRow[] {
+  if (!cond || typeof cond !== 'object') return [];
+  const c = cond as Record<string, unknown>;
+  if (Array.isArray(c.and)) return c.and.flatMap(conditionToRows);
+  if (Array.isArray(c.or)) return c.or.flatMap(conditionToRows);
+  if (c.not) return conditionToRows(c.not);
+  const op = Object.keys(c)[0] as Comparator | undefined;
+  if (!op) return [];
+  const pair = c[op];
+  if (!Array.isArray(pair) || pair.length !== 2) return [];
+  return [{ left: operandToString(pair[0]), op, right: operandToString(pair[1]) }];
+}
+
+/**
+ * Reverse of buildDefinition: hydrate wizard state from a TSP document (e.g. one
+ * the AI drafted) so the user can keep editing it in the form. Best-effort —
+ * unknown shapes fall back to defaults.
+ */
+export function builderStateFromDefinition(doc: unknown): BuilderState {
+  const base = defaultBuilderState();
+  if (!doc || typeof doc !== 'object') return base;
+  const d = doc as Record<string, unknown>;
+
+  if (typeof d.id === 'string') base.id = d.id;
+  if (typeof d.name === 'string') base.name = d.name;
+  if (typeof d.description === 'string') base.description = d.description;
+  if (Array.isArray(d.assetClasses)) {
+    const classes = d.assetClasses.filter((c): c is AssetClass => c === 'crypto' || c === 'equity');
+    if (classes.length) base.assetClasses = classes;
+  }
+
+  const body = d.definition as Record<string, unknown> | undefined;
+  if (body?.kind === 'template') {
+    const template = (['mean-reversion', 'breakout', 'trend-continuation'] as TemplateName[]).includes(body.template as TemplateName)
+      ? (body.template as TemplateName)
+      : 'mean-reversion';
+    base.mode = 'template';
+    const params = { ...TEMPLATE_PARAM_DEFAULTS[template] };
+    if (body.params && typeof body.params === 'object') {
+      for (const [key, val] of Object.entries(body.params as Record<string, unknown>)) {
+        if (typeof val === 'number') params[key] = val;
+      }
+    }
+    base.template = { template, params };
+  } else if (body?.kind === 'rules') {
+    base.mode = 'rules';
+    const indicators: IndicatorRow[] = [];
+    if (body.indicators && typeof body.indicators === 'object') {
+      for (const [name, spec] of Object.entries(body.indicators as Record<string, { fn?: IndicatorFn; period?: number }>)) {
+        indicators.push({ name, fn: (spec.fn ?? 'ema') as IndicatorFn, period: typeof spec.period === 'number' ? spec.period : 14 });
+      }
+    }
+    const rules: RuleRow[] = Array.isArray(body.rules)
+      ? (body.rules as Record<string, unknown>[]).map((r) => {
+          const sig = (r.signal ?? {}) as Record<string, unknown>;
+          return {
+            conditions: conditionToRows(r.when),
+            side: sig.side === 'sell' ? 'sell' : 'buy',
+            strength: typeof sig.strength === 'number' ? sig.strength : 1,
+            reason: typeof sig.reason === 'string' ? sig.reason : '',
+          } as RuleRow;
+        })
+      : [];
+    base.rules = {
+      indicators: indicators.length ? indicators : base.rules.indicators,
+      rules: rules.length ? rules : base.rules.rules,
+    };
+  }
+
+  return base;
+}
+
 /** Assemble a TSP document from builder state (no validation — that's the
  *  compiler's job; this just shapes the JSON). */
 export function buildDefinition(state: BuilderState): BuiltStrategy {
