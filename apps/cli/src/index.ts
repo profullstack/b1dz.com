@@ -128,6 +128,16 @@ Backtest:
   timeframes: 1m, 5m, 15m, 1h, 4h, 1d, 1w
   Active pairs are discovered the same way the live daemon picks them.
 
+Strategy backtest (plugin-store / TSP strategies, crypto vs equities):
+  b1dz strategy-backtest <id|all>          replay a strategy's own signals
+    --crypto                               crypto basket only
+    --equities                             equities basket only
+                                           (default: both, with a verdict)
+    --file path.tsp.json                   backtest a custom TSP strategy doc
+    --amount 100                           dollars per entry (default 100)
+  Run with no id to list built-in strategies. Scores each asset class
+  separately so you can see which one the strategy suits.
+
 Cross-exchange arb audit:
   b1dz audit-arb                           measure historical spread edges
     --timeframe 1h                         default 1h
@@ -331,6 +341,15 @@ if (source === 'backtest') {
     process.exit(0);
   } catch (e) {
     console.error(`backtest failed: ${(e as Error).message}`);
+    process.exit(1);
+  }
+} else if (source === 'strategy-backtest') {
+  const { runStrategyBacktestCli } = await import('./strategy-backtest.js');
+  try {
+    await runStrategyBacktestCli(process.argv.slice(3));
+    process.exit(0);
+  } catch (e) {
+    console.error(`strategy-backtest failed: ${(e as Error).message}`);
     process.exit(1);
   }
 } else if (source === 'audit-arb') {
