@@ -67,6 +67,7 @@ const config: NextConfig = {
   transpilePackages: [
     '@b1dz/core',
     '@b1dz/sdk',
+    '@b1dz/source-strategies',
     '@b1dz/storage-json',
     '@b1dz/storage-supabase',
     '@b1dz/storage-b1dz-api',
