@@ -4,7 +4,7 @@ import { runStrategyBacktest, type FetchCloses } from './strategy-backtest-runne
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** Synthetic daily closes: a crash (→ oversold) then a rip (→ overbought). */
+/** Synthetic daily closes within the window: a crash (→ oversold) then a rip. */
 function dipAndRip(startMs: number): { ts: number; close: number }[] {
   const prices = [
     ...Array.from({ length: 40 }, (_, i) => 100 - i * 1.5),
@@ -27,27 +27,57 @@ const rsiDip = {
   },
 };
 
-describe('runStrategyBacktest', () => {
+describe('runStrategyBacktest (bankroll + timeframe)', () => {
   const fetchCloses: FetchCloses = async (_symbol, startMs) => dipAndRip(startMs);
 
-  it('scores both asset classes and produces a verdict', async () => {
+  it('scores both classes over the chosen time frame with a verdict', async () => {
     const plugin = tsp.compile(rsiDip);
-    const res = await runStrategyBacktest(plugin, { classes: ['crypto', 'equity'], amount: 100, fetchCloses });
+    const res = await runStrategyBacktest(plugin, { classes: ['crypto', 'equity'], bankroll: 1000, timeframe: '1 year', fetchCloses });
 
+    expect(res.bankroll).toBe(1000);
+    expect(res.timeframe).toBe('1 year');
     expect(res.classes.map((c) => c.assetClass)).toEqual(['crypto', 'equity']);
     for (const c of res.classes) {
-      expect(c.horizons).toHaveLength(6); // 1m..5y
       expect(c.symbols.length).toBeGreaterThan(0);
+      expect(c.trades).toBeGreaterThanOrEqual(1);
+      expect(c.bankroll).toBe(1000);
+      expect(Number.isFinite(c.finalEquity)).toBe(true);
+      expect(c.profit).toBeCloseTo(c.finalEquity - 1000);
     }
     expect(res.verdict).not.toBeNull();
-    expect(['crypto', 'equity']).toContain(res.verdict!.winner);
   });
 
-  it('honors a single-class request and skips the verdict', async () => {
+  it('compounds the bankroll (a winning round-trip ends above starting capital)', async () => {
+    // Deterministic: buy the dip below 50, sell the rip above 90 → one big winner.
+    const buyLowSellHigh = tsp.compile({
+      tsp: '0.1', id: 'bl', name: 'BL',
+      definition: { kind: 'rules', rules: [
+        { when: { lt: ['price', 50] }, signal: { side: 'buy' } },
+        { when: { gt: ['price', 90] }, signal: { side: 'sell' } },
+      ] },
+    });
+    const res = await runStrategyBacktest(buyLowSellHigh, { classes: ['crypto'], bankroll: 1000, timeframe: '1 year', fetchCloses });
+    const c = res.classes[0]!;
+    expect(c.trades).toBeGreaterThanOrEqual(1);
+    expect(c.finalEquity).toBeGreaterThan(1000);
+    expect(c.returnPct).toBeGreaterThan(0);
+  });
+
+  it('falls back to the default time frame for an unknown label', async () => {
     const plugin = tsp.compile(rsiDip);
-    const res = await runStrategyBacktest(plugin, { classes: ['crypto'], amount: 100, fetchCloses });
-    expect(res.classes).toHaveLength(1);
-    expect(res.classes[0]!.assetClass).toBe('crypto');
+    const res = await runStrategyBacktest(plugin, { classes: ['crypto'], bankroll: 500, timeframe: 'forever' as never, fetchCloses });
+    expect(res.timeframe).toBe('1 year');
+  });
+
+  it('reports a no-data class when every fetch fails (and no verdict)', async () => {
+    const empty: FetchCloses = async () => [];
+    const plugin = tsp.compile(rsiDip);
+    const res = await runStrategyBacktest(plugin, { classes: ['crypto', 'equity'], bankroll: 1000, timeframe: '1 year', fetchCloses: empty });
+    for (const c of res.classes) {
+      expect(c.symbols).toEqual([]);
+      expect(c.trades).toBe(0);
+      expect(c.finalEquity).toBe(1000);
+    }
     expect(res.verdict).toBeNull();
   });
 
@@ -57,7 +87,7 @@ describe('runStrategyBacktest', () => {
       return dipAndRip(startMs);
     };
     const plugin = tsp.compile(rsiDip);
-    const res = await runStrategyBacktest(plugin, { classes: ['crypto'], amount: 100, fetchCloses: flaky });
+    const res = await runStrategyBacktest(plugin, { classes: ['crypto'], bankroll: 1000, timeframe: '1 year', fetchCloses: flaky });
     expect(res.classes[0]!.symbols).not.toContain('ETH-USD');
     expect(res.classes[0]!.symbols.length).toBeGreaterThan(0);
   });

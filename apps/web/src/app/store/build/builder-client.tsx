@@ -44,7 +44,8 @@ const KNOBS: { key: keyof Knobs; label: string; low: string; high: string }[] = 
 
 export function StrategyBuilder() {
   const [state, setState] = useState<BuilderState>(defaultBuilderState);
-  const [amount, setAmount] = useState(100);
+  const [bankroll, setBankroll] = useState(1000);
+  const [timeframe, setTimeframe] = useState('1 year');
   const [classes, setClasses] = useState<AssetClass[]>(['crypto', 'equity']);
   const [result, setResult] = useState<BacktestResponse & { strategy?: { name: string } } | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -96,7 +97,7 @@ export function StrategyBuilder() {
       const res = await fetch('/api/strategies/backtest', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: doc, classes, amount }),
+        body: JSON.stringify({ definition: doc, classes, bankroll, timeframe }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -214,8 +215,16 @@ export function StrategyBuilder() {
         <Card title="3 · Backtest">
           <div className="flex flex-wrap items-end gap-4 mb-4">
             <div>
-              <label className={labelCls}>$ / entry</label>
-              <input type="number" min={1} className={`${inputCls} w-24`} value={amount} onChange={(e) => setAmount(Math.max(1, Number(e.target.value) || 1))} />
+              <label className={labelCls}>Bankroll ($)</label>
+              <input type="number" min={1} className={`${inputCls} w-28`} value={bankroll} onChange={(e) => setBankroll(Math.max(1, Number(e.target.value) || 1))} />
+            </div>
+            <div>
+              <label className={labelCls}>Time frame</label>
+              <select className={`${inputCls} w-28`} value={timeframe} onChange={(e) => setTimeframe(e.target.value)}>
+                {['1 month', '3 months', '6 months', '1 year', '2 years', '5 years'].map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className={labelCls}>Test against</label>
@@ -407,47 +416,57 @@ function RuleCard({ rule, onChange, onRemove }: { rule: RuleRow; onChange: (r: R
   );
 }
 
+function money(n: number): string {
+  return `${n < 0 ? '-' : ''}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
 function Results({ result }: { result: BacktestResponse & { strategy?: { name: string } } }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      <div className="text-[11px] text-zinc-500">
+        {money(result.bankroll)} bankroll · {result.timeframe} ({result.startYmd} → {result.endYmd})
+      </div>
       {result.verdict && (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
           Better fit for <span className="font-semibold capitalize">{result.verdict.winner === 'equity' ? 'equities' : 'crypto'}</span>
           {' · '}
-          {result.verdict.classes.map((c) => `${c.assetClass === 'equity' ? 'equities' : 'crypto'} ${fmtReturnPct(c.returnPct)} (${c.label})`).join('  vs  ')}
+          {result.verdict.classes.map((c) => `${c.assetClass === 'equity' ? 'equities' : 'crypto'} ${fmtReturnPct(c.returnPct)}`).join('  vs  ')}
         </div>
       )}
-      {result.classes.map((cls) => (
-        <div key={cls.assetClass}>
-          <div className="flex items-baseline justify-between mb-1">
-            <span className="text-sm font-semibold text-zinc-200 capitalize">{cls.assetClass === 'equity' ? 'Equities' : 'Crypto'}</span>
-            <span className="text-[11px] text-zinc-500">{cls.symbols.join(', ') || 'no data'}</span>
-          </div>
-          <table className="w-full text-[11px]">
-            <thead>
-              <tr className="text-zinc-500">
-                <th className="text-left font-normal pb-1">Window</th>
-                <th className="text-right font-normal pb-1">Return</th>
-                <th className="text-right font-normal pb-1">Win</th>
-                <th className="text-right font-normal pb-1">Trades</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {cls.horizons.filter((h) => h.trades > 0).map((h) => (
-                <tr key={h.label}>
-                  <td className="text-left text-zinc-400 py-0.5">{h.label}</td>
-                  <td className={`text-right py-0.5 ${h.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtReturnPct(h.returnPct)}</td>
-                  <td className="text-right text-zinc-300 py-0.5">{fmtWinRate(h.winRate)}</td>
-                  <td className="text-right text-zinc-500 py-0.5">{h.trades}</td>
-                </tr>
-              ))}
-              {cls.horizons.every((h) => h.trades === 0) && (
-                <tr><td colSpan={4} className="text-zinc-600 py-1">no trades in any window</td></tr>
+      <div className="grid gap-3">
+        {result.classes.map((cls) => {
+          const noData = cls.symbols.length === 0;
+          return (
+            <div key={cls.assetClass} className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2.5">
+              <div className="flex items-baseline justify-between mb-1.5">
+                <span className="text-sm font-semibold text-zinc-200 capitalize">{cls.assetClass === 'equity' ? 'Equities' : 'Crypto'}</span>
+                <span className="text-[11px] text-zinc-500">{noData ? 'no price data' : cls.symbols.join(', ')}</span>
+              </div>
+              {noData ? (
+                <div className="text-[11px] text-zinc-600">Couldn&apos;t load price data for this basket — try again in a moment.</div>
+              ) : cls.trades === 0 ? (
+                <div className="text-[11px] text-zinc-600">No trades fired in this time frame.</div>
+              ) : (
+                <div className="grid grid-cols-4 gap-2 text-center">
+                  <Stat label="Return" value={fmtReturnPct(cls.returnPct)} cls={cls.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+                  <Stat label="Final" value={money(cls.finalEquity)} cls="text-zinc-200" />
+                  <Stat label="Win rate" value={fmtWinRate(cls.winRate)} cls="text-zinc-300" />
+                  <Stat label="Trades" value={String(cls.trades)} cls="text-zinc-400" />
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
-      ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, cls }: { label: string; value: string; cls: string }) {
+  return (
+    <div>
+      <div className={`text-sm font-mono ${cls}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-600">{label}</div>
     </div>
   );
 }
