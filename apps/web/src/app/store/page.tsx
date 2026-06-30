@@ -7,6 +7,12 @@ import { coinpayConfigured } from '@/lib/coinpay-client';
 import { InstallButton } from './install-button';
 import { SignOutForm } from '@/components/sign-out-form';
 import backtestData from '@/data/strategy-backtests.json';
+import {
+  type BacktestStrategy,
+  visibleHorizons,
+  fmtReturnPct,
+  fmtWinRate,
+} from '@/lib/strategy-backtest-display';
 
 export const metadata: Metadata = {
   title: 'b1dz Store — Plugin Marketplace',
@@ -45,22 +51,6 @@ interface InstalledRow {
 
 // Backtest results published by ~/bin/backtest.js — a long-only replay of each
 // strategy plugin's own buy/sell signals over a fixed crypto+equity basket.
-interface BacktestHorizon {
-  label: string;
-  startYmd: string;
-  endYmd: string;
-  trades: number;
-  returnPct: number;
-  winRate: number;
-  profit: number;
-  maxDrawdown: number;
-}
-interface BacktestStrategy {
-  strategyId: string;
-  name: string;
-  tagline: string;
-  horizons: BacktestHorizon[];
-}
 const backtestResults = (backtestData.results ?? {}) as Record<string, BacktestStrategy>;
 const backtestGeneratedAt = backtestData.generatedAt as string | undefined;
 
@@ -221,17 +211,13 @@ function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk, backt
   );
 }
 
-function fmtPct(n: number): string {
-  return `${n >= 0 ? '+' : ''}${(n * 100).toFixed(1)}%`;
-}
-
 /**
  * Compact backtest readout for a strategy card. Shows return + win-rate across
  * the same horizons the daemon trades, from the latest ~/bin/backtest.js run.
  * Horizons with zero trades are hidden to keep the card tight.
  */
 function BacktestSummary({ backtest }: { backtest: BacktestStrategy }) {
-  const rows = backtest.horizons.filter((h) => h.trades > 0);
+  const rows = visibleHorizons(backtest);
   if (rows.length === 0) return null;
   const generated = backtestGeneratedAt ? new Date(backtestGeneratedAt).toLocaleDateString() : null;
 
@@ -254,8 +240,8 @@ function BacktestSummary({ backtest }: { backtest: BacktestStrategy }) {
           {rows.map((h) => (
             <tr key={h.label}>
               <td className="text-left text-zinc-400 py-0.5">{h.label}</td>
-              <td className={`text-right py-0.5 ${h.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtPct(h.returnPct)}</td>
-              <td className="text-right text-zinc-300 py-0.5">{Math.round(h.winRate * 100)}%</td>
+              <td className={`text-right py-0.5 ${h.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtReturnPct(h.returnPct)}</td>
+              <td className="text-right text-zinc-300 py-0.5">{fmtWinRate(h.winRate)}</td>
               <td className="text-right text-zinc-500 py-0.5">{h.trades}</td>
             </tr>
           ))}
