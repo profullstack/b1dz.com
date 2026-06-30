@@ -14,6 +14,7 @@ export { trendContinuation } from './trend-continuation.js';
 export { meanReversion } from './mean-reversion.js';
 export { breakout } from './breakout.js';
 export * from './helpers.js';
+export * from './backtest.js';
 
 /** All strategy plugins this package ships, in catalog order. */
 export const STRATEGY_PLUGINS: StrategyPlugin[] = [trendContinuation, meanReversion, breakout];
