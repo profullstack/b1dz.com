@@ -30,7 +30,7 @@
  * fine; for high-concurrency multi-user deployments the right fix is
  * to thread UserConfig through every adapter.
  */
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ALL_OVERLAY_KEYS, SECRET_SET } from '@b1dz/core';
 
@@ -111,28 +111,40 @@ function loadEncryptionKey(): Buffer | null {
   return buf;
 }
 
-function decryptBlob(row: UserSettingsRow, key: Buffer): Record<string, string> | null {
+function deriveUserKey(masterKey: Buffer, userId: string): Buffer {
+  return createHmac('sha256', masterKey).update(userId).digest();
+}
+
+function decryptBlobWithKey(row: UserSettingsRow, key: Buffer): Record<string, string> | null {
   if (!row.payload_secret_ciphertext || !row.payload_secret_iv || !row.payload_secret_tag) return null;
-  try {
-    const iv = Buffer.from(row.payload_secret_iv, 'base64');
-    const tag = Buffer.from(row.payload_secret_tag, 'base64');
-    const ct = Buffer.from(row.payload_secret_ciphertext, 'base64');
-    const dec = createDecipheriv(ALGORITHM, key, iv);
-    dec.setAuthTag(tag);
-    const out = Buffer.concat([dec.update(ct), dec.final()]).toString('utf8');
-    const parsed = JSON.parse(out) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const result: Record<string, string> = {};
-      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof v === 'string') result[k] = v;
-        else if (typeof v === 'number' || typeof v === 'boolean') result[k] = String(v);
-      }
-      return result;
+  const iv = Buffer.from(row.payload_secret_iv, 'base64');
+  const tag = Buffer.from(row.payload_secret_tag, 'base64');
+  const ct = Buffer.from(row.payload_secret_ciphertext, 'base64');
+  const dec = createDecipheriv(ALGORITHM, key, iv);
+  dec.setAuthTag(tag);
+  const out = Buffer.concat([dec.update(ct), dec.final()]).toString('utf8');
+  const parsed = JSON.parse(out) as unknown;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'string') result[k] = v;
+      else if (typeof v === 'number' || typeof v === 'boolean') result[k] = String(v);
     }
-    return null;
+    return result;
+  }
+  return null;
+}
+
+function decryptBlob(row: UserSettingsRow, key: Buffer): Record<string, string> | null {
+  try {
+    return decryptBlobWithKey(row, deriveUserKey(key, row.user_id));
   } catch (e) {
-    console.warn(`user-config: decrypt failed for ${row.user_id.slice(0, 8)}: ${(e as Error).message}`);
-    return null;
+    try {
+      return decryptBlobWithKey(row, key);
+    } catch {
+      console.warn(`user-config: decrypt failed for ${row.user_id.slice(0, 8)}: ${(e as Error).message}`);
+      return null;
+    }
   }
 }
 
@@ -264,7 +276,7 @@ export async function mergeUserSecret(userId: string, patch: Record<string, stri
   const merged: Record<string, string> = { ...existing, ...patch };
 
   const iv = randomBytes(12);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const cipher = createCipheriv(ALGORITHM, deriveUserKey(key, userId), iv);
   const ct = Buffer.concat([cipher.update(JSON.stringify(merged), 'utf8'), cipher.final()]);
   const client = defaultClient();
   const { error } = await client.from('user_settings').upsert(

@@ -1,17 +1,17 @@
 /**
  * GET /api/settings/crypto-key
  *
- * Returns the base64-encoded AES-256-GCM key that the browser, CLI, and
- * daemon all use to encrypt/decrypt the user_settings secret blob. Auth
- * required — the wire is HTTPS, the key is what the client already
- * implicitly trusts the server with for daemon-side decrypt anyway.
+ * Returns the base64-encoded per-user AES-256-GCM key that the browser,
+ * CLI, and daemon use to encrypt/decrypt that user's secret blob. Auth
+ * required. The key is derived from the server's master
+ * SETTINGS_ENCRYPTION_KEY plus auth.userId.
  *
  * The browser holds this key in memory only (no localStorage). The
- * server NEVER receives plaintext secrets — the client-side path
- * encrypts before PUT, and reveal happens locally.
+ * client-side settings path encrypts before PUT, and reveal happens locally.
  */
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
+import { deriveUserSecretKey } from '@/lib/server-crypto';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +19,7 @@ export async function GET(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const key = process.env.SETTINGS_ENCRYPTION_KEY;
-  if (!key) {
+  if (!process.env.SETTINGS_ENCRYPTION_KEY) {
     return Response.json(
       { error: 'SETTINGS_ENCRYPTION_KEY not configured on server' },
       {
@@ -31,7 +30,7 @@ export async function GET(req: NextRequest) {
   }
 
   return Response.json(
-    { key },
+    { key: deriveUserSecretKey(auth.userId).toString('base64') },
     { headers: { 'cache-control': 'no-store', pragma: 'no-cache' } },
   );
 }

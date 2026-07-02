@@ -3,7 +3,7 @@
  * cache invalidation, and the env overlay.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createCipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createHmac, randomBytes } from 'node:crypto';
 import {
   applyEnvOverlay,
   clearUserConfigCacheForTesting,
@@ -52,7 +52,23 @@ function fakeClient(rows: FakeRow[]): {
 
 const TEST_KEY = randomBytes(32);
 
-function encryptForTest(secret: Record<string, string>): { ciphertext: string; iv: string; tag: string } {
+function deriveUserKey(userId: string): Buffer {
+  return createHmac('sha256', TEST_KEY).update(userId).digest();
+}
+
+function encryptForTest(secret: Record<string, string>, userId = 'u1'): { ciphertext: string; iv: string; tag: string } {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', deriveUserKey(userId), iv);
+  const enc = Buffer.concat([cipher.update(JSON.stringify(secret), 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    ciphertext: enc.toString('base64'),
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+  };
+}
+
+function encryptLegacyForTest(secret: Record<string, string>): { ciphertext: string; iv: string; tag: string } {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', TEST_KEY, iv);
   const enc = Buffer.concat([cipher.update(JSON.stringify(secret), 'utf8'), cipher.final()]);
@@ -111,6 +127,40 @@ describe('loadUserConfig — lookup precedence', () => {
 
     const cfg = await loadUserConfig('u1');
     expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('user-kraken-from-db');
+  });
+
+  it('can read legacy master-key encrypted secrets', async () => {
+    process.env.KRAKEN_API_KEY = 'env-kraken';
+    const blob = encryptLegacyForTest({ KRAKEN_API_KEY: 'legacy-user-kraken' });
+    const { client } = fakeClient([{
+      user_id: 'u1',
+      payload_plain: null,
+      payload_secret_ciphertext: blob.ciphertext,
+      payload_secret_iv: blob.iv,
+      payload_secret_tag: blob.tag,
+      updated_at: null,
+    }]);
+    setSupabaseClientForTesting(client as never);
+
+    const cfg = await loadUserConfig('u1');
+    expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('legacy-user-kraken');
+  });
+
+  it('does not decrypt another user encrypted secret blob', async () => {
+    delete process.env.KRAKEN_API_KEY;
+    const blob = encryptForTest({ KRAKEN_API_KEY: 'wrong-user-secret' }, 'other-user');
+    const { client } = fakeClient([{
+      user_id: 'u1',
+      payload_plain: null,
+      payload_secret_ciphertext: blob.ciphertext,
+      payload_secret_iv: blob.iv,
+      payload_secret_tag: blob.tag,
+      updated_at: null,
+    }]);
+    setSupabaseClientForTesting(client as never);
+
+    const cfg = await loadUserConfig('u1');
+    expect(cfg.getUserSecret('KRAKEN_API_KEY')).toBeUndefined();
   });
 
   it('plain overrides take precedence over process.env (for non-secret keys)', async () => {
@@ -181,7 +231,7 @@ describe('applyEnvOverlay', () => {
     const blob = encryptForTest({
       KRAKEN_API_KEY: 'user-kraken',
       GEMINI_API_KEY: 'user-gemini',
-    });
+    }, 'overlay-user');
     const { client } = fakeClient([{
       user_id: 'overlay-user',
       payload_plain: null,
@@ -211,7 +261,7 @@ describe('applyEnvOverlay', () => {
 
   it('restores env even if the callback throws', async () => {
     process.env.KRAKEN_API_KEY = 'safe';
-    const blob = encryptForTest({ KRAKEN_API_KEY: 'temp' });
+    const blob = encryptForTest({ KRAKEN_API_KEY: 'temp' }, 'throws');
     const { client } = fakeClient([{
       user_id: 'throws',
       payload_plain: null,
@@ -237,7 +287,7 @@ describe('loadUserConfig — degraded mode (no encryption key)', () => {
     process.env.KRAKEN_API_KEY = 'env-only';
 
     // Even if the row has a secret blob, without a key we can't decrypt — env should still come through.
-    const blob = encryptForTest({ KRAKEN_API_KEY: 'user-from-db' });
+    const blob = encryptForTest({ KRAKEN_API_KEY: 'user-from-db' }, 'no-key');
     const { client } = fakeClient([{
       user_id: 'no-key',
       payload_plain: null,
