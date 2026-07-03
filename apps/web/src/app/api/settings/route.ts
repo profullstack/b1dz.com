@@ -16,6 +16,7 @@
  */
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
+import { decryptCurrentUserSecret, decryptSecret, encryptSecret } from '@/lib/server-crypto';
 import { sanitizePlain, type PlainPayload } from '@/lib/settings-fields';
 
 export const dynamic = 'force-dynamic';
@@ -61,6 +62,46 @@ function rowToCipher(row: SettingsRow | null): CipherBlob | null {
   };
 }
 
+async function upsertCipher(client: unknown, userId: string, blob: CipherBlob): Promise<void> {
+  const { error } = await (client as {
+    from: (t: string) => {
+      upsert: (r: Record<string, unknown>, opts: { onConflict: string }) => Promise<{ error: { message: string } | null }>;
+    };
+  }).from('user_settings').upsert(
+    {
+      user_id: userId,
+      payload_secret_ciphertext: blob.ciphertext,
+      payload_secret_iv: blob.iv,
+      payload_secret_tag: blob.tag,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id' },
+  );
+  if (error) throw new Error(error.message);
+}
+
+async function migrateLegacyCipherIfNeeded(client: unknown, userId: string, row: SettingsRow | null): Promise<CipherBlob | null> {
+  const cipher = rowToCipher(row);
+  if (!cipher || !secretCryptoConfigured()) return cipher;
+
+  try {
+    decryptCurrentUserSecret(cipher, userId);
+    return cipher;
+  } catch {
+    // Fall through and try the legacy master-key decrypt below.
+  }
+
+  try {
+    const secret = decryptSecret(cipher, userId);
+    const migrated = encryptSecret(secret, userId);
+    await upsertCipher(client, userId, migrated);
+    return migrated;
+  } catch (e) {
+    console.warn(`[api] settings secret migration skipped user=${userId.slice(0, 8)} error=${(e as Error).message}`);
+    return cipher;
+  }
+}
+
 function isValidCipher(value: unknown): value is CipherBlob {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -89,10 +130,11 @@ export async function GET(req: NextRequest) {
   // RPC endpoints into every user's settings page. Operator env is for the
   // operator's own account only.
   const userPlain = sanitizePlain(row?.payload_plain ?? {});
+  const cipher = await migrateLegacyCipherIfNeeded(auth.client, auth.userId, row);
 
   return Response.json({
     plain: userPlain,
-    cipher: rowToCipher(row),
+    cipher,
     lastUpdatedAt: row?.updated_at ?? null,
     cryptoConfigured: secretCryptoConfigured(),
   });
