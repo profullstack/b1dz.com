@@ -38,10 +38,28 @@ async function logAction(agent: AuthedAgent, action: string, detail: Record<stri
   } catch { /* non-fatal */ }
 }
 
+/** This token's queued-but-not-yet-executed orders (not in crypto_spend_ledger yet). */
+async function pendingQueue(agent: AuthedAgent): Promise<AgentQueueItem[]> {
+  const { data } = await agent.admin
+    .from('source_state')
+    .select('payload')
+    .eq('user_id', agent.userId)
+    .eq('source_id', 'agent-orders')
+    .maybeSingle();
+  const queue = ((data?.payload as { queue?: AgentQueueItem[] } | undefined)?.queue ?? []) as AgentQueueItem[];
+  return queue;
+}
+
+function pendingUsdFor(queue: AgentQueueItem[], tokenId: string): number {
+  return queue.filter((q) => q.tokenId === tokenId).reduce((acc, q) => acc + Number(q.usd ?? 0), 0);
+}
+
 export async function getAgentBudget(agent: AuthedAgent): Promise<AgentOrderResult> {
   const window = (agent.token.budget_window as AgentBudgetWindow) ?? 'daily';
   const spent = await tokenSpentThisWindow(agent.tokenId, window);
-  const check = checkAgentBudget(agent.token, spent, 0);
+  const queue = await pendingQueue(agent);
+  const pendingUsd = pendingUsdFor(queue, agent.tokenId);
+  const check = checkAgentBudget(agent.token, spent + pendingUsd, 0);
   return {
     status: 200,
     body: {
@@ -106,25 +124,25 @@ export async function placeAgentOrder(agent: AuthedAgent, req: AgentOrderRequest
     return { status: 403, body: { error: `${pair} is not in this token's allowed symbols` } };
   }
 
-  const window = (agent.token.budget_window as AgentBudgetWindow) ?? 'daily';
-  const spent = await tokenSpentThisWindow(agent.tokenId, window);
-  const budget = checkAgentBudget(agent.token, spent, usd);
-  if (!budget.allowed) {
-    await logAction(agent, 'place_order', { pair, usd, reason: budget.reason }, false);
-    return { status: 402, body: { error: budget.reason, remainingUsd: budget.remainingUsd } };
-  }
-
-  // Enqueue for the daemon's crypto-trade worker. Idempotent on the key.
-  const { data: row } = await agent.admin
-    .from('source_state')
-    .select('payload')
-    .eq('user_id', agent.userId)
-    .eq('source_id', 'agent-orders')
-    .maybeSingle();
-  const queue = ((row?.payload as { queue?: AgentQueueItem[] } | undefined)?.queue ?? []) as AgentQueueItem[];
+  // Read the pending queue BEFORE the budget check. tokenSpentThisWindow only
+  // reflects orders the daemon has already executed and ledgered — orders
+  // this token already has enqueued-but-not-yet-executed are invisible to it,
+  // so without counting them here, N rapid requests submitted before the
+  // daemon's next tick would each see the same stale `spent` and all pass,
+  // letting the token's real committed spend exceed budget_usd by up to N×.
+  const queue = await pendingQueue(agent);
   const key = req.idempotencyKey ?? `${agent.tokenId}:${Date.now()}`;
   if (queue.some((q) => q.idempotencyKey === key)) {
     return { status: 200, body: { status: 'accepted', idempotencyKey: key, duplicate: true } };
+  }
+
+  const window = (agent.token.budget_window as AgentBudgetWindow) ?? 'daily';
+  const spent = await tokenSpentThisWindow(agent.tokenId, window);
+  const pendingUsd = pendingUsdFor(queue, agent.tokenId);
+  const budget = checkAgentBudget(agent.token, spent + pendingUsd, usd);
+  if (!budget.allowed) {
+    await logAction(agent, 'place_order', { pair, usd, reason: budget.reason }, false);
+    return { status: 402, body: { error: budget.reason, remainingUsd: budget.remainingUsd } };
   }
   const item: AgentQueueItem = {
     idempotencyKey: key,

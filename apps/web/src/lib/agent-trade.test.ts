@@ -127,6 +127,27 @@ describe('placeAgentOrder (contract)', () => {
     await placeAgentOrder(agent({}, admin), { pair: 'btc-usd', usd: 10, idempotencyKey: 'k' });
     expect((state.queue[0] as { pair: string }).pair).toBe('BTC-USD');
   });
+
+  it('counts already-enqueued-but-unexecuted orders against the budget (no rapid-fire bypass)', async () => {
+    // tokenSpentThisWindow only reflects the durable ledger, which the daemon
+    // only writes to once it actually executes a queued order. Two orders
+    // submitted back-to-back before that happens must not both be allowed
+    // to exceed budget_usd just because the ledger hasn't caught up yet.
+    tokenSpentMock.mockResolvedValue(0);
+    const { admin, state } = makeAdmin();
+    const a = agent({ budget_usd: 100 }, admin);
+
+    const first = await placeAgentOrder(a, { pair: 'BTC-USD', usd: 80, idempotencyKey: 'k1' });
+    expect(first.status).toBe(202);
+    expect(state.queue).toHaveLength(1);
+
+    // Ledger still shows 0 spent (daemon hasn't drained the queue yet), but
+    // the first order is now pending in source_state for this same token.
+    const second = await placeAgentOrder(a, { pair: 'BTC-USD', usd: 80, idempotencyKey: 'k2' });
+    expect(second.status).toBe(402);
+    expect(second.body.remainingUsd).toBe(20);
+    expect(state.queue).toHaveLength(1); // second order never got enqueued
+  });
 });
 
 describe('getAgentBudget (contract)', () => {
