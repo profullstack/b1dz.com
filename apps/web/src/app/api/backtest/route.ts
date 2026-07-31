@@ -63,7 +63,11 @@ export async function POST(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const body = (await req.json().catch(() => ({}))) as BacktestRequest;
+  const rawBody = await req.json().catch(() => null) as unknown;
+  if (!rawBody || typeof rawBody !== 'object' || Array.isArray(rawBody)) {
+    return Response.json({ error: 'invalid JSON body' }, { status: 400 });
+  }
+  const body = rawBody as BacktestRequest;
   const timeframe = (body.timeframe ?? '5m') as AnalysisTimeframe;
   if (!TIMEFRAMES.includes(timeframe)) {
     return Response.json({ error: `invalid timeframe "${timeframe}"`, validTimeframes: TIMEFRAMES }, { status: 400 });

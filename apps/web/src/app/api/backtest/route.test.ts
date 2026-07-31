@@ -129,6 +129,14 @@ function makeReq(body: unknown) {
   });
 }
 
+function makeRawReq(body: string) {
+  return new Request('http://test.local/api/backtest', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer fake-token' },
+    body,
+  });
+}
+
 describe('POST /api/backtest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -164,6 +172,22 @@ describe('POST /api/backtest', () => {
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toMatch(/invalid exchange/);
+  });
+
+  it('rejects a null JSON body with 400', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(makeReq(null) as any);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid JSON body' });
+    expect(fetchHistoricalCandlesMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed JSON with 400', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(makeRawReq('{') as any);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid JSON body' });
+    expect(getActivePairsMock).not.toHaveBeenCalled();
   });
 
   it('returns 400 when no pairs are available and none requested', async () => {
