@@ -14,6 +14,7 @@ import { cryptoDcaWorker } from './sources/crypto-dca.js';
 import { v2PipelineWorker } from './sources/v2-pipeline.js';
 import { pumpfunTradeWorker } from './sources/pumpfun-trade.js';
 import { equitiesWorker } from './sources/equities.js';
+import { forwardTestWorker } from './sources/forward-test.js';
 
 export const SOURCES: SourceWorker[] = [
   cryptoArbWorker,
@@ -22,4 +23,5 @@ export const SOURCES: SourceWorker[] = [
   v2PipelineWorker,
   pumpfunTradeWorker,
   equitiesWorker,
+  forwardTestWorker,
 ];

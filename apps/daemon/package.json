@@ -16,8 +16,8 @@
   },
   "dependencies": {
     "@b1dz/adapters-cex": "workspace:*",
-    "@b1dz/adapters-pumpfun": "workspace:*",
     "@b1dz/adapters-evm": "workspace:*",
+    "@b1dz/adapters-pumpfun": "workspace:*",
     "@b1dz/adapters-solana": "workspace:*",
     "@b1dz/ai-analyzer": "workspace:*",
     "@b1dz/core": "workspace:*",
@@ -34,13 +34,15 @@
     "@b1dz/source-tradestation": "workspace:*",
     "@b1dz/source-tradier": "workspace:*",
     "@b1dz/storage-supabase": "workspace:*",
+    "@b1dz/strategy-registry": "workspace:*",
+    "@b1dz/strategy-validation": "workspace:*",
     "@b1dz/trade-daemon": "workspace:*",
     "@b1dz/triangular-engine": "workspace:*",
     "@b1dz/venue-types": "workspace:*",
     "@b1dz/wallet-direct": "workspace:*",
     "@b1dz/wallet-provider": "workspace:*",
     "@b1dz/wallet-service": "workspace:*",
-    "@supabase/supabase-js": "latest",
+    "@supabase/supabase-js": "^2.112.0",
     "tsx": "latest"
   },
   "devDependencies": {

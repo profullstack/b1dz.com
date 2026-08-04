@@ -5,6 +5,7 @@ export * from './alerts.js';
 export * from './source.js';
 export * from './runner.js';
 export * from './market.js';
+export * from './fees.js';
 export * from './indicators.js';
 export * from './sessions.js';
 export * from './oauth.js';

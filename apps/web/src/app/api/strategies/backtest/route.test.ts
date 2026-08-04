@@ -38,13 +38,36 @@ function makeReq(body: unknown) {
 
 const validDoc = { tsp: '0.1', id: 'x', name: 'X', definition: { kind: 'template', template: 'breakout' } };
 
+const cryptoCosts = { feeBps: 60, slippageBps: 5, assumedHalfSpreadBps: 5, perOrderUsd: 0, roundTripBps: 140 };
+const cryptoClass = {
+  assetClass: 'crypto',
+  basket: ['BTC-USD'],
+  symbols: ['BTC-USD'],
+  trades: 4,
+  returnPct: 0.08,
+  grossReturnPct: 0.14,
+  winRate: 0.5,
+  profit: 80,
+  maxDrawdown: 30,
+  bankroll: 1000,
+  finalEquity: 1080,
+  feesUsd: 48,
+  spreadSlippageUsd: 12,
+  totalCostUsd: 60,
+  costDragPct: 0.06,
+  costs: cryptoCosts,
+};
+
 describe('POST /api/strategies/backtest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authenticateMock.mockResolvedValue({ userId: 'u1', client: {}, email: 'a@b.c' });
     validateMock.mockReturnValue({ ok: true, errors: [] });
     compileMock.mockReturnValue({ manifest: { id: 'x', name: 'X' } });
-    runBacktestMock.mockResolvedValue({ bankroll: 1000, timeframe: '1 year', startYmd: '2025-06-30', endYmd: '2026-06-30', classes: [], verdict: null });
+    runBacktestMock.mockResolvedValue({
+      bankroll: 1000, timeframe: '1 year', startYmd: '2025-06-30', endYmd: '2026-06-30',
+      classes: [cryptoClass], verdict: null,
+    });
   });
 
   it('401 when unauthenticated', async () => {
@@ -106,5 +129,88 @@ describe('POST /api/strategies/backtest', () => {
     const res = await POST(makeReq({ definition: validDoc, classes: ['forex'] }) as never);
     expect(res.status).toBe(400);
     expect(runBacktestMock).not.toHaveBeenCalled();
+  });
+
+  it('returns the resolved cost assumptions and the net-vs-gross pair per class', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(makeReq({ definition: validDoc }) as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.costsOverridden).toBe(false);
+    const cls = body.classes[0];
+    expect(cls.costs).toEqual(cryptoCosts);
+    expect(cls.grossReturnPct).toBeGreaterThan(cls.returnPct);
+    expect(cls.feesUsd + cls.spreadSlippageUsd).toBeCloseTo(cls.totalCostUsd);
+    expect(cls.costDragPct).toBeCloseTo(cls.grossReturnPct - cls.returnPct, 10);
+  });
+
+  it('leaves costs undefined when the body omits them (per-class defaults apply)', async () => {
+    const { POST } = await importRoute();
+    await POST(makeReq({ definition: validDoc }) as never);
+    const [, opts] = runBacktestMock.mock.calls[0]!;
+    expect(opts.costs).toBeUndefined();
+  });
+
+  it('passes a valid cost override through, defaulting omitted fields to zero', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(makeReq({ definition: validDoc, costs: { feeBps: 26, slippageBps: 3 } }) as never);
+    expect(res.status).toBe(200);
+    const [, opts] = runBacktestMock.mock.calls[0]!;
+    expect(opts.costs).toEqual({ feeBps: 26, slippageBps: 3, assumedHalfSpreadBps: 0, perOrderUsd: 0 });
+    expect((await res.json()).costsOverridden).toBe(true);
+  });
+
+  it('accepts an explicit all-zero override (the frictionless comparison run)', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(
+      makeReq({ definition: validDoc, costs: { feeBps: 0, slippageBps: 0, assumedHalfSpreadBps: 0, perOrderUsd: 0 } }) as never,
+    );
+    expect(res.status).toBe(200);
+    const [, opts] = runBacktestMock.mock.calls[0]!;
+    expect(opts.costs).toEqual({ feeBps: 0, slippageBps: 0, assumedHalfSpreadBps: 0, perOrderUsd: 0 });
+  });
+
+  it.each([
+    ['above the bps ceiling', { feeBps: 501 }],
+    ['negative', { slippageBps: -1 }],
+    ['a non-number', { assumedHalfSpreadBps: '5' }],
+    ['not finite', { feeBps: Number.POSITIVE_INFINITY }],
+    ['above the per-order ceiling', { perOrderUsd: 100.5 }],
+    ['an unknown field', { gasBps: 5 }],
+  ])('400 when the cost override is %s', async (_label, costs) => {
+    const { POST } = await importRoute();
+    const res = await POST(makeReq({ definition: validDoc, costs }) as never);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/cost override/);
+    expect(body.details.length).toBeGreaterThan(0);
+    expect(runBacktestMock).not.toHaveBeenCalled();
+  });
+
+  it.each([['an array', []], ['a string', 'cheap'], ['a number', 5]])(
+    '400 when costs is %s rather than an object',
+    async (_label, costs) => {
+      const { POST } = await importRoute();
+      const res = await POST(makeReq({ definition: validDoc, costs }) as never);
+      expect(res.status).toBe(400);
+      expect((await res.json()).details).toEqual(['costs must be an object']);
+    },
+  );
+
+  it('treats an explicit null costs as "use the defaults"', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(makeReq({ definition: validDoc, costs: null }) as never);
+    expect(res.status).toBe(200);
+    const [, opts] = runBacktestMock.mock.calls[0]!;
+    expect(opts.costs).toBeUndefined();
+  });
+
+  it('names every offending field rather than stopping at the first', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(makeReq({ definition: validDoc, costs: { feeBps: 900, slippageBps: -2 } }) as never);
+    expect(res.status).toBe(400);
+    const details = (await res.json()).details as string[];
+    expect(details.some((d) => d.includes('feeBps'))).toBe(true);
+    expect(details.some((d) => d.includes('slippageBps'))).toBe(true);
   });
 });

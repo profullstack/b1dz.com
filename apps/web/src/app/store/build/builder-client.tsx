@@ -15,7 +15,7 @@ import {
   type TemplateName,
 } from '@/lib/tsp-builder';
 import { fmtReturnPct, fmtWinRate } from '@/lib/strategy-backtest-display';
-import type { BacktestResponse } from '@/lib/strategy-backtest-runner';
+import type { BacktestResponse, CostAssumptions } from '@/lib/strategy-backtest-runner';
 
 const INDICATOR_FNS: IndicatorFn[] = ['rsi', 'ema', 'sma', 'macdHist'];
 const COMPARATORS = ['gt', 'gte', 'lt', 'lte', 'eq', 'neq'] as const;
@@ -420,6 +420,10 @@ function money(n: number): string {
   return `${n < 0 ? '-' : ''}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
+function describeCosts(assumptions: CostAssumptions): string {
+  return `${assumptions.feeBps} bps/leg fee + ${assumptions.slippageBps} bps slippage + ${assumptions.assumedHalfSpreadBps} bps spread (${assumptions.roundTripBps} bps round trip)`;
+}
+
 function Results({ result }: { result: BacktestResponse & { strategy?: { name: string } } }) {
   return (
     <div className="space-y-3">
@@ -445,14 +449,36 @@ function Results({ result }: { result: BacktestResponse & { strategy?: { name: s
               {noData ? (
                 <div className="text-[11px] text-zinc-600">Couldn&apos;t load price data for this basket — try again in a moment.</div>
               ) : cls.trades === 0 ? (
-                <div className="text-[11px] text-zinc-600">No trades fired in this time frame.</div>
+                <>
+                  <div className="text-[11px] text-zinc-600">No trades fired in this time frame.</div>
+                  <div className="mt-1 text-[10px] text-zinc-600">{describeCosts(cls.costs)}</div>
+                </>
               ) : (
-                <div className="grid grid-cols-4 gap-2 text-center">
-                  <Stat label="Return" value={fmtReturnPct(cls.returnPct)} cls={cls.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
-                  <Stat label="Final" value={money(cls.finalEquity)} cls="text-zinc-200" />
-                  <Stat label="Win rate" value={fmtWinRate(cls.winRate)} cls="text-zinc-300" />
-                  <Stat label="Trades" value={String(cls.trades)} cls="text-zinc-400" />
-                </div>
+                <>
+                  <div className="grid grid-cols-4 gap-2 text-center">
+                    <Stat label="Return" value={fmtReturnPct(cls.returnPct)} cls={cls.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+                    <Stat label="Final" value={money(cls.finalEquity)} cls="text-zinc-200" />
+                    <Stat label="Win rate" value={fmtWinRate(cls.winRate)} cls="text-zinc-300" />
+                    <Stat label="Trades" value={String(cls.trades)} cls="text-zinc-400" />
+                  </div>
+                  <div className="mt-2 space-y-1.5 border-t border-zinc-800 pt-2">
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-zinc-500">Return</span>
+                      <span>
+                        <span className={cls.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{fmtReturnPct(cls.returnPct)}</span>
+                        {' '}
+                        <span className="text-zinc-500">(gross {fmtReturnPct(cls.grossReturnPct)})</span>
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-zinc-600">{describeCosts(cls.costs)}</div>
+                    <div className="text-[10px] text-zinc-600">
+                      Fees: {money(cls.feesUsd)} · Spread: {money(cls.spreadSlippageUsd)} · Total: {money(cls.totalCostUsd)} ({(cls.costDragPct * 100).toFixed(2)}% of bankroll)
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 italic mt-1">
+                    Returns are net of modelled costs. Backtests are not forward performance.
+                  </p>
+                </>
               )}
             </div>
           );

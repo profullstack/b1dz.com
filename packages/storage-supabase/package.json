@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@b1dz/core": "workspace:*",
-    "@supabase/supabase-js": "latest"
+    "@supabase/supabase-js": "^2.112.0"
   },
   "devDependencies": {
     "@types/node": "latest",

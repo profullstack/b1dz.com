@@ -8,17 +8,16 @@
  * is modeled crudely until a proper book-walker lands — an MVP trade-off.
  */
 
-import type { PriceFeed, MarketSnapshot } from '@b1dz/core';
+import { CEX_TAKER_FEE_RATES, DEFAULT_CEX_TAKER_FEE, type PriceFeed, type MarketSnapshot } from '@b1dz/core';
 import type { NormalizedQuote, QuoteRequest, VenueAdapter, AdapterHealth } from '@b1dz/venue-types';
 
-/** Taker fee schedule from the live daemon — keeps backtest, observer,
- *  and daemon in sync. Don't inline per-exchange strings elsewhere. */
-export const CEX_TAKER_FEES: Record<string, number> = {
-  kraken: 0.0026,
-  'binance-us': 0.001,
-  coinbase: 0.006,
-  gemini: 0.004,
-};
+/**
+ * Taker fee schedule — kept as an alias so backtest, observer, and daemon all
+ * price fills identically. The canonical table now lives in @b1dz/core
+ * (`CEX_TAKER_FEE_RATES`) so the backtester can read it without depending on
+ * this adapter package. Don't inline per-exchange rates anywhere.
+ */
+export const CEX_TAKER_FEES: Record<string, number> = CEX_TAKER_FEE_RATES;
 
 export interface CexAdapterOptions {
   /** If the feed exposes a custom name, override it. Otherwise feed.exchange is used. */
@@ -37,7 +36,7 @@ export class CexAdapter implements VenueAdapter {
   constructor(feed: PriceFeed, opts: CexAdapterOptions = {}) {
     this.feed = feed;
     this.venue = opts.venueOverride ?? feed.exchange;
-    this.feeRate = opts.feeRate ?? CEX_TAKER_FEES[this.venue] ?? 0.005;
+    this.feeRate = opts.feeRate ?? CEX_TAKER_FEE_RATES[this.venue] ?? DEFAULT_CEX_TAKER_FEE;
   }
 
   async health(): Promise<AdapterHealth> {

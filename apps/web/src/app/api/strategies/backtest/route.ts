@@ -8,7 +8,14 @@
  *
  * Read-only; never trades. Auth required.
  *
- * Body: { definition, classes?, bankroll?, timeframe? }
+ * Body: { definition, classes?, bankroll?, timeframe?, costs? }
+ *
+ * `costs` overrides the per-asset-class friction defaults. It is clamped rather
+ * than trusted: a caller who can post `feeBps: 0` can manufacture a strategy
+ * that looks profitable and publish it to the store, so the bounds below are a
+ * product constraint, not input hygiene. Nonsense (non-numeric, out of range)
+ * is a 400 rather than a silent clamp — quietly "fixing" a cost assumption is
+ * how a user ends up reading numbers they never asked for.
  *
  * Price data:
  *   - Crypto → Kraken daily OHLC via @b1dz/source-crypto-trade's
@@ -39,11 +46,71 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const VALID_CLASSES: AssetClass[] = ['crypto', 'equity'];
 const TF_LABELS = TIMEFRAMES.map((t) => t.label) as TimeframeLabel[];
 
+/** Accepted range per cost field. 500 bps = 5% per leg — past any real venue. */
+const COST_BOUNDS = {
+  feeBps: [0, 500],
+  slippageBps: [0, 500],
+  assumedHalfSpreadBps: [0, 500],
+  perOrderUsd: [0, 100],
+} as const satisfies Record<string, readonly [number, number]>;
+
+type CostField = keyof typeof COST_BOUNDS;
+const COST_FIELDS = Object.keys(COST_BOUNDS) as CostField[];
+
+interface CostOverride {
+  feeBps: number;
+  slippageBps: number;
+  assumedHalfSpreadBps: number;
+  perOrderUsd: number;
+}
+
 interface BacktestBody {
   definition?: unknown;
   classes?: string[];
   bankroll?: number;
   timeframe?: string;
+  costs?: unknown;
+}
+
+/**
+ * Validate a `costs` override. Absent → undefined (use the class defaults).
+ * Present but malformed → a list of errors, so the caller learns which field.
+ * Omitted fields default to 0, which is only reachable deliberately.
+ */
+function parseCostOverride(raw: unknown): { costs?: CostOverride; errors: string[] } {
+  if (raw === undefined || raw === null) return { errors: [] };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { errors: ['costs must be an object'] };
+  }
+
+  const src = raw as Record<string, unknown>;
+  const errors: string[] = [];
+  const parsed: Record<CostField, number> = {
+    feeBps: 0,
+    slippageBps: 0,
+    assumedHalfSpreadBps: 0,
+    perOrderUsd: 0,
+  };
+
+  for (const key of Object.keys(src)) {
+    if (!(COST_FIELDS as string[]).includes(key)) errors.push(`costs.${key} is not a recognized cost field`);
+  }
+  for (const field of COST_FIELDS) {
+    const value = src[field];
+    if (value === undefined) continue;
+    const [min, max] = COST_BOUNDS[field];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      errors.push(`costs.${field} must be a finite number`);
+      continue;
+    }
+    if (value < min || value > max) {
+      errors.push(`costs.${field} must be between ${min} and ${max}`);
+      continue;
+    }
+    parsed[field] = value;
+  }
+
+  return errors.length ? { errors } : { costs: parsed, errors: [] };
 }
 
 /** Yahoo Finance free chart API — daily closes. Often blocked on datacenters. */
@@ -157,7 +224,18 @@ export async function POST(req: NextRequest) {
     ? (body.timeframe as TimeframeLabel)
     : DEFAULT_TIMEFRAME;
 
-  const result = await runStrategyBacktest(plugin, { classes, bankroll, timeframe, fetchCloses });
+  const { costs, errors: costErrors } = parseCostOverride(body.costs);
+  if (costErrors.length) {
+    return Response.json({ error: 'invalid cost override', details: costErrors }, { status: 400 });
+  }
 
-  return Response.json({ strategy: { id: plugin.manifest.id, name: plugin.manifest.name }, ...result });
+  const result = await runStrategyBacktest(plugin, { classes, bankroll, timeframe, fetchCloses, costs });
+
+  return Response.json({
+    strategy: { id: plugin.manifest.id, name: plugin.manifest.name },
+    ...result,
+    // Resolved assumptions also live on each class (they differ by asset class);
+    // this echoes whether the caller forced one model across the board.
+    costsOverridden: costs !== undefined,
+  });
 }

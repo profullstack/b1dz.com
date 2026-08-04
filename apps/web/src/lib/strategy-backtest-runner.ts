@@ -6,15 +6,57 @@
  * the bankroll is split equally across the basket, and each slice compounds
  * through that symbol's round-trips (cash → shares → cash). Pure — the price
  * fetch is injected so the route supplies a source and tests supply a stub.
+ *
+ * COSTS. This wizard feeds the store, so a number shown here is a number a
+ * stranger may risk money on. Every slice therefore compounds by the trade's
+ * `netMultiple` (cash out / cash in, net of fees, spread and slippage) rather
+ * than by the raw price ratio: the price ratio only carries spread + slippage
+ * now, so using it silently refunds every fee. We replay each series TWICE —
+ * once with the real model and once with `ZERO_COST_MODEL` — so the response can
+ * put net return next to the frictionless number it would have advertised.
+ * `grossReturnPct − returnPct === costDragPct`, exactly, by construction.
+ *
+ * The cost model is passed EXPLICITLY rather than inferred from the snapshots:
+ * daily closes are synthesized with `bid === ask === close`, and the injected
+ * fetcher — not this module — decides which venue the data came from, so there
+ * is no venue here worth trusting. Judgement calls in `DEFAULT_CLASS_COSTS`.
  */
 import type { StrategyPlugin, MarketSnapshot } from '@b1dz/core';
-import { replayStrategy } from '@b1dz/source-strategies';
+import {
+  replayStrategy,
+  roundTripCostBps,
+  DEFAULT_COST_MODEL,
+  EQUITY_COST_MODEL,
+  ZERO_COST_MODEL,
+  type CostModel,
+} from '@b1dz/source-strategies';
 
 export type AssetClass = 'crypto' | 'equity';
 
 export const CRYPTO_BASKET = ['BTC-USD', 'ETH-USD', 'SOL-USD'];
 export const EQUITY_BASKET = ['SPY', 'AAPL', 'NVDA'];
 const MIN_BARS = 35; // enough for the slowest indicator (MACD/trend)
+
+/**
+ * Default friction per asset class.
+ *
+ * Crypto gets `DEFAULT_COST_MODEL` (Coinbase-tier, 60 bps/leg) and not the
+ * cheaper Kraken schedule the crypto fetcher happens to read closes from: the
+ * user picks their own venue, and a strategy that only clears the hurdle at the
+ * cheapest venue we know of is not a strategy we should be advertising.
+ * Equities get `EQUITY_COST_MODEL` — commission-free everywhere b1dz connects,
+ * so spread plus impact is the whole cost.
+ */
+export const DEFAULT_CLASS_COSTS: Record<AssetClass, CostModel> = {
+  crypto: DEFAULT_COST_MODEL,
+  equity: EQUITY_COST_MODEL,
+};
+
+/** Venue id stamped on synthesized snapshots — deliberately not a real venue. */
+const SYNTHETIC_VENUE: Record<AssetClass, string> = {
+  crypto: 'backtest-crypto',
+  equity: 'backtest-equity',
+};
 
 export const TIMEFRAMES = [
   { label: '1 month', months: 1 },
@@ -36,17 +78,35 @@ export interface DailyClose {
 /** Fetch daily closes for a symbol within [startMs, endMs]. */
 export type FetchCloses = (symbol: string, startMs: number, endMs: number) => Promise<DailyClose[]>;
 
+/** The cost assumptions a result was scored under, flattened for the wire/UI. */
+export interface CostAssumptions {
+  feeBps: number;
+  slippageBps: number;
+  assumedHalfSpreadBps: number;
+  perOrderUsd: number;
+  /** Break-even move a round trip must clear under these assumptions. */
+  roundTripBps: number;
+}
+
 export interface ClassResult {
   assetClass: AssetClass;
   basket: string[];
   symbols: string[]; // ones that returned usable data
   trades: number;
-  returnPct: number;
-  winRate: number;
-  profit: number; // finalEquity - bankroll
+  returnPct: number; // NET of modelled costs
+  /** What the same trades would have returned frictionless. The honesty delta. */
+  grossReturnPct: number;
+  winRate: number; // counted on NET profit
+  profit: number; // finalEquity - bankroll, net
   maxDrawdown: number; // dollars, peak-to-trough on the merged equity curve
   bankroll: number;
   finalEquity: number;
+  feesUsd: number;
+  spreadSlippageUsd: number;
+  totalCostUsd: number;
+  /** totalCostUsd / bankroll — equals grossReturnPct − returnPct. */
+  costDragPct: number;
+  costs: CostAssumptions;
 }
 
 export interface BacktestResponse {
@@ -72,10 +132,21 @@ function windowStart(end: Date, tf: (typeof TIMEFRAMES)[number]): Date {
 }
 
 function toSnapshots(symbol: string, rows: DailyClose[], assetClass: AssetClass): MarketSnapshot[] {
+  const exchange = SYNTHETIC_VENUE[assetClass];
   return rows
     .filter((r) => Number.isFinite(r.close))
     .sort((a, b) => a.ts - b.ts)
-    .map((r) => ({ exchange: 'src', pair: symbol, bid: r.close, ask: r.close, bidSize: 1, askSize: 1, ts: r.ts, assetClass }));
+    .map((r) => ({ exchange, pair: symbol, bid: r.close, ask: r.close, bidSize: 1, askSize: 1, ts: r.ts, assetClass }));
+}
+
+export function costAssumptions(costs: CostModel, notionalUsd: number): CostAssumptions {
+  return {
+    feeBps: costs.feeBps,
+    slippageBps: costs.slippageBps,
+    assumedHalfSpreadBps: costs.assumedHalfSpreadBps,
+    perOrderUsd: costs.perOrderUsd,
+    roundTripBps: roundTripCostBps(costs, notionalUsd),
+  };
 }
 
 /** An equity event: this symbol's slice is now worth `equity` as of `ts`. */
@@ -89,7 +160,7 @@ async function backtestClass(
   plugin: StrategyPlugin,
   assetClass: AssetClass,
   bankroll: number,
-  tf: (typeof TIMEFRAMES)[number],
+  costs: CostModel,
   startMs: number,
   endMs: number,
   fetchCloses: FetchCloses,
@@ -108,37 +179,57 @@ async function backtestClass(
   }
 
   const symbols = [...series.keys()];
+  const slice = symbols.length > 0 ? bankroll / symbols.length : bankroll;
   const result: ClassResult = {
     assetClass,
     basket,
     symbols,
     trades: 0,
     returnPct: 0,
+    grossReturnPct: 0,
     winRate: 0,
     profit: 0,
     maxDrawdown: 0,
     bankroll,
     finalEquity: bankroll,
+    feesUsd: 0,
+    spreadSlippageUsd: 0,
+    totalCostUsd: 0,
+    costDragPct: 0,
+    costs: costAssumptions(costs, slice),
   };
   if (symbols.length === 0) return result;
 
-  const slice = bankroll / symbols.length;
   const events: EquityEvent[] = [];
-  let totalFinal = 0;
+  let netFinal = 0;
+  let grossFinal = 0;
   let wins = 0;
   let tradeCount = 0;
+  // Per-trade friction at the replay notional. Only its fee/spread RATIO is used
+  // — the dollar total comes from the two equity curves, which is compounding-aware.
+  let rawFees = 0;
+  let rawSpread = 0;
 
   for (const [symbol, snaps] of series) {
-    const trades = replayStrategy(plugin, snaps, 1); // amount irrelevant — we use price ratios
+    const trades = replayStrategy(plugin, snaps, { amountPerEntry: slice, costs });
     let equity = slice;
     events.push({ ts: startMs, symbol, equity });
     for (const t of trades) {
       tradeCount++;
-      if (t.exitPrice > t.entryPrice) wins++;
-      equity *= t.exitPrice / t.entryPrice; // compound the slice through this round-trip
+      if (t.netMultiple > 1) wins++; // a fee-eating "winner" is a loss
+      rawFees += t.feesUsd;
+      rawSpread += t.spreadSlippageUsd;
+      equity *= t.netMultiple; // compound the slice through this round-trip
       events.push({ ts: t.exitTs, symbol, equity });
     }
-    totalFinal += equity;
+    netFinal += equity;
+
+    // Same signals, same bars, no friction — what the strategy would have "made".
+    let gross = slice;
+    for (const t of replayStrategy(plugin, snaps, { amountPerEntry: slice, costs: ZERO_COST_MODEL })) {
+      gross *= t.netMultiple;
+    }
+    grossFinal += gross;
   }
 
   // Merged equity curve → peak-to-trough drawdown in dollars.
@@ -154,18 +245,34 @@ async function backtestClass(
     maxDrawdown = Math.max(maxDrawdown, peak - total);
   }
 
+  const totalCostUsd = Math.max(0, grossFinal - netFinal);
+  const rawTotal = rawFees + rawSpread;
+  const feesUsd = rawTotal > 0 ? (totalCostUsd * rawFees) / rawTotal : 0;
+
   result.trades = tradeCount;
-  result.finalEquity = totalFinal;
-  result.profit = totalFinal - bankroll;
-  result.returnPct = bankroll > 0 ? totalFinal / bankroll - 1 : 0;
+  result.finalEquity = netFinal;
+  result.profit = netFinal - bankroll;
+  result.returnPct = bankroll > 0 ? netFinal / bankroll - 1 : 0;
+  result.grossReturnPct = bankroll > 0 ? grossFinal / bankroll - 1 : 0;
   result.winRate = tradeCount ? wins / tradeCount : 0;
   result.maxDrawdown = maxDrawdown;
+  result.feesUsd = feesUsd;
+  result.spreadSlippageUsd = totalCostUsd - feesUsd;
+  result.totalCostUsd = totalCostUsd;
+  result.costDragPct = bankroll > 0 ? totalCostUsd / bankroll : 0;
   return result;
 }
 
 export async function runStrategyBacktest(
   plugin: StrategyPlugin,
-  opts: { classes: AssetClass[]; bankroll: number; timeframe: TimeframeLabel; fetchCloses: FetchCloses },
+  opts: {
+    classes: AssetClass[];
+    bankroll: number;
+    timeframe: TimeframeLabel;
+    fetchCloses: FetchCloses;
+    /** Override the per-asset-class default friction (route body, CLI flag, tests). */
+    costs?: CostModel;
+  },
 ): Promise<BacktestResponse> {
   const tf = TIMEFRAMES.find((t) => t.label === opts.timeframe) ?? TIMEFRAMES.find((t) => t.label === DEFAULT_TIMEFRAME)!;
   const now = new Date();
@@ -174,7 +281,8 @@ export async function runStrategyBacktest(
 
   const classes: ClassResult[] = [];
   for (const assetClass of opts.classes) {
-    classes.push(await backtestClass(plugin, assetClass, opts.bankroll, tf, startMs, endMs, opts.fetchCloses));
+    const costs = opts.costs ?? DEFAULT_CLASS_COSTS[assetClass];
+    classes.push(await backtestClass(plugin, assetClass, opts.bankroll, costs, startMs, endMs, opts.fetchCloses));
   }
 
   let verdict: BacktestResponse['verdict'] = null;
