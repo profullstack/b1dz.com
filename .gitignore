@@ -33,3 +33,7 @@ supabase/.branches/
 .orders-debug.json
 *.keys
 .claude/
+opencode.json
+.opencode/
+.playwright-mcp/
+scripts/qa-inbox.sh
