@@ -65,10 +65,14 @@ interface InnerQuery {
   order: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
+  then: (onFulfilled: (v: unknown) => void, onRejected?: (e: unknown) => void) => void;
+  __result: { data?: unknown; error?: unknown; count?: number } | null;
 }
 
 function mockInner(): InnerQuery {
-  const self: InnerQuery = {} as InnerQuery;
+  const self: InnerQuery = {
+    __result: null,
+  } as unknown as InnerQuery;
   self.select = vi.fn(() => self);
   self.insert = vi.fn(() => self);
   self.update = vi.fn(() => self);
@@ -76,7 +80,14 @@ function mockInner(): InnerQuery {
   self.in = vi.fn(() => self);
   self.order = vi.fn(() => self);
   self.is = vi.fn(() => self);
-  self.single = vi.fn().mockResolvedValue({ data: null, error: null });
+  self.single = vi.fn(() => self);
+  self.then = (onFulfilled: (v: unknown) => void, onRejected?: (e: unknown) => void) => {
+    if (self.__result) {
+      onFulfilled(self.__result);
+    } else {
+      onFulfilled({ data: null, error: null });
+    }
+  };
   return self;
 }
 
@@ -103,7 +114,7 @@ describe('register', () => {
       archived_at: null,
       created_at: '2026-08-01T00:00:00Z',
     };
-    inner.single.mockResolvedValueOnce({ data: row, error: null });
+    inner.__result = { data: row, error: null };
 
     const entry = await register(
       mockSupabase(inner), 'u1', 'c1',
@@ -125,7 +136,7 @@ describe('register', () => {
 
   it('propagates errors', async () => {
     const inner = mockInner();
-    inner.single.mockResolvedValueOnce({ data: null, error: { message: 'dup key' } });
+    inner.__result = { data: null, error: { message: 'dup key' } };
     await expect(
       register(mockSupabase(inner), 'u1', 'c1', SAMPLE_DOC, makeReport(), ZERO_COSTS),
     ).rejects.toEqual({ message: 'dup key' });
@@ -141,7 +152,7 @@ describe('listByUser', () => {
       { id: 'r2', user_id: 'u1', candidate_id: 'c2', tsp_doc: SAMPLE_DOC, compiled: true, status: 'listed', gauntlet_report: makeReport(), cost_model: ZERO_COSTS, listed_at: '2026-08-02T00:00:00Z', rejected_at: null, archived_at: null, created_at: '2026-08-02T00:00:00Z' },
     ];
     const inner = mockInner();
-    inner.select.mockResolvedValueOnce({ data: rows, error: null });
+    inner.__result = { data: rows, error: null };
 
     const entries = await listByUser(mockSupabase(inner), 'u1');
     expect(inner.order).toHaveBeenCalledWith('created_at', { ascending: false });
@@ -151,7 +162,7 @@ describe('listByUser', () => {
 
   it('filters by status when provided', async () => {
     const inner = mockInner();
-    inner.select.mockResolvedValueOnce({ data: [], error: null });
+    inner.__result = { data: [], error: null };
 
     await listByUser(mockSupabase(inner), 'u1', 'forward_running');
     expect(inner.eq).toHaveBeenCalledWith('status', 'forward_running');
@@ -166,7 +177,7 @@ describe('listForwardRunning', () => {
     const rows: RegistryRow[] = [
       { id: 'r1', user_id: 'u1', candidate_id: 'c1', tsp_doc: SAMPLE_DOC, compiled: true, status: 'forward_running', gauntlet_report: makeReport(), cost_model: ZERO_COSTS, listed_at: null, rejected_at: null, archived_at: null, created_at: '2026-08-01T00:00:00Z' },
     ];
-    inner.select.mockResolvedValueOnce({ data: rows, error: null });
+    inner.__result = { data: rows, error: null };
 
     const entries = await listForwardRunning(mockSupabase(inner));
     expect(inner.in).toHaveBeenCalledWith('status', ['gauntlet_passed', 'forward_running']);
@@ -179,7 +190,7 @@ describe('listForwardRunning', () => {
 describe('setListed', () => {
   it('updates status to listed and sets listed_at', async () => {
     const inner = mockInner();
-    inner.update.mockResolvedValueOnce({ data: null, error: null });
+    inner.__result = { data: null, error: null };
 
     await setListed(mockSupabase(inner), 'reg-1');
     expect(inner.eq).toHaveBeenCalledWith('id', 'reg-1');
@@ -194,7 +205,7 @@ describe('setListed', () => {
 describe('setStatus', () => {
   it('updates status to forward_running', async () => {
     const inner = mockInner();
-    inner.update.mockResolvedValueOnce({ data: null, error: null });
+    inner.__result = { data: null, error: null };
 
     await setStatus(mockSupabase(inner), 'reg-1', 'forward_running');
     expect(inner.eq).toHaveBeenCalledWith('id', 'reg-1');
@@ -204,7 +215,7 @@ describe('setStatus', () => {
 
   it('updates status to min_trl_reached', async () => {
     const inner = mockInner();
-    inner.update.mockResolvedValueOnce({ data: null, error: null });
+    inner.__result = { data: null, error: null };
 
     await setStatus(mockSupabase(inner), 'reg-1', 'min_trl_reached');
     const callArg = (inner.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
@@ -222,7 +233,7 @@ describe('insertForwardTrade', () => {
       entry_ts: '2026-08-01T00:00:00.000Z', exit_ts: null,
       trade_json: { profit: 5 }, regime_at_entry: 'trend', recorded_at: '2026-08-01T00:00:00.000Z',
     };
-    inner.single.mockResolvedValueOnce({ data: row, error: null });
+    inner.__result = { data: row, error: null };
 
     const trade = await insertForwardTrade(
       mockSupabase(inner), 'reg-1', 'u1',
@@ -252,7 +263,7 @@ describe('closeForwardTrade', () => {
       regime_at_entry: 'trend',
       recorded_at: '2026-08-01T00:00:00.000Z',
     };
-    inner.single.mockResolvedValueOnce({ data: row, error: null });
+    inner.__result = { data: row, error: null };
 
     const trade = await closeForwardTrade(
       mockSupabase(inner),
@@ -274,7 +285,7 @@ describe('forwardTradeHistory', () => {
       { id: 'ft-1', strategy_id: 'reg-1', user_id: 'u1', entry_ts: '2026-08-01T00:00:00Z', exit_ts: null, trade_json: {}, regime_at_entry: null, recorded_at: '2026-08-01T00:00:00Z' },
       { id: 'ft-2', strategy_id: 'reg-1', user_id: 'u1', entry_ts: '2026-08-02T00:00:00Z', exit_ts: null, trade_json: {}, regime_at_entry: null, recorded_at: '2026-08-02T00:00:00Z' },
     ];
-    inner.select.mockResolvedValueOnce({ data: rows, error: null });
+    inner.__result = { data: rows, error: null };
 
     const trades = await forwardTradeHistory(mockSupabase(inner), 'reg-1');
     expect(inner.order).toHaveBeenCalledWith('entry_ts', { ascending: true });
@@ -285,7 +296,7 @@ describe('forwardTradeHistory', () => {
 describe('countOpenTrades', () => {
   it('counts rows where exit_ts is null', async () => {
     const inner = mockInner();
-    inner.select.mockResolvedValueOnce({ count: 3, error: null });
+    inner.__result = { count: 3, error: null };
 
     const n = await countOpenTrades(mockSupabase(inner), 'reg-1');
     expect(inner.select).toHaveBeenCalledWith('*', { count: 'exact', head: true });
@@ -295,7 +306,7 @@ describe('countOpenTrades', () => {
 
   it('returns 0 when count is null', async () => {
     const inner = mockInner();
-    inner.select.mockResolvedValueOnce({ count: null, error: null });
+    inner.__result = { count: null, error: null };
 
     const n = await countOpenTrades(mockSupabase(inner), 'reg-1');
     expect(n).toBe(0);
