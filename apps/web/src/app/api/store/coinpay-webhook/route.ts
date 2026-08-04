@@ -45,6 +45,8 @@ interface InvoiceRow {
 }
 
 export async function POST(req: NextRequest) {
+  // lgtm[js/sql-injection] — Supabase SDK query builder uses parameterized queries internally;
+  // .from().select().eq() / .from().update().eq() / .from().upsert() are safe.
   const raw = await req.text();
   const sig = req.headers.get('x-coinpay-signature');
   if (!verifyCoinPayWebhook(raw, sig)) {

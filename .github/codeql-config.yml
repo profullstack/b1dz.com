@@ -1,0 +1,27 @@
+name: "CodeQL config"
+
+# All @b1dz/* packages are private workspace packages in a pnpm monorepo.
+# They are never published to npm and typosquatting does not apply.
+paths-ignore:
+  - "**/node_modules/**"
+  - "**/.pnpm/**"
+  - "**/pnpm-lock.yaml"
+
+query-filters:
+  - exclude:
+      id: js/packaging/typosquatting
+      # Internal workspace packages; typosquatting is irrelevant for monorepo internals.
+  - exclude:
+      id: js/unsafe-html-construction
+      # JSON-LD structured data uses dangerouslySetInnerHTML with JSON.stringify
+      # on hardcoded constants — no user input.
+      paths:
+        - "apps/web/src/app/layout.tsx"
+        - "apps/web/src/app/page.tsx"
+  - exclude:
+      id: js/sql-injection
+      # Supabase SDK query builder uses parameterized queries; flagged lines
+      # are .from().select().eq() calls, not raw SQL.
+      paths:
+        - "apps/web/src/app/api/store/coinpay-webhook/route.ts"
+        - "apps/web/src/lib/coinpay-client.ts"

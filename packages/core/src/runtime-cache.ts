@@ -241,6 +241,7 @@ export async function acquireRuntimeLease(scope: string, userId: string, sourceI
 }
 
 export async function refreshRuntimeLease(lease: RuntimeLease): Promise<boolean> {
+  // lgtm[js/dynamic-code-execution] — hardcoded Lua script for atomic Redis lease renewal, no user input
   const redis = await getRedisClient();
   if (!redis) return false;
   try {
@@ -261,6 +262,7 @@ export async function refreshRuntimeLease(lease: RuntimeLease): Promise<boolean>
 }
 
 export async function releaseRuntimeLease(lease: RuntimeLease): Promise<void> {
+  // lgtm[js/dynamic-code-execution] — hardcoded Lua script for atomic Redis lease release, no user input
   const redis = await getRedisClient();
   if (!redis) return;
   try {

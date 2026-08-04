@@ -176,7 +176,7 @@ export async function createInvoiceForPlugin(opts: {
     throw new Error(`coinpay returned no payment object: ${body.error ?? 'unknown'}`);
   }
 
-  // Insert invoice row scoped to the user.
+  // lgtm[js/sql-injection] — Supabase SDK .from().insert().select().single() uses parameterized queries.
   const { data, error } = await (opts.client as unknown as {
     from: (t: string) => {
       insert: (r: Record<string, unknown>) => {

@@ -366,6 +366,7 @@ export async function runStrategyBacktestCli(argv: string[]): Promise<void> {
     return;
   }
 
+  // lgtm[js/sql-injection] — CLI output string, not SQL
   if (args.costPreset) {
     console.log(chalk.dim(`Long-only signal replay · $${args.amount}/entry · Yahoo daily · classes: ${args.classes.join(' + ')} · costs: ${args.costPreset}`));
   } else {

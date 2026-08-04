@@ -112,6 +112,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={datatypeFont.variable}>
       <body>
+        {/* lgtm[js/unsafe-html-construction] — hardcoded JSON-LD, no user input */}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}

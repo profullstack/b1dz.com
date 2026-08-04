@@ -420,6 +420,7 @@ export default async function LandingPage() {
 
       {/* FAQ */}
       <section className="max-w-3xl mx-auto px-6 py-16">
+        {/* lgtm[js/unsafe-html-construction] — hardcoded FAQ JSON-LD, no user input */}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
