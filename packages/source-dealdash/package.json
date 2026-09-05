@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@b1dz/core": "workspace:*",
+    "@profullstack/x402-client": "0.2.0",
     "got-scraping": "^4.2.1",
     "puppeteer": "latest",
     "puppeteer-extra": "latest",

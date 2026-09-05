@@ -11,6 +11,8 @@
 
 import type { DealDashFetcher, DealDashCreds } from './fetcher.js';
 import { buildCookie } from './fetcher.js';
+import { attachX402 } from '@profullstack/x402-client/puppeteer';
+import { x402 } from './paid.js';
 
 export interface BrowserFetcherHandle {
   fetch: DealDashFetcher;
@@ -52,6 +54,8 @@ export async function createBrowserFetcher(
   });
 
   const page = await browser.newPage();
+  // A 402 on navigation is paid from Node and the pass presented, when a key is set.
+  if (x402) attachX402(page, x402);
 
   // Authenticate with the proxy if credentials are provided
   if (useProxy && proxyUser && proxyPass) {
