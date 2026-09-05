@@ -1,3 +1,4 @@
+import { gate } from "@/lib/crawl-gateway";
 /**
  * Auth proxy — redirects www → apex, refreshes the Supabase session on every
  * request, and gates non-public routes. Lifted from the official @supabase/ssr docs.
@@ -18,6 +19,12 @@ const PUBLIC_EXACT = new Set(['/']);
 let loggedVersion = false;
 
 export async function proxy(request: NextRequest) {
+  // Crawl gateway first: AI training crawlers get 402 Payment Required (or the
+  // sales page at /crawl) unless they present a paid pass. People, Googlebot
+  // and retrieval crawlers fall through to everything below.
+  const answer = await gate(request);
+  if (answer) return answer;
+
   const host = request.headers.get('host') ?? '';
 
   // Redirect www → non-www before touching auth.

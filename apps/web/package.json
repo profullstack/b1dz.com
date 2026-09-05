@@ -22,6 +22,7 @@
     "@profullstack/coinpay": "^0.6.11",
     "@profullstack/pluginstore": "^0.1.1",
     "@profullstack/stack": "^0.1.3",
+    "@profullstack/x402-gateway": "^0.1.0",
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "lightweight-charts": "^5.2.0",
