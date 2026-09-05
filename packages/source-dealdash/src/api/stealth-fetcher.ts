@@ -9,6 +9,8 @@
 
 import type { DealDashFetcher, DealDashCreds } from './fetcher.js';
 import { buildCookie } from './fetcher.js';
+import { x402Hooks } from '@profullstack/x402-client/got';
+import { x402 } from './paid.js';
 
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
@@ -33,6 +35,8 @@ export function makeStealthFetcher(creds: DealDashCreds, baseUrl = 'https://www.
     };
 
     const res = await gotScraping({
+      // Present a filed x402 pass, and pay a 402 once, when a key is set.
+      ...(x402 ? x402Hooks(x402) : {}),
       url,
       method: method as 'GET' | 'POST' | 'PUT' | 'DELETE',
       headers,
