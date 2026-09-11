@@ -7,9 +7,24 @@
  * 4. Return every pair that clears the liquidity + market-cap filters
  *
  * Refreshes every 5 minutes.
+ *
+ * With NICHEDB_CRYPTO=1 the universe (per-venue tickers and CoinGecko market
+ * caps) is read from nichedb.dev in ~10 requests instead of CoinGecko plus the
+ * four venues' ticker lists; the filters are the same. Any nichedb failure or
+ * an empty answer falls back to the live path below, logged once per outage.
  */
 
 import { createSign, randomBytes } from 'node:crypto';
+import {
+  createNichedbClient,
+  fetchCryptoAssets,
+  fetchCryptoPairs,
+  nichedbEnabled,
+  selectCryptoPairs,
+  type CryptoAssetItem,
+  type DiscoveredPair,
+  type FetchLike,
+} from '@b1dz/source-nichedb';
 import { getCoinbasePem } from './feeds/coinbase-pem.js';
 import { fetchJson } from './feeds/http.js';
 
@@ -135,9 +150,75 @@ async function getBinanceVolumes(): Promise<Map<string, { volUsd: number; change
   return result;
 }
 
+// ─── nichedb ──────────────────────────────────────────────────
+
+let nichedbFallbackWarned = false;
+
+/**
+ * The universe from nichedb.dev's `crypto` collection: every stable-quoted
+ * spot pair on the four venues (7-8 pages of 200) plus the top 500 assets by
+ * market cap (3 pages). Grouped by base and filtered with the same rules as
+ * the venue path: USD books only, `volume24hQuote >= MIN_VOLUME_USD` per venue
+ * (a null volume, which is every Gemini book, passes, exactly as the old
+ * Gemini sentinel did), on at least two venues, market cap >= $10M when known.
+ *
+ * Throws on a nichedb failure or an empty pair set so the caller can fall
+ * back; a failed asset read only drops the market-cap filter, as a CoinGecko
+ * failure did.
+ */
+export async function discoverPairsFromNichedb(fetchImpl?: FetchLike): Promise<DiscoveredPair[]> {
+  const client = createNichedbClient({ fetch: fetchImpl });
+  const [pairsResult, assetsResult] = await Promise.allSettled([fetchCryptoPairs(client), fetchCryptoAssets(client)]);
+  // No pairs means no universe: throw so the caller falls back (an asset error alongside is the same outage).
+  if (pairsResult.status === 'rejected') throw pairsResult.reason;
+  const pairRows = pairsResult.value;
+  if (pairRows.length === 0) throw new Error('nichedb returned no pairs');
+  let assetRows: CryptoAssetItem[] = [];
+  if (assetsResult.status === 'fulfilled') assetRows = assetsResult.value;
+  else console.error(`[discovery] nichedb assets error (skipping mcap filter): ${(assetsResult.reason as Error).message}`);
+
+  const sel = selectCryptoPairs(pairRows, assetRows, {
+    minVolumeUsd: minVolumeUsd(),
+    minMarketCapUsd: MIN_MARKET_CAP_USD,
+    minVenues: MIN_EXCHANGES,
+    excludedBases: EXCLUDED,
+    quote: 'USD',
+  });
+  if (sel.pairs.length === 0) throw new Error(`nichedb: no pair cleared the filters (${pairRows.length} rows)`);
+
+  console.log(
+    `[discovery] nichedb: ${sel.pairs.length} pairs from ${pairRows.length} pair rows + ${assetRows.length} assets in ${client.requestCount} requests ` +
+      `(${sel.filteredByVenues} filtered by <${MIN_EXCHANGES} exchanges, ${sel.filteredByMarketCap} filtered by <$${MIN_MARKET_CAP_USD / 1e6}M mcap, min vol $${(minVolumeUsd() / 1e6).toFixed(2)}M)`,
+  );
+  for (const p of sel.pairs.slice(0, 12)) {
+    const chg = p.change24hPct >= 0 ? `+${p.change24hPct.toFixed(1)}%` : `${p.change24hPct.toFixed(1)}%`;
+    const mcapStr = p.marketCapUsd > 0 ? `mcap=$${(p.marketCapUsd / 1e9).toFixed(1)}B` : 'mcap=?';
+    console.log(`  ${p.pair.padEnd(12)} vol=$${(p.totalVolumeUsd / 1e6).toFixed(1)}M  24h=${chg}  ${mcapStr}  venues=${Object.keys(p.venues).join(',')}`);
+  }
+  if (sel.pairs.length > 12) console.log(`  ... +${sel.pairs.length - 12} more`);
+  return sel.pairs;
+}
+
 // ─── Discovery ────────────────────────────────────────────────
 
 async function discoverPairs(): Promise<string[]> {
+  if (nichedbEnabled('NICHEDB_CRYPTO')) {
+    try {
+      const pairs = await discoverPairsFromNichedb();
+      nichedbFallbackWarned = false;
+      return pairs.map((p) => p.pair);
+    } catch (e) {
+      if (!nichedbFallbackWarned) {
+        nichedbFallbackWarned = true;
+        console.error(`[discovery] nichedb unavailable (${(e as Error).message}); falling back to CoinGecko + venue tickers`);
+      }
+    }
+  }
+  return discoverPairsFromVenues();
+}
+
+/** The live path: CoinGecko (2 pages x 250) plus Kraken, Coinbase and Binance.US tickers. */
+async function discoverPairsFromVenues(): Promise<string[]> {
   const [krakenVols, coinbaseData, binanceData] = await Promise.all([
     getKrakenVolumes(),
     getCoinbaseVolumes(),

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const authenticateMock = vi.fn();
 const unauthorizedMock = vi.fn(() => new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 }));
@@ -106,5 +106,100 @@ describe('POST /api/strategies/backtest', () => {
     const res = await POST(makeReq({ definition: validDoc, classes: ['forex'] }) as never);
     expect(res.status).toBe(400);
     expect(runBacktestMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('equity closes via nichedb (NICHEDB_MARKETS)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const today = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate());
+
+  /** A fresh 400-bar history item ending yesterday, weekdays only. */
+  function historyItem(symbol: string) {
+    const bars: (string | number | null)[][] = [];
+    let ms = today - DAY;
+    while (bars.length < 400) {
+      const dow = new Date(ms).getUTCDay();
+      if (dow !== 0 && dow !== 6) bars.unshift([new Date(ms).toISOString().slice(0, 10), 10, 11, 9, 10 + bars.length, 1000, null]);
+      ms -= DAY;
+    }
+    return {
+      id: 7, collection: 'markets', kind: 'history', external_id: `history:${symbol}`, title: `${symbol} daily bars`,
+      published_at: null, updated_at: new Date().toISOString(), tags: ['history', `symbol:${symbol.toLowerCase()}`, 'feed:iex'],
+      data: { symbol, timeframe: '1Day', feed: 'iex', adjustment: 'split', bars, first: bars[0]![0], last: bars[399]![0], count: 400 },
+    };
+  }
+
+  function installFetch(nichedbItems: unknown[]) {
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const url = typeof input === 'string' ? input : input.href;
+      urls.push(url);
+      const host = new URL(url).host;
+      if (host === 'nichedb.dev') return Response.json({ count: nichedbItems.length, items: nichedbItems });
+      if (host === 'query1.finance.yahoo.com') {
+        return Response.json({ chart: { result: [{ timestamp: [1_700_000_000, 1_700_086_400], indicators: { quote: [{ close: [1, 2] }] } }] } });
+      }
+      return new Response('nope', { status: 404 });
+    }));
+    return urls;
+  }
+
+  async function equityCloses(symbol: string, days: number) {
+    const { POST } = await importRoute();
+    await POST(makeReq({ definition: validDoc, classes: ['equity'] }) as never);
+    const [, opts] = runBacktestMock.mock.calls[0]!;
+    return opts.fetchCloses(symbol, today - days * DAY, today) as Promise<{ ts: number; close: number }[]>;
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('ALPACA_API_KEY_ID', '');
+    vi.stubEnv('ALPACA_API_SECRET_KEY', '');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('makes no nichedb request when the switch is off', async () => {
+    vi.stubEnv('NICHEDB_MARKETS', '');
+    const urls = installFetch([historyItem('AAPL')]);
+    const rows = await equityCloses('AAPL', 365);
+    expect(urls.some((u) => u.includes('nichedb.dev'))).toBe(false);
+    expect(urls.some((u) => u.includes('finance.yahoo.com'))).toBe(true);
+    expect(rows.map((r) => r.close)).toEqual([1, 2]);
+  });
+
+  it('serves a one-year window from nichedb bars without touching Yahoo', async () => {
+    vi.stubEnv('NICHEDB_MARKETS', '1');
+    const urls = installFetch([historyItem('AAPL')]);
+    const rows = await equityCloses('AAPL', 365);
+    expect(urls).toHaveLength(1);
+    const q = new URL(urls[0]!).searchParams;
+    expect(q.get('collection')).toBe('markets');
+    expect(q.get('kind')).toBe('history');
+    expect(q.get('tags')).toBe('symbol:aapl');
+    expect(q.get('limit')).toBe('1');
+    expect(rows.length).toBeGreaterThan(240);
+    expect(rows[rows.length - 1]!.ts).toBe(rows[rows.length - 1]!.ts - (rows[rows.length - 1]!.ts % DAY)); // midnight UTC
+    expect(rows.every((r) => Number.isFinite(r.close))).toBe(true);
+  });
+
+  it('falls back to Yahoo when nichedb has no history for the symbol', async () => {
+    vi.stubEnv('NICHEDB_MARKETS', '1');
+    const urls = installFetch([]);
+    const rows = await equityCloses('ZZZZ', 90);
+    expect(urls.some((u) => u.includes('nichedb.dev'))).toBe(true);
+    expect(urls.some((u) => u.includes('finance.yahoo.com'))).toBe(true);
+    expect(rows.map((r) => r.close)).toEqual([1, 2]);
+  });
+
+  it('skips nichedb for a window longer than its 400 bars and uses Yahoo', async () => {
+    vi.stubEnv('NICHEDB_MARKETS', '1');
+    const urls = installFetch([historyItem('AAPL')]);
+    const rows = await equityCloses('AAPL', 5 * 365);
+    expect(urls.some((u) => u.includes('nichedb.dev'))).toBe(false);
+    expect(rows.map((r) => r.close)).toEqual([1, 2]);
   });
 });

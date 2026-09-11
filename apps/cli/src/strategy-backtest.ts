@@ -4,7 +4,8 @@
  * Unlike `b1dz backtest <tf>` (the server-side multi-pair crypto candle sim),
  * this runs locally against the deterministic StrategyPlugin engine in
  * @b1dz/source-strategies: it replays the strategy's own buy/sell signals
- * long-only over Yahoo daily bars.
+ * long-only over Yahoo daily bars (equities come from nichedb.dev's `markets`
+ * history first when NICHEDB_MARKETS=1, Yahoo when nichedb cannot serve them).
  *
  * Crucially it scores crypto and equities SEPARATELY so you can see which asset
  * class a strategy suits. Run both (default, with a head-to-head verdict),
@@ -19,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import { PLUGIN_CATALOG, type MarketSnapshot, type StrategyPlugin } from '@b1dz/core';
+import { createNichedbClient, fetchDailyBars, nichedbEnabled } from '@b1dz/source-nichedb';
 import {
   STRATEGY_PLUGINS,
   replayStrategy,
@@ -105,7 +107,37 @@ function subtract(end: Date, h: (typeof HORIZONS)[number]): Date {
   return d;
 }
 
-async function fetchDailySnapshots(symbol: string, startMs: number, endMs: number): Promise<MarketSnapshot[]> {
+/**
+ * Equity bars from nichedb's `markets` history (NICHEDB_MARKETS=1). Returns
+ * null when nichedb cannot serve the window: missing symbol, last bar older
+ * than 5 days, or more than its 400-bar window asked for. Crypto symbols are
+ * not in that collection, so they never ask.
+ */
+async function fetchNichedbSnapshots(symbol: string, startMs: number, endMs: number): Promise<MarketSnapshot[] | null> {
+  if (symbol.includes('-USD')) return null;
+  const result = await fetchDailyBars(createNichedbClient(), symbol, startMs, endMs);
+  if (!result.ok) {
+    process.stderr.write(chalk.dim(`  (nichedb cannot serve ${symbol}: ${result.reason}; using Yahoo)\n`));
+    return null;
+  }
+  return result.bars.map((b) => ({
+    exchange: 'nichedb', pair: symbol, bid: b.close, ask: b.close, bidSize: 1, askSize: 1, ts: b.ts, assetClass: 'equity' as const,
+  }));
+}
+
+export async function fetchDailySnapshots(symbol: string, startMs: number, endMs: number): Promise<MarketSnapshot[]> {
+  if (nichedbEnabled('NICHEDB_MARKETS')) {
+    try {
+      const fromNichedb = await fetchNichedbSnapshots(symbol, startMs, endMs);
+      if (fromNichedb && fromNichedb.length > 0) return fromNichedb;
+    } catch (e) {
+      process.stderr.write(chalk.dim(`  (nichedb error for ${symbol}: ${(e as Error).message}; using Yahoo)\n`));
+    }
+  }
+  return fetchYahooSnapshots(symbol, startMs, endMs);
+}
+
+async function fetchYahooSnapshots(symbol: string, startMs: number, endMs: number): Promise<MarketSnapshot[]> {
   const period1 = Math.floor((startMs - 7 * DAY_MS) / 1000);
   const period2 = Math.floor((endMs + 7 * DAY_MS) / 1000);
   const url =
@@ -244,7 +276,7 @@ export async function runStrategyBacktestCli(argv: string[]): Promise<void> {
 
   console.log(
     chalk.dim(
-      `Long-only signal replay · $${args.amount}/entry · Yahoo daily · classes: ${args.classes.join(' + ')} · ignores fees/slippage`,
+      `Long-only signal replay · $${args.amount}/entry · ${nichedbEnabled('NICHEDB_MARKETS') ? 'nichedb + Yahoo' : 'Yahoo'} daily · classes: ${args.classes.join(' + ')} · ignores fees/slippage`,
     ),
   );
 
