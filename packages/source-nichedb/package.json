@@ -1,5 +1,5 @@
 {
-  "name": "@b1dz/source-crypto-arb",
+  "name": "@b1dz/source-nichedb",
   "version": "0.3.10",
   "private": true,
   "type": "module",
@@ -14,16 +14,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@b1dz/adapters-evm": "workspace:*",
-    "@b1dz/core": "workspace:*",
-    "@b1dz/source-nichedb": "workspace:*",
-    "undici": "^8.0.2",
-    "ws": "^8.20.0"
-  },
   "devDependencies": {
     "@types/node": "latest",
-    "@types/ws": "^8.18.1",
     "typescript": "latest",
     "vitest": "latest"
   }

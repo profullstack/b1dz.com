@@ -68,6 +68,9 @@ importers:
       '@b1dz/source-crypto-trade':
         specifier: workspace:*
         version: link:../../packages/source-crypto-trade
+      '@b1dz/source-nichedb':
+        specifier: workspace:*
+        version: link:../../packages/source-nichedb
       '@b1dz/source-strategies':
         specifier: workspace:*
         version: link:../../packages/source-strategies
@@ -235,6 +238,9 @@ importers:
       '@b1dz/source-crypto-trade':
         specifier: workspace:*
         version: link:../../packages/source-crypto-trade
+      '@b1dz/source-nichedb':
+        specifier: workspace:*
+        version: link:../../packages/source-nichedb
       '@b1dz/source-strategies':
         specifier: workspace:*
         version: link:../../packages/source-strategies
@@ -554,6 +560,9 @@ importers:
       '@b1dz/core':
         specifier: workspace:*
         version: link:../core
+      '@b1dz/source-nichedb':
+        specifier: workspace:*
+        version: link:../source-nichedb
       undici:
         specifier: ^8.0.2
         version: 8.0.2
@@ -629,6 +638,18 @@ importers:
       '@b1dz/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 26.4.1
+      typescript:
+        specifier: latest
+        version: 7.0.2
+      vitest:
+        specifier: latest
+        version: 5.0.0(@types/node@26.4.1)(vite@8.0.7(@types/node@26.4.1)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.23.13))
+
+  packages/source-nichedb:
     devDependencies:
       '@types/node':
         specifier: latest

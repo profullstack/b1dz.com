@@ -14,13 +14,16 @@
  *   - Crypto → Kraken daily OHLC via @b1dz/source-crypto-trade's
  *     fetchHistoricalCandles (keyless; the same path the daemon + /api/backtest
  *     use, proven to work from Railway).
- *   - Equities → Alpaca daily bars (when ALPACA_API_KEY_ID/SECRET are set),
+ *   - Equities → nichedb.dev's `markets` history (when NICHEDB_MARKETS=1 and
+ *     it holds a fresh window covering the request; keyless, one request per
+ *     symbol), then Alpaca daily bars (when ALPACA_API_KEY_ID/SECRET are set),
  *     falling back to Yahoo best-effort. Yahoo is frequently blocked from
- *     datacenter IPs, so without Alpaca keys equities may return no data;
- *     crypto is unaffected.
+ *     datacenter IPs, so without nichedb or Alpaca keys equities may return
+ *     no data; crypto is unaffected.
  */
 import type { NextRequest } from 'next/server';
 import { fetchHistoricalCandles } from '@b1dz/source-crypto-trade';
+import { createNichedbClient, fetchDailyBars, nichedbEnabled } from '@b1dz/source-nichedb';
 import { tsp } from '@b1dz/source-strategies';
 import { authenticate, unauthorized } from '@/lib/api-auth';
 import {
@@ -102,9 +105,23 @@ async function fetchAlpacaCloses(symbol: string, startMs: number, endMs: number)
 }
 
 /**
+ * Equity daily closes from nichedb's `markets` history item (400 daily bars,
+ * split adjusted). Throws when nichedb has no fresh window covering the
+ * request (missing symbol, last bar older than 5 days, more than 400 days
+ * asked for) so the caller moves on to Alpaca and Yahoo.
+ */
+async function fetchNichedbCloses(symbol: string, startMs: number, endMs: number): Promise<DailyClose[]> {
+  const result = await fetchDailyBars(createNichedbClient(), symbol, startMs, endMs);
+  if (!result.ok) throw new Error(`nichedb ${result.reason}`);
+  const rows = result.bars.map((b) => ({ ts: b.ts, close: b.close }));
+  if (rows.length === 0) throw new Error('nichedb returned no rows');
+  return rows;
+}
+
+/**
  * Route closes by asset class:
  *   - crypto → Kraken (reliable from Railway, keyless).
- *   - equities → Alpaca (if keys set) → Yahoo fallback.
+ *   - equities → nichedb (if NICHEDB_MARKETS=1) → Alpaca (if keys set) → Yahoo fallback.
  * Returns [] only if every source for that symbol fails.
  */
 const fetchCloses: FetchCloses = async (symbol, startMs, endMs) => {
@@ -116,7 +133,14 @@ const fetchCloses: FetchCloses = async (symbol, startMs, endMs) => {
       return [];
     }
   }
-  // Equity: Alpaca first, then Yahoo.
+  // Equity: nichedb when switched on, then Alpaca, then Yahoo.
+  if (nichedbEnabled('NICHEDB_MARKETS')) {
+    try {
+      return await fetchNichedbCloses(symbol, startMs, endMs);
+    } catch (err) {
+      console.warn(`[backtest] nichedb cannot serve ${symbol} (${(err as Error).message}); falling back`);
+    }
+  }
   try {
     return await fetchAlpacaCloses(symbol, startMs, endMs);
   } catch (alpacaErr) {
