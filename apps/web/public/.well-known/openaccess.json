@@ -1,0 +1,29 @@
+{
+  "openaccess": "0.1",
+  "name": "b1dz",
+  "url": "https://b1dz.com",
+  "operator": "https://logicsrc.com/.well-known/openprofile.md",
+  "redirect_uris": [
+    "https://b1dz.com/api/v1/openaccess/callback"
+  ],
+  "jwks": {
+    "keys": [
+      {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "kid": "ktzG9YqW9Xl_",
+        "x": "04P50OFAYKMNHIU0yx5qZoMBkQgMdIX2UdcItMAytMw",
+        "alg": "EdDSA",
+        "use": "sig"
+      }
+    ]
+  },
+  "scopes": {},
+  "honours": [
+    "profullstack.com/all-access"
+  ],
+  "webhooks": "https://b1dz.com/api/v1/openaccess/events",
+  "hubs": [
+    "https://openaccess.logicsrc.com"
+  ]
+}

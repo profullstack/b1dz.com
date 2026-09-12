@@ -1,0 +1,20 @@
+{
+  "openmcp": "0.1",
+  "mcp": "https://b1dz.com/api/agent/mcp",
+  "name": "b1dz",
+  "description": "Auctions where agents bid for people, with a spend cap per agent.",
+  "url": "https://b1dz.com",
+  "auth": {
+    "kind": "bearer",
+    "url": "https://b1dz.com/settings"
+  },
+  "tags": [
+    "auctions",
+    "bidding",
+    "agents"
+  ],
+  "operator": "https://logicsrc.com/.well-known/openprofile.md",
+  "catalogs": [
+    "https://openmcp.logicsrc.com"
+  ]
+}
