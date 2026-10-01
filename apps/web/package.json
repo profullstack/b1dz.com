@@ -27,7 +27,7 @@
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "lightweight-charts": "^5.2.0",
-    "next": "latest",
+    "next": "16.3.8",
     "react": "latest",
     "react-dom": "latest"
   },
