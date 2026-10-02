@@ -66,12 +66,26 @@ function quotedUserAgent(headers: Headers): boolean {
 }
 
 /**
+ * The caller's address as nginx saw it. nginx sets X-Real-IP from the TCP
+ * peer, so it cannot be forged. form-guard's own lookup prefers
+ * CF-Connecting-IP / True-Client-IP, which nginx passes through untouched:
+ * a script sending a fresh fake one per request would get a fresh rate
+ * limit bucket each time.
+ */
+function realIp(headers: Headers): string | null {
+  return headers.get('x-real-ip')?.trim() || headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null;
+}
+
+/**
  * Runs the guard. Returns `null` when the submission may proceed, or
  * `{ drop: true }` for a submission to swallow silently (answer as if it
  * succeeded, send nothing), or a ready refusal Response.
  *
  * Dropping rather than refusing is deliberate: a bot that is told why it
- * failed learns what to send next time.
+ * failed learns what to send next time. The exception is the quoted
+ * User-Agent, which is answered 403: that is certain, and a 4xx is what
+ * ThreatCrush reads from the nginx log to ban the address
+ * (rule `quoted-user-agent`, as with `auth-throttle-429` for the 429s).
  */
 export async function checkAuthForm(
   guard: FormGuard | null,
@@ -79,12 +93,13 @@ export async function checkAuthForm(
   fields: Record<string, unknown>,
   headers: Headers,
 ): Promise<Response | { drop: true } | null> {
+  const ip = realIp(headers);
   if (quotedUserAgent(headers)) {
-    console.warn(`[${route}] dropped: quoted user-agent ip=${headers.get('x-real-ip') ?? headers.get('x-forwarded-for') ?? '?'}`);
-    return { drop: true };
+    console.warn(`[${route}] refused: quoted user-agent ip=${ip ?? '?'}`);
+    return Response.json({ error: 'Forbidden' }, { status: 403 });
   }
   if (!guard) return null;
-  const verdict = await guard.check({ fields, headers });
+  const verdict = await guard.check({ fields, headers, ip });
   if (verdict.allow) return null;
   if (verdict.action === 'drop') {
     console.warn(`[${route}] dropped (${verdict.reason}) ip=${verdict.ip ?? '?'}`);

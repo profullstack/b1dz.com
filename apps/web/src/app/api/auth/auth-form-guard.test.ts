@@ -82,11 +82,23 @@ describe('auth form guard', () => {
     expect(signUpMock).not.toHaveBeenCalled();
   });
 
-  it('silently drops the scripted quoted user-agent even with a valid token', async () => {
+  it('refuses the scripted quoted user-agent with a 403 ThreatCrush can ban on', async () => {
     const m = await load();
     const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123', ...(await tokenFields(m.guard, 'signupGuard')) }, { ua: `"${BROWSER_UA}"` }));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
     expect(signUpMock).not.toHaveBeenCalled();
+  });
+
+  it('keys the rate limit on X-Real-IP, so a forged CF-Connecting-IP buys no fresh budget', async () => {
+    const m = await load();
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = req('/api/auth/signup', { email: `s${i}@b.com`, password: 'password123', ...(await tokenFields(m.guard, 'signupGuard')) }, { ip: '192.0.2.44' });
+      r.headers.set('x-real-ip', '192.0.2.44');
+      r.headers.set('cf-connecting-ip', `10.9.8.${i}`);
+      statuses.push((await m.signup.POST(r)).status);
+    }
+    expect(statuses[5]).toBe(429);
   });
 
   it('rate-limits a sixth attempt from one address within the hour', async () => {
