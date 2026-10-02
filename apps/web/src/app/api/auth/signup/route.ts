@@ -1,9 +1,17 @@
 import type { NextRequest } from 'next/server';
 import { authJson, siteOrigin, withAuthCookies } from '@/lib/auth-route-client';
+import { checkAuthForm, signupGuard } from '@/lib/auth-form-guard';
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as { email?: string; password?: string } | null;
   if (!body?.email || !body?.password) return Response.json({ error: 'email + password required' }, { status: 400 });
+
+  // Before Supabase, which would mail a confirmation to whatever address
+  // was typed. A dropped submission gets the same answer a real new
+  // account gets, and no mail goes out.
+  const guarded = await checkAuthForm(signupGuard, 'signup', body, req.headers);
+  if (guarded instanceof Response) return guarded;
+  if (guarded) return Response.json({ user: null, session: null, needsEmailConfirmation: true });
 
   const email = body.email.trim();
   const { response, supabase } = authJson(req, {});

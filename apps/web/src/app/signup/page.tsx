@@ -1,67 +1,10 @@
-'use client';
-import { useState } from 'react';
-import Link from 'next/link';
-import Image from 'next/image';
+import { guardProps, signupGuard } from '@/lib/auth-form-guard';
+import { SignupForm } from './SignupForm';
 
-export default function SignupPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+// The form carries a token minted at render time, so this page must not be
+// cached: a stale page would hand every visitor the same expiring token.
+export const dynamic = 'force-dynamic';
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true); setError(null); setMessage(null);
-    try {
-      const res = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Signup failed'); setBusy(false); return; }
-      if (data.needsEmailConfirmation) {
-        setMessage('Check your email to confirm your account, then sign in.');
-        setBusy(false);
-        return;
-      }
-      window.location.assign('/dashboard');
-    } catch {
-      setError('Network error'); setBusy(false);
-    }
-  }
-
-  return (
-    <main className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <Link href="/">
-            <Image src="/logo.svg" alt="b1dz" width={48} height={48} className="mx-auto mb-3" />
-          </Link>
-          <h1 className="text-2xl font-bold">Create your <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">b1dz</span> account</h1>
-          <p className="text-sm text-zinc-400 mt-1">Start trading in minutes</p>
-        </div>
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm text-zinc-400 mb-1">Email</label>
-            <input className="w-full bg-zinc-900 border border-zinc-700 focus:border-orange-500 rounded-lg px-4 py-2.5 outline-none transition"
-              type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-          </div>
-          <div>
-            <label className="block text-sm text-zinc-400 mb-1">Password</label>
-            <input className="w-full bg-zinc-900 border border-zinc-700 focus:border-orange-500 rounded-lg px-4 py-2.5 outline-none transition"
-              type="password" placeholder="8+ characters" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
-          </div>
-          {error && <div className="text-red-400 text-sm bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{error}</div>}
-          {message && <div className="text-emerald-400 text-sm bg-emerald-400/10 border border-emerald-400/20 rounded-lg px-3 py-2">{message}</div>}
-          <button className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-semibold rounded-lg px-4 py-2.5 transition disabled:opacity-50"
-            disabled={busy} type="submit">{busy ? 'Creating account...' : 'Create account'}</button>
-        </form>
-        <p className="text-sm text-zinc-500 mt-6 text-center">
-          Already have an account? <Link className="text-orange-400 hover:text-orange-300" href="/login">Sign in</Link>
-        </p>
-      </div>
-    </main>
-  );
+export default async function SignupPage() {
+  return <SignupForm {...(await guardProps(signupGuard))} />;
 }

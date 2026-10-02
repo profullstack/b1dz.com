@@ -1,9 +1,15 @@
 import type { NextRequest } from 'next/server';
 import { authJson, siteOrigin, withAuthCookies } from '@/lib/auth-route-client';
+import { checkAuthForm, resetGuard } from '@/lib/auth-form-guard';
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as { email?: string } | null;
   if (!body?.email) return Response.json({ error: 'email required' }, { status: 400 });
+
+  // Before Supabase mails a reset link to whatever address was typed.
+  const guarded = await checkAuthForm(resetGuard, 'reset-password', body, req.headers);
+  if (guarded instanceof Response) return guarded;
+  if (guarded) return Response.json({ ok: true });
 
   const { response, supabase } = authJson(req, {});
   const { error } = await supabase.auth.resetPasswordForEmail(body.email.trim(), {
