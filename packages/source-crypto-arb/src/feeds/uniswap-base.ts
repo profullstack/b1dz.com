@@ -7,9 +7,11 @@
  *   ask = USDC received when selling 1 base
  *   bid = USDC spent to receive 1 base (inverse of the buy side)
  *
- * No WebSocket — Base has ~2s blocks and the QuoterV2 contract call is
- * free over any HTTP RPC. We cache per-pair for CACHE_TTL_MS so the
- * scalping strategy's per-tick snapshots don't hammer the RPC.
+ * No WebSocket. QuoterV2 calls are not free: keyed RPC providers bill
+ * them and free ones rate-limit them, which is how this feed ran up a
+ * $250/month Alchemy bill. So both legs are quoted together (the adapter
+ * batches them into one Multicall3 call) and cached per pair for
+ * CACHE_TTL_MS.
  */
 
 import type { PriceFeed, MarketSnapshot, OrderBook } from '@b1dz/core';
@@ -20,7 +22,7 @@ interface AdapterQuote {
   amountOut: string;
 }
 
-const CACHE_TTL_MS = 2_000;
+const CACHE_TTL_MS = 10_000;
 
 interface CacheEntry { at: number; bid: number; ask: number }
 const cache = new Map<string, CacheEntry>();
@@ -85,10 +87,12 @@ export class UniswapBaseFeed implements PriceFeed {
     if (!a) return null;
 
     try {
-      // Ask leg: sell 1 base → USDC out.
-      const ask = await a.quote({ pair: mappedPair, side: 'sell', amountIn: '1', chain: 'base' });
-      // Bid leg: spend 1 USDC → get base. Price = 1 / amountOut.
-      const buy = await a.quote({ pair: mappedPair, side: 'buy', amountIn: '1', chain: 'base' });
+      // Ask leg: sell 1 base → USDC out. Bid leg: spend 1 USDC → get
+      // base, price = 1 / amountOut. Issued together so they share a call.
+      const [ask, buy] = await Promise.all([
+        a.quote({ pair: mappedPair, side: 'sell', amountIn: '1', chain: 'base' }),
+        a.quote({ pair: mappedPair, side: 'buy', amountIn: '1', chain: 'base' }),
+      ]);
       if (!ask || !buy) return null;
 
       const askPrice = parseFloat(ask.amountOut);

@@ -93,14 +93,15 @@ export interface MultihopQuoteResult {
   gasEstimate: bigint;
 }
 
-/** Call QuoterV2.quoteExactInput via `simulateContract`. Returns null if
+/** Call QuoterV2.quoteExactInput via `readContract`. Returns null if
  *  the quoter reverts — treating "no liquidity / tick crossed revert" as
  *  "no quote" rather than throwing, matching the single-pool adapter's
  *  fee-tier fan-out behavior.
  *
  *  The client is typed as `unknown` to sidestep viem's chain-generic
- *  inference at the boundary; call-site only needs
- *  `simulateContract()` and the `.result` tuple. */
+ *  inference at the boundary; call-site only needs `readContract()`,
+ *  which (unlike simulateContract) joins viem's multicall batching when
+ *  the client sets `batch.multicall`. */
 export async function quoteExactInputMultihop(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client: any,
@@ -110,13 +111,13 @@ export async function quoteExactInputMultihop(
 ): Promise<MultihopQuoteResult | null> {
   if (amountIn <= 0n) return null;
   try {
-    const res = await client.simulateContract({
+    const res = await client.readContract({
       address: quoter,
       abi: QUOTER_V2_MULTIHOP_ABI,
       functionName: 'quoteExactInput',
       args: [path, amountIn],
     });
-    const [amountOut, , , gasEstimate] = res.result as [bigint, bigint[], number[], bigint];
+    const [amountOut, , , gasEstimate] = res as [bigint, bigint[], number[], bigint];
     if (amountOut <= 0n) return null;
     return { amountOut, gasEstimate };
   } catch {

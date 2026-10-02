@@ -152,9 +152,13 @@ export class UniswapV3Adapter implements VenueAdapter {
     this.chain = opts.chain;
     this.config = cfg;
     this.feeTiers = opts.feeTiers ?? UNISWAP_V3_FEE_TIERS;
+    // Quotes go out as readContract so viem folds every call made in the
+    // same tick (all fee tiers, both sides, every pair) into one Multicall3
+    // eth_call. RPC providers bill and rate-limit per call, not per quote.
     this.client = opts.client ?? createPublicClient({
       chain: cfg.viemChain,
       transport: http(opts.rpcUrl ?? process.env[cfg.rpcEnvVar]),
+      batch: { multicall: true },
     });
     this.gasOracle = opts.gasOracle ?? null;
     this.nativeUsdResolver = opts.nativeUsd ?? ((c: EvmChain) => this.nativeUsdPrice(c));
@@ -255,7 +259,7 @@ export class UniswapV3Adapter implements VenueAdapter {
     const results: TierQuote[] = [];
     await Promise.all(this.feeTiers.map(async (fee) => {
       try {
-        const res = await this.client.simulateContract({
+        const res = await this.client.readContract({
           address: this.config.quoter,
           abi: QUOTER_V2_ABI,
           functionName: 'quoteExactInputSingle',
@@ -267,7 +271,7 @@ export class UniswapV3Adapter implements VenueAdapter {
             sqrtPriceLimitX96: 0n,
           }],
         });
-        const [amountOut, , , gasEstimate] = res.result as [bigint, bigint, number, bigint];
+        const [amountOut, , , gasEstimate] = res as [bigint, bigint, number, bigint];
         if (amountOut > 0n) {
           results.push({ fee, amountOut, gasEstimate });
         }
