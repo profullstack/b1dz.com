@@ -15,7 +15,7 @@
  *   - Different quote shape (multi-hop path, single RPC per route) means
  *     pair-based fan-out doesn't apply.
  *   - Independent tick cadence — triangular quotes are RPC-heavy (one
- *     simulateContract per route) and shouldn't share a budget with the
+ *     quoter call per route, batched per tick by the client's multicall) and shouldn't share a budget with the
  *     pair observer.
  */
 

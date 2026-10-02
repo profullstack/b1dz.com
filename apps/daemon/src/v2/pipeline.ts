@@ -302,7 +302,13 @@ function maybeBuildTriangularEngine(channel: ObservableChannel): TriangularEngin
     return null;
   }
 
-  const client = createPublicClient({ chain: baseChain, transport: http(rpcUrl) }) as PublicClient;
+  // batch.multicall folds a tick's concurrent triangle quotes into one
+  // Multicall3 eth_call instead of one RPC call per triangle.
+  const client = createPublicClient({
+    chain: baseChain,
+    transport: http(rpcUrl),
+    batch: { multicall: true },
+  }) as PublicClient;
   const gasOracle = new ViemGasOracle({ clients: { base: client } });
 
   const anchor = process.env.ARB_TRIANGULAR_ANCHOR ?? 'USDC';

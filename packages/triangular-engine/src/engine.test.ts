@@ -31,17 +31,13 @@ class FakeChannel implements EventChannel {
  *  for 100 USDC in → +2 USDC edge before gas/slippage. */
 function profitableClient() {
   return {
-    simulateContract: vi.fn(async () => ({
-      result: [102_000_000n, [] as bigint[], [] as number[], 350_000n] as const,
-    })),
+    readContract: vi.fn(async () => ([102_000_000n, [] as bigint[], [] as number[], 350_000n] as const)),
   };
 }
 
 function losingClient() {
   return {
-    simulateContract: vi.fn(async () => ({
-      result: [99_500_000n, [] as bigint[], [] as number[], 350_000n] as const,
-    })),
+    readContract: vi.fn(async () => ([99_500_000n, [] as bigint[], [] as number[], 350_000n] as const)),
   };
 }
 

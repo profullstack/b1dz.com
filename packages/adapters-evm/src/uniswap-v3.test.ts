@@ -4,7 +4,7 @@ import { UniswapV3Adapter, UNISWAP_V3_FEE_TIERS } from './uniswap-v3.js';
 function mockClient(handler: (args: unknown) => Promise<unknown>): unknown {
   return {
     async getBlockNumber() { return 123n; },
-    simulateContract: vi.fn(async (args: unknown) => handler(args)),
+    readContract: vi.fn(async (args: unknown) => handler(args)),
   };
 }
 
@@ -14,14 +14,14 @@ function makeAdapter(simulate: (fee: number, amountIn: bigint) => { amountOut: b
     const { fee, amountIn } = call.args[0];
     const outcome = simulate(fee, amountIn);
     if (outcome === 'revert') throw new Error('execution reverted');
-    return { result: [outcome.amountOut, 0n, 0, outcome.gas] };
+    return [outcome.amountOut, 0n, 0, outcome.gas];
   });
   return new UniswapV3Adapter({ chain: 'base', client });
 }
 
 describe('UniswapV3Adapter', () => {
   it('health returns ok when getBlockNumber resolves', async () => {
-    const adapter = new UniswapV3Adapter({ chain: 'base', client: mockClient(async () => ({ result: [0n, 0n, 0, 0n] })) });
+    const adapter = new UniswapV3Adapter({ chain: 'base', client: mockClient(async () => ([0n, 0n, 0, 0n])) });
     const h = await adapter.health();
     expect(h.ok).toBe(true);
   });
@@ -29,7 +29,7 @@ describe('UniswapV3Adapter', () => {
   it('health returns not-ok when block number is 0', async () => {
     const client: unknown = {
       async getBlockNumber() { return 0n; },
-      simulateContract: async () => ({ result: [0n, 0n, 0, 0n] }),
+      readContract: async () => ([0n, 0n, 0, 0n]),
     };
     const adapter = new UniswapV3Adapter({ chain: 'base', client });
     const h = await adapter.health();
@@ -91,10 +91,10 @@ describe('UniswapV3Adapter', () => {
     const calls: number[] = [];
     const client: unknown = {
       async getBlockNumber() { return 1n; },
-      simulateContract: vi.fn(async (args: unknown) => {
+      readContract: vi.fn(async (args: unknown) => {
         const call = args as { args: readonly [{ fee: number }] };
         calls.push(call.args[0].fee);
-        return { result: [1n, 0n, 0, 100_000n] };
+        return [1n, 0n, 0, 100_000n];
       }),
     };
     const adapter = new UniswapV3Adapter({ chain: 'base', client });
@@ -106,10 +106,10 @@ describe('UniswapV3Adapter', () => {
     const calls: number[] = [];
     const client: unknown = {
       async getBlockNumber() { return 1n; },
-      simulateContract: vi.fn(async (args: unknown) => {
+      readContract: vi.fn(async (args: unknown) => {
         const call = args as { args: readonly [{ fee: number }] };
         calls.push(call.args[0].fee);
-        return { result: [1n, 0n, 0, 100_000n] };
+        return [1n, 0n, 0, 100_000n];
       }),
     };
     const adapter = new UniswapV3Adapter({ chain: 'base', client, feeTiers: [500, 3000] });
@@ -125,9 +125,9 @@ describe('UniswapV3Adapter', () => {
   it('gasUsd uses the injected gas oracle instead of the 1-gwei fallback', async () => {
     const client = mockClient(async (args: unknown) => {
       const call = args as { args: readonly [{ fee: number }] };
-      if (call.args[0].fee !== 500) return { result: [0n, 0n, 0, 0n] };
+      if (call.args[0].fee !== 500) return [0n, 0n, 0, 0n];
       // 1 ETH in → 2500 USDC out, 150k gas
-      return { result: [2_500_000_000n, 0n, 0, 150_000n] };
+      return [2_500_000_000n, 0n, 0, 150_000n];
     });
     // Oracle reports 20 gwei → should dominate the 1-gwei fallback.
     const gasOracle = {
@@ -153,7 +153,7 @@ describe('UniswapV3Adapter', () => {
   });
 
   it('gas buffer inflates the reported gasUsd by the configured bps', async () => {
-    const client = mockClient(async () => ({ result: [2_500_000_000n, 0n, 0, 150_000n] }));
+    const client = mockClient(async () => ([2_500_000_000n, 0n, 0, 150_000n]));
     const gasOracle = {
       getFeeData: async () => ({
         chain: 'base' as const,

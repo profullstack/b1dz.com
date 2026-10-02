@@ -4,19 +4,17 @@ import { priceTriangle } from './pricer.js';
 
 const QUOTER = '0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a' as Address;
 
-/** Build a minimal viem-like client whose `simulateContract` returns the
+/** Build a minimal viem-like client whose `readContract` returns the
  *  canned `[amountOut, [], [], gasEstimate]` tuple. */
 function clientReturning(amountOut: bigint, gasEstimate: bigint = 350_000n) {
   return {
-    simulateContract: vi.fn(async () => ({
-      result: [amountOut, [] as bigint[], [] as number[], gasEstimate] as const,
-    })),
+    readContract: vi.fn(async () => ([amountOut, [] as bigint[], [] as number[], gasEstimate] as const)),
   };
 }
 
 function clientThrowing() {
   return {
-    simulateContract: vi.fn(async () => {
+    readContract: vi.fn(async () => {
       throw new Error('execution reverted: no liquidity');
     }),
   };
@@ -60,7 +58,7 @@ describe('priceTriangle', () => {
     expect(res!.hops[0]).toEqual({ tokenIn: 'USDC', tokenOut: 'WETH', fee: 3000 });
     expect(res!.hops[2]).toEqual({ tokenIn: 'AERO', tokenOut: 'USDC', fee: 3000 });
     expect(res!.path.startsWith('0x')).toBe(true);
-    expect(client.simulateContract).toHaveBeenCalledTimes(1);
+    expect(client.readContract).toHaveBeenCalledTimes(1);
   });
 
   it('returns null when the quoter reverts (no-liquidity path)', async () => {
