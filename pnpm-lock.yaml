@@ -253,6 +253,9 @@ importers:
       '@profullstack/coinpay':
         specifier: ^0.6.11
         version: 0.6.11
+      '@profullstack/form-guard':
+        specifier: ^0.1.1
+        version: 0.1.1
       '@profullstack/pluginstore':
         specifier: ^0.1.1
         version: 0.1.1
@@ -1423,6 +1426,10 @@ packages:
 
   '@profullstack/emailer@1.0.1':
     resolution: {integrity: sha512-/uhHJJGH+1xSSz3mJn6X+m6aruYjMD3JOaRp/d4R/YWlzpy07H9z0/JUleIyRyBPNmaANSIwjTZ7aVjaukOEpg==}
+
+  '@profullstack/form-guard@0.1.1':
+    resolution: {integrity: sha512-RGLGfQhjq40f+JqEhSmsJnS0I5sFWjYdrYx4VYtkUqz8xvioN2yyR+6uFK0mnDAStKrYytlngg3meUsrChm/OQ==}
+    engines: {node: '>=20'}
 
   '@profullstack/keys@0.1.0':
     resolution: {integrity: sha512-Vys47LvS5ivhdZu4SYOxh9Le3DEmWhjP0+CtrU45RhXAbY0ZFG/2Dk9V1bIIUGDp8UWMJqctvUD21JrNjfh04w==}
@@ -3770,6 +3777,8 @@ snapshots:
       '@scure/bip39': 1.6.0
 
   '@profullstack/emailer@1.0.1': {}
+
+  '@profullstack/form-guard@0.1.1': {}
 
   '@profullstack/keys@0.1.0': {}
 
