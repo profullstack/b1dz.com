@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Webring } from '@/components/webring';
 import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import {
@@ -459,6 +460,7 @@ export default async function LandingPage() {
             GitHub
           </a>
         </p>
+        <Webring className="mt-2" />
       </footer>
     </main>
   );

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Webring } from '@/components/webring';
 import Image from 'next/image';
 import type { Metadata } from 'next';
 import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
@@ -165,6 +166,7 @@ export default async function StorePage() {
             GitHub
           </a>
         </p>
+        <Webring className="mt-2" />
       </footer>
     </main>
   );
