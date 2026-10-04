@@ -36,12 +36,12 @@ loadRootEnv();
 // exchange WebSocket feeds. frame-ancestors covers clickjacking.
 const contentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://crawlproof.com https://feedback.profullstack.com",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://crawlproof.com",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "connect-src 'self' https: wss:",
-  "frame-src 'self' https://feedback.profullstack.com",
+  "frame-src 'self'",
   "frame-ancestors 'self'",
   "base-uri 'self'",
   "form-action 'self'",
