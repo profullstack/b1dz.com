@@ -253,6 +253,9 @@ importers:
       '@profullstack/coinpay':
         specifier: ^0.6.11
         version: 0.6.11
+      '@profullstack/footer':
+        specifier: latest
+        version: 0.2.0(react@19.3.0)
       '@profullstack/form-guard':
         specifier: ^0.1.1
         version: 0.1.1
@@ -1426,6 +1429,16 @@ packages:
 
   '@profullstack/emailer@1.0.1':
     resolution: {integrity: sha512-/uhHJJGH+1xSSz3mJn6X+m6aruYjMD3JOaRp/d4R/YWlzpy07H9z0/JUleIyRyBPNmaANSIwjTZ7aVjaukOEpg==}
+
+  '@profullstack/footer@0.2.0':
+    resolution: {integrity: sha512-0bpxw5OEsvIdiU8tV5R3zmeAZ8X1rjnZj0vl/mrto+oxN8D6tLjImr5/Ki1ynAUXVRqpz+ejbVlXhORzzLBDkQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+    peerDependencies:
+      react: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   '@profullstack/form-guard@0.1.1':
     resolution: {integrity: sha512-RGLGfQhjq40f+JqEhSmsJnS0I5sFWjYdrYx4VYtkUqz8xvioN2yyR+6uFK0mnDAStKrYytlngg3meUsrChm/OQ==}
@@ -3777,6 +3790,10 @@ snapshots:
       '@scure/bip39': 1.6.0
 
   '@profullstack/emailer@1.0.1': {}
+
+  '@profullstack/footer@0.2.0(react@19.3.0)':
+    optionalDependencies:
+      react: 19.3.0
 
   '@profullstack/form-guard@0.1.1': {}
 
