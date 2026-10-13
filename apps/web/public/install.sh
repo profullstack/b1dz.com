@@ -20,6 +20,11 @@ have() { command -v "$1" >/dev/null 2>&1; }
 say "Installing b1dz (b1dz.com terminal client)..."
 
 if have bun; then
+  # bun add -g writes to the nearest package.json above its global dir; give
+  # that dir its own so a stray ~/package.json (or a parent's) is never touched.
+  BUN_GLOBAL="${BUN_INSTALL:-$HOME/.bun}/install/global"
+  mkdir -p "$BUN_GLOBAL"
+  [ -f "$BUN_GLOBAL/package.json" ] || printf '{}\n' > "$BUN_GLOBAL/package.json"
   bun add -g "$PKG@latest"
   BIN_DIR="${BUN_INSTALL:-$HOME/.bun}/bin"
 elif have npm && have node; then
