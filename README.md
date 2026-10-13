@@ -40,13 +40,34 @@ scope and the full architectural call.
 - Storage: JSON files now → Supabase later (same `Storage` interface)
 - PWA: manifest + minimal service worker in `apps/web/public`
 
-## Setup
+## Install the CLI
+
+```sh
+curl -fsSL https://b1dz.com/install.sh | sh
+```
+
+Installs `b1dz` from npm ([`@profullstack/b1dz`](https://www.npmjs.com/package/@profullstack/b1dz))
+with Bun if present, else npm (Node >= 22), into `~/.local` when the global prefix
+is not writable. It never asks for or writes keys. Then:
+
+```sh
+b1dz signup        # or: b1dz login
+b1dz setup         # guided walkthrough; you enter your own exchange keys
+b1dz tui           # live dashboard
+```
+
+The trading daemon `b1dzd` is not on npm; run it from this repo
+(`apps/daemon/README.md`). The CLI is published with `pnpm --filter @profullstack/b1dz publish`
+(bundled by `apps/cli/scripts/bundle.mjs`).
+
+## Development setup
 
 ```bash
 cd ~/src/b1dz.com
 pnpm install
 pnpm dev:web   # Next.js dashboard
-pnpm dev:cli   # daemon
+pnpm daemon    # trading daemon (b1dzd)
+pnpm b1dz      # CLI from source
 ```
 
 ## TUI Chart

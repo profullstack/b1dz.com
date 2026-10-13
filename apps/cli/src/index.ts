@@ -17,8 +17,12 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadRootEnv, Runner, AlertBus, type Source, type Storage, getB1dzVersion } from '@b1dz/core';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { loadRootEnv, findMonorepoRoot, Runner, AlertBus, type Source, type Storage, getB1dzVersion } from '@b1dz/core';
 loadRootEnv();
+// Installed from npm there is no monorepo .env: talk to the hosted API.
+process.env.B1DZ_API_URL ||= 'https://b1dz.com';
 import { JsonStorage } from '@b1dz/storage-json';
 import { SupabaseStorage } from '@b1dz/storage-supabase';
 import { B1dzApiStorage } from '@b1dz/storage-b1dz-api';
@@ -31,7 +35,13 @@ import { settings } from './settings.js';
 import { setup } from './setup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.resolve(here, '../../../data');
+// In the monorepo, JSON storage lives in <root>/data; an npm install keeps it
+// under ~/.config/b1dz/data (next to credentials.json).
+const monorepoRoot = findMonorepoRoot(here);
+const dataDir = process.env.B1DZ_DATA_DIR
+  ?? (existsSync(path.join(monorepoRoot, 'pnpm-workspace.yaml'))
+    ? path.join(monorepoRoot, 'data')
+    : path.join(homedir(), '.config', 'b1dz', 'data'));
 
 // ----- registry: name → list of sources for that subcommand -----
 const SOURCE_REGISTRY: Record<string, Source[]> = {
@@ -189,6 +199,7 @@ Other:
   b1dz restart          restart daemon
   b1dz alerts           tail the alert bus
   b1dz help             this message
+  b1dz --version        print the version
 `);
 }
 
@@ -314,6 +325,11 @@ const [, , source, sub] = process.argv;
 const isProd = process.argv.includes('--prod') || !process.argv.includes('--dev');
 if (source === 'tui' && isProd && process.env.B1DZ_API_URL_PROD) {
   process.env.B1DZ_API_URL = process.env.B1DZ_API_URL_PROD;
+}
+
+if (source === '--version' || source === '-v' || source === 'version') {
+  console.log(getB1dzVersion());
+  process.exit(0);
 }
 
 if (!source || source === 'help' || source === '--help' || source === '-h') {

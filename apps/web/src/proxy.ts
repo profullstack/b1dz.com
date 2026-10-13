@@ -14,6 +14,8 @@ const PUBLIC_PATHS = [
   '/manifest.webmanifest', '/sw.js',
   // Crawler / AEO well-known files — must never redirect to /login.
   '/robots.txt', '/sitemap.xml', '/llms.txt', '/llms-full.txt', '/skill.md', '/.well-known',
+  // CLI installer: `curl -fsSL https://b1dz.com/install.sh | sh`.
+  '/install.sh',
 ];
 const PUBLIC_EXACT = new Set(['/']);
 let loggedVersion = false;
@@ -75,5 +77,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|txt|xml|md|json|webmanifest|ico|woff2?)$).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|txt|xml|md|json|webmanifest|ico|woff2?|sh)$).*)'],
 };

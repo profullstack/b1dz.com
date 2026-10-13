@@ -16,6 +16,15 @@ signal-only plugins keep your exchange keys private.
 - Apply risk controls: trailing stops and one position per exchange.
 - Extend the platform through the Plugin Store (DEX connectors and strategies).
 
+## Install the CLI
+
+```sh
+curl -fsSL https://b1dz.com/install.sh | sh   # or: npm install -g @profullstack/b1dz
+b1dz login && b1dz setup && b1dz tui
+```
+
+The installer only installs the `b1dz` command; it never asks for or stores keys.
+
 ## Key links
 
 - Home: https://b1dz.com/

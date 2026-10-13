@@ -5,7 +5,7 @@
  * auth is actually working in the current env. The trade-daemon's
  * silent `catch{}` hides failed auth — this script makes it loud.
  *
- * Usage: pnpm --filter @b1dz/cli exec tsx src/diag-all-cex.ts
+ * Usage: pnpm --filter @profullstack/b1dz exec tsx src/diag-all-cex.ts
  */
 import { config as loadDotenv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
