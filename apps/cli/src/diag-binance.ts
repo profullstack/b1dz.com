@@ -2,7 +2,7 @@
  * b1dz diag-binance — print the Binance.US balance breakdown the arb
  * sizer actually sees vs. what's spendable, plus any open orders.
  *
- * Usage: pnpm --filter @b1dz/cli exec tsx src/diag-binance.ts
+ * Usage: pnpm --filter @profullstack/b1dz exec tsx src/diag-binance.ts
  */
 import { createHmac } from 'node:crypto';
 import { config as loadDotenv } from 'dotenv';

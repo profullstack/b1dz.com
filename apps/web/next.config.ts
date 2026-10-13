@@ -62,7 +62,17 @@ const config: NextConfig = {
   poweredByHeader: false,
   typescript: { ignoreBuildErrors: true },
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // CLI installer is piped into sh: serve it as a shell script, never cached long.
+      {
+        source: '/install.sh',
+        headers: [
+          { key: 'Content-Type', value: 'text/x-shellscript; charset=utf-8' },
+          { key: 'Cache-Control', value: 'public, max-age=300' },
+        ],
+      },
+    ];
   },
   transpilePackages: [
     '@b1dz/core',

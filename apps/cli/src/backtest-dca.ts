@@ -4,8 +4,8 @@
  * the window, and prints an analytics table.
  *
  * Usage:
- *   pnpm --filter @b1dz/cli exec tsx src/backtest-dca.ts
- *   pnpm --filter @b1dz/cli exec tsx src/backtest-dca.ts --days 90 --equity 2000
+ *   pnpm --filter @profullstack/b1dz exec tsx src/backtest-dca.ts
+ *   pnpm --filter @profullstack/b1dz exec tsx src/backtest-dca.ts --days 90 --equity 2000
  *
  * Reads DCA config from env (DCA_COINS, DCA_EXCHANGES, DCA_INTERVAL_MS,
  * DCA_TOTAL_ALLOCATION_PCT, DCA_MAX_COINS). Falls back to defaults.
