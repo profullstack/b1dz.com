@@ -14,3 +14,25 @@ body {
   font-feature-settings: 'calt' 1, 'liga' 1, 'dlig' 1;
   -webkit-font-feature-settings: 'calt' 1, 'liga' 1, 'dlig' 1;
 }
+
+/* CrawlProof ad unit (components/ad-unit.tsx): collapsed until ad.js fills it. */
+.cp-ad-unit {
+  height: 0;
+  overflow: hidden;
+}
+.cp-ad-unit[data-cp-filled] {
+  height: auto;
+  overflow: visible;
+  margin: 1.5rem 0;
+  display: flex;
+  justify-content: center;
+}
+.cp-ad-unit[data-cp-filled][data-format='banner_728x90'] {
+  min-height: 106px;
+}
+.cp-ad-unit[data-cp-filled][data-format='text_link'] {
+  min-height: 40px;
+}
+.cp-ad-unit[data-format='text_link'] > * {
+  width: 100%;
+}

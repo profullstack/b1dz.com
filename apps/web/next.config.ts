@@ -41,7 +41,7 @@ const contentSecurityPolicy = [
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "connect-src 'self' https: wss:",
-  "frame-src 'self'",
+  "frame-src 'self' https://crawlproof.com",
   "frame-ancestors 'self'",
   "base-uri 'self'",
   "form-action 'self'",
