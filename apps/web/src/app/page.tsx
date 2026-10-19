@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { SiteFooter } from '@/components/site-footer';
+import { AdUnit } from '@/components/ad-unit';
 import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import {
@@ -208,6 +209,8 @@ export default async function LandingPage() {
           “If you don't find a way to make money while you sleep, you will work until you die.” -- Warren Buffett
         </p>
       </section>
+
+      <AdUnit />
 
       <section className="max-w-6xl mx-auto px-6 pb-12">
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/70 px-6 py-6">

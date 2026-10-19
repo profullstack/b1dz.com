@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { SiteFooter } from '@/components/site-footer';
+import { AdUnit } from '@/components/ad-unit';
 import Image from 'next/image';
 import type { Metadata } from 'next';
 import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
@@ -116,6 +117,8 @@ export default async function StorePage() {
           </div>
         )}
       </section>
+
+      <AdUnit />
 
       <section className="max-w-6xl mx-auto px-6 py-10">
         <SectionHeader title="DEX Connectors" count={connectors.length} />
