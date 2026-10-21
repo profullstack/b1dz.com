@@ -104,9 +104,7 @@ export default async function StorePage() {
         </div>
       </nav>
 
-      <div className="max-w-6xl mx-auto px-6 pt-6">
-        <AdUnit />
-      </div>
+      <AdUnit />
 
       <section className="max-w-6xl mx-auto px-6 pt-16 pb-10 text-center">
         <h1 className="text-5xl md:text-6xl font-bold mb-4 leading-tight">

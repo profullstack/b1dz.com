@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { SiteFooter } from '@/components/site-footer';
-import { AdUnit } from '@/components/ad-unit';
 import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import {
@@ -179,10 +178,6 @@ export default async function LandingPage() {
           )}
         </div>
       </nav>
-
-      <div className="max-w-6xl mx-auto px-6 pt-6">
-        <AdUnit />
-      </div>
 
       {/* Hero */}
       <section id="content" className="max-w-6xl mx-auto px-6 pt-20 pb-16 text-center">

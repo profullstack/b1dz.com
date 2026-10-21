@@ -5,7 +5,7 @@ export const AD_SLOT = '7dd596c1-2700-44a2-81e2-ffea09725599';
 
 export const AD_SCRIPT_SRC = 'https://crawlproof.com/ad.js';
 
-export type AdFormat = 'banner_728x90' | 'text_link';
+export type AdFormat = 'text_link';
 
 declare global {
   interface Window {
