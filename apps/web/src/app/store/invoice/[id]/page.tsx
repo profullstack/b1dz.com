@@ -18,6 +18,7 @@ interface InvoiceRow {
   expires_at: string | null;
   paid_at: string | null;
   forwarded_at: string | null;
+  metadata: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -29,12 +30,14 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
 
   const { data, error } = await supabase
     .from('plugin_invoices')
-    .select('id, user_id, plugin_id, coinpay_payment_id, amount_usd, blockchain, payment_address, crypto_amount, qr_code, status, expires_at, paid_at, forwarded_at, created_at')
+    .select('id, user_id, plugin_id, coinpay_payment_id, amount_usd, blockchain, payment_address, crypto_amount, qr_code, status, expires_at, paid_at, forwarded_at, metadata, created_at')
     .eq('id', id)
     .maybeSingle();
   if (error || !data) notFound();
   const invoice = data as InvoiceRow;
   if (invoice.user_id !== user.id) redirect('/store');
 
-  return <InvoiceClient initial={invoice} />;
+  const { metadata, ...rest } = invoice;
+  const checkoutUrl = typeof metadata?.checkout_url === 'string' ? metadata.checkout_url : null;
+  return <InvoiceClient initial={{ ...rest, checkout_url: checkoutUrl }} />;
 }

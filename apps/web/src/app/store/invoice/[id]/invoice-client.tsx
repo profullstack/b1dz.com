@@ -16,6 +16,7 @@ interface Invoice {
   expires_at: string | null;
   paid_at: string | null;
   forwarded_at: string | null;
+  checkout_url?: string | null;
   created_at: string;
 }
 
@@ -53,6 +54,7 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
     }
   }, [invoice.status, invoice.plugin_id, router]);
 
+  const isCheckout = invoice.blockchain === 'CHECKOUT';
   const expiresMs = invoice.expires_at ? new Date(invoice.expires_at).getTime() : null;
   const remainingSec = expiresMs ? Math.max(0, Math.floor((expiresMs - now) / 1000)) : null;
 
@@ -73,7 +75,7 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
       </nav>
 
       <div className="max-w-2xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-bold mb-1">Pay {invoice.amount_usd} USD in {invoice.blockchain}</h1>
+        <h1 className="text-2xl font-bold mb-1">{isCheckout ? `Pay ${invoice.amount_usd} USD with crypto or PayPal` : `Pay ${invoice.amount_usd} USD in ${invoice.blockchain}`}</h1>
         <p className="text-sm text-zinc-400 mb-8">Plugin: <span className="font-mono text-orange-300">{invoice.plugin_id}</span></p>
 
         {TERMINAL_OK.has(invoice.status) ? (
@@ -89,6 +91,20 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
             <p className="text-sm text-red-300/80 mb-4">No charge. You can try again from the store.</p>
             <Link href="/store" className="inline-block rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-200 hover:bg-red-500/20 transition">Back to store</Link>
           </div>
+        ) : isCheckout ? (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-6 text-center space-y-4">
+            <p className="text-sm text-zinc-300">
+              Status: <span className={invoice.status === 'detected' ? 'text-amber-300' : 'text-zinc-100'}>{invoice.status === 'pending' ? 'waiting for payment' : invoice.status}</span>
+            </p>
+            {invoice.checkout_url && (
+              <a href={invoice.checkout_url} className="inline-block rounded-lg bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-black font-medium px-4 py-2 text-sm transition">
+                Continue to CoinPay checkout
+              </a>
+            )}
+            <p className="text-xs text-zinc-500">
+              This page checks every 5 seconds and activates the plugin as soon as CoinPay confirms the payment. You can close it.
+            </p>
+          </div>
         ) : (
           <>
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-6 mb-4">
@@ -101,8 +117,8 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
             </div>
 
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/70 p-5 space-y-3 mb-4">
-              <Field label="Send exactly" value={invoice.crypto_amount ? `${invoice.crypto_amount} ${invoice.blockchain}` : '—'} mono />
-              <Field label="To address" value={invoice.payment_address ?? '—'} mono>
+              <Field label="Send exactly" value={invoice.crypto_amount ? `${invoice.crypto_amount} ${invoice.blockchain}` : '-'} mono />
+              <Field label="To address" value={invoice.payment_address ?? '-'} mono>
                 {invoice.payment_address && (
                   <button onClick={copyAddress} className="text-xs text-orange-300 hover:text-orange-200">
                     {copied ? 'copied!' : 'copy'}
@@ -121,7 +137,7 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
             </div>
 
             <p className="text-xs text-zinc-500 text-center">
-              This page polls every 5 seconds. You can close it — Coinpay will process the payment in the background once you broadcast the transaction.
+              This page polls every 5 seconds. You can close it. CoinPay will process the payment in the background once you broadcast the transaction.
             </p>
           </>
         )}
