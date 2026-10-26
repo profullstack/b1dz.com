@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
+import { createAdminSupabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,9 @@ export async function POST(req: NextRequest) {
   const pluginId = typeof body?.pluginId === 'string' ? body.pluginId : '';
   if (!pluginId) return Response.json({ error: 'pluginId required' }, { status: 400 });
 
-  const c = auth.client as unknown as {
+  // Service role, scoped to auth.userId below: users have no write grant on
+  // user_installed_plugins (paid_until is the paid gate).
+  const c = createAdminSupabase() as unknown as {
     from: (t: string) => { update: (vals: Record<string, unknown>) => UpdateBuilder };
   };
   const { error } = await c.from('user_installed_plugins')

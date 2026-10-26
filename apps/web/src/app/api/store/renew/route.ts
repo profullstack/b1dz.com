@@ -7,6 +7,7 @@
 import type { NextRequest } from 'next/server';
 import { PLUGIN_CATALOG } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
+import { createAdminSupabase } from '@/lib/supabase';
 import { coinpayConfigured, createCheckoutForPlugin } from '@/lib/coinpay-client';
 
 export const dynamic = 'force-dynamic';
@@ -68,7 +69,8 @@ export async function POST(req: NextRequest) {
       amountUsd: entry.pricing.usdPerMonth,
       description: `b1dz: ${entry.manifest.name}, renewal`,
       kind: 'renew',
-      client: auth.client,
+      // Service role: users cannot write invoices themselves (RLS has no write policy).
+      client: createAdminSupabase(),
     });
     return Response.json({ invoice });
   } catch (e) {

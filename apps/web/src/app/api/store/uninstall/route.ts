@@ -7,6 +7,7 @@
 import type { NextRequest } from 'next/server';
 import { PLUGIN_CATALOG } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
+import { createAdminSupabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +26,9 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'paid subscriptions cannot be uninstalled — they expire automatically' }, { status: 400 });
   }
 
-  const c = auth.client as unknown as {
+  // Service role, scoped to auth.userId below: users have no write grant on
+  // user_installed_plugins (paid_until is the paid gate).
+  const c = createAdminSupabase() as unknown as {
     from: (t: string) => {
       delete: () => {
         eq: (col: string, val: string) => {

@@ -1,6 +1,8 @@
 import type { NextRequest } from 'next/server';
 import type { EmailOtpType } from '@supabase/supabase-js';
 import { authRedirect, safeNextPath, siteOrigin } from '@/lib/auth-route-client';
+import { afterSignIn, INVITE_COOKIE, trustedIp } from '@/lib/credits';
+import { REF_COOKIE } from '@profullstack/affiliates';
 
 /**
  * Email-link landing route. Supports both Supabase confirmation styles:
@@ -27,16 +29,29 @@ export async function GET(req: NextRequest) {
 
   const { response, supabase } = authRedirect(req, nextPath);
 
-  if (tokenHash && type) {
-    const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
-    if (error) return fail(error.message);
+  // Invites and ?ref= attribution are settled on the first sign-in, when the
+  // account is confirmed. afterSignIn never throws.
+  const settle = async (userId: string | undefined) => {
+    if (!userId) return response;
+    await afterSignIn(userId, {
+      cookieInvite: req.cookies.get(INVITE_COOKIE)?.value ?? null,
+      ref: req.cookies.get(REF_COOKIE)?.value ?? null,
+      ip: trustedIp(req.headers),
+    });
+    if (req.cookies.get(INVITE_COOKIE)) response.cookies.set(INVITE_COOKIE, '', { path: '/', maxAge: 0 });
     return response;
+  };
+
+  if (tokenHash && type) {
+    const { data, error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash });
+    if (error) return fail(error.message);
+    return settle(data?.user?.id);
   }
 
   if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) return fail(error.message);
-    return response;
+    return settle(data?.user?.id);
   }
 
   return fail('Missing confirmation token');
