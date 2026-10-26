@@ -44,7 +44,7 @@ const contentSecurityPolicy = [
   "frame-src 'self' https://crawlproof.com",
   "frame-ancestors 'self'",
   "base-uri 'self'",
-  "form-action 'self'",
+  "form-action 'self' https://pit.world",
   "object-src 'none'",
 ].join('; ');
 
