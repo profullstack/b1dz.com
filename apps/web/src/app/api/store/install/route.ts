@@ -10,6 +10,7 @@
 import type { NextRequest } from 'next/server';
 import { PLUGIN_CATALOG } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
+import { createAdminSupabase } from '@/lib/supabase';
 import { coinpayConfigured, createCheckoutForPlugin } from '@/lib/coinpay-client';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,9 @@ export async function POST(req: NextRequest) {
   }
 
   // Reject duplicate active install
-  const c = auth.client as unknown as {
+  // Service role, scoped to auth.userId below: users have no write grant on
+  // user_installed_plugins (paid_until is the paid gate).
+  const c = createAdminSupabase() as unknown as {
     from: (t: string) => {
       select: (s: string) => {
         eq: (col: string, val: string) => {
@@ -100,7 +103,8 @@ export async function POST(req: NextRequest) {
       amountUsd: pricing.usdPerMonth,
       description: `b1dz: ${entry.manifest.name}, monthly subscription`,
       kind: 'install',
-      client: auth.client,
+      // Service role: users cannot write invoices themselves (RLS has no write policy).
+      client: createAdminSupabase(),
     });
     return Response.json({ invoice });
   } catch (e) {

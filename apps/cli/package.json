@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/b1dz",
-  "version": "0.3.12",
+  "version": "0.4.0",
   "description": "b1dz CLI and TUI: crypto arbitrage terminal for b1dz.com (dashboard, backtests, quote observer, account setup).",
   "type": "module",
   "bin": {

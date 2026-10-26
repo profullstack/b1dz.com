@@ -16,7 +16,12 @@ const PUBLIC_PATHS = [
   '/robots.txt', '/sitemap.xml', '/llms.txt', '/llms-full.txt', '/skill.md', '/.well-known',
   // CLI installer: `curl -fsSL https://b1dz.com/install.sh | sh`.
   '/install.sh',
+  // Invite landing: /i/<code> must work signed out.
+  '/i',
 ];
+const INVITE_PATH = /^\/i\/([A-Za-z0-9-]{12,40})\/?$/;
+const INVITE_COOKIE = 'b1dz_invite'; // = INVITE_COOKIE in lib/credits.ts (kept local: the proxy stays Edge-safe)
+const REF_COOKIE = 'referral_code'; // = REF_COOKIE in @profullstack/affiliates
 const PUBLIC_EXACT = new Set(['/']);
 let loggedVersion = false;
 
@@ -24,8 +29,12 @@ export async function proxy(request: NextRequest) {
   // Crawl gateway first: AI training crawlers get 402 Payment Required (or the
   // sales page at /crawl) unless they present a paid pass. People, Googlebot
   // and retrieval crawlers fall through to everything below.
-  const answer = await gate(request);
-  if (answer) return answer;
+  // An invite link is for a person someone chose; it never meets the gate.
+  const inviteMatch = INVITE_PATH.exec(request.nextUrl.pathname);
+  if (!inviteMatch) {
+    const answer = await gate(request);
+    if (answer) return answer;
+  }
 
   const host = request.headers.get('host') ?? '';
 
@@ -66,6 +75,16 @@ export async function proxy(request: NextRequest) {
     const redirect = NextResponse.redirect(url);
     redirect.headers.set('x-b1dz-version', version);
     return redirect;
+  }
+
+  // Remember an invite through signup, and a ?ref= affiliate code (first
+  // touch: an existing referral cookie is never overwritten).
+  if (inviteMatch) {
+    response.cookies.set(INVITE_COOKIE, inviteMatch[1], { path: '/', maxAge: 30 * 86400, sameSite: 'lax', secure: true, httpOnly: true });
+  }
+  const ref = request.nextUrl.searchParams.get('ref');
+  if (ref && /^[A-Za-z0-9]{4,32}$/.test(ref) && !request.cookies.get(REF_COOKIE)) {
+    response.cookies.set(REF_COOKIE, ref, { path: '/', maxAge: 30 * 86400, sameSite: 'lax', secure: true, httpOnly: true });
   }
 
   response.headers.set('x-b1dz-version', version);

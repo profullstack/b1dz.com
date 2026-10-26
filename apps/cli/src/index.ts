@@ -33,6 +33,7 @@ import { cryptoTradeSource } from '@b1dz/source-crypto-trade';
 import { signup, login, logout, whoami, currentUser } from './auth.js';
 import { settings } from './settings.js';
 import { setup } from './setup.js';
+import { redeem, invites } from './credits.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // In the monorepo, JSON storage lives in <root>/data; an npm install keeps it
@@ -113,6 +114,8 @@ Auth:
   b1dz logout           clear local credentials
   b1dz whoami           show current user
   b1dz settings         show account settings (API keys, thresholds, toggles)
+  b1dz redeem <code>    redeem a credit code for Pro days
+  b1dz invites [create [note]]  your invites, Pro-day balance, referral link
   b1dz setup [section]  guided walkthrough — prompts for keys with docs URLs
                         section = coinbase|kraken|binance|gemini|oneinch|evm|solana|thresholds|toggles
 
@@ -344,6 +347,8 @@ if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
 if (source === 'settings') { await settings(); process.exit(0); }
 if (source === 'setup') { await setup(process.argv.slice(3)); process.exit(0); }
+if (source === 'redeem') { await redeem(process.argv.slice(3)); process.exit(0); }
+if (source === 'invites') { await invites(process.argv.slice(3)); process.exit(0); }
 if (source === 'status') runDaemonStatus();
 if (source === 'restart') runDaemonRestart();
 

@@ -3,6 +3,7 @@ import { authJson, siteOrigin, withAuthCookies } from '@/lib/auth-route-client';
 import { checkAuthForm, signupGuard } from '@/lib/auth-form-guard';
 import { saveSignupProfile, validateProfile } from '@profullstack/profile';
 import { profileStore } from '@/lib/profile';
+import { INVITE_COOKIE, INVITE_META_KEY, looksLikeInviteCode } from '@/lib/credits';
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as ({ email?: string; password?: string } & Record<string, unknown>) | null;
@@ -23,6 +24,10 @@ export async function POST(req: NextRequest) {
   if (!check.ok) return Response.json({ error: 'Some fields need fixing.', errors: check.errors }, { status: 400 });
   const p = check.profile;
 
+  // An invite from /i/<code> (cookie) or the form rides in the user's
+  // metadata, so confirming the email on another device still counts it.
+  const invite = [body.invite, req.cookies.get(INVITE_COOKIE)?.value].find(looksLikeInviteCode)?.trim() ?? null;
+
   const { response, supabase } = authJson(req, {});
   const { data, error } = await supabase.auth.signUp({
     email,
@@ -36,6 +41,7 @@ export async function POST(req: NextRequest) {
         company_domain: p.company_domain ?? null,
         job_title: p.job_title ?? null,
         linkedin_url: p.linkedin_url ?? null,
+        ...(invite ? { [INVITE_META_KEY]: invite } : {}),
       },
     },
   });
