@@ -18,9 +18,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@b1dz/venue-types": "workspace:*",
+    "@b1dz/event-channel": "workspace:*",
     "@b1dz/profitability": "workspace:*",
-    "@b1dz/event-channel": "workspace:*"
+    "@b1dz/venue-types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",

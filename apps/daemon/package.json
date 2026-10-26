@@ -16,8 +16,8 @@
   },
   "dependencies": {
     "@b1dz/adapters-cex": "workspace:*",
-    "@b1dz/adapters-pumpfun": "workspace:*",
     "@b1dz/adapters-evm": "workspace:*",
+    "@b1dz/adapters-pumpfun": "workspace:*",
     "@b1dz/adapters-solana": "workspace:*",
     "@b1dz/ai-analyzer": "workspace:*",
     "@b1dz/core": "workspace:*",

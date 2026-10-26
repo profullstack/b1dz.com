@@ -18,10 +18,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@b1dz/venue-types": "workspace:*",
     "@b1dz/event-channel": "workspace:*",
-    "@b1dz/wallet-service": "workspace:*",
-    "@b1dz/inventory": "workspace:*"
+    "@b1dz/inventory": "workspace:*",
+    "@b1dz/venue-types": "workspace:*",
+    "@b1dz/wallet-service": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",

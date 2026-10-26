@@ -19,8 +19,8 @@
   },
   "dependencies": {
     "@b1dz/core": "workspace:*",
-    "@b1dz/venue-types": "workspace:*",
-    "@b1dz/source-crypto-arb": "workspace:*"
+    "@b1dz/source-crypto-arb": "workspace:*",
+    "@b1dz/venue-types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",
