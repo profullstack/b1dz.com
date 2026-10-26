@@ -31,3 +31,20 @@ body {
 .cp-ad-unit[data-format='text_link'] > * {
   width: 100%;
 }
+
+/* @profullstack/profile fields: same look as the signup form's own inputs. */
+.pfs-profile {
+  @apply m-0 grid min-w-0 gap-4 border-0 p-0;
+}
+.pfs-profile__row label {
+  @apply mb-1 block text-sm text-zinc-400;
+}
+.pfs-profile__row input {
+  @apply w-full rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 outline-none transition focus:border-orange-500;
+}
+.pfs-profile__optional {
+  @apply text-zinc-500;
+}
+.pfs-profile__error {
+  @apply mt-1 text-sm text-red-400;
+}

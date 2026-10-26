@@ -3,11 +3,17 @@ import { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import type { GuardProps } from '@/lib/auth-form-guard';
+import { ProfileFields } from '@profullstack/profile/react';
+import type { ProfileField } from '@profullstack/profile';
+
+// Email has its own input above; the package renders the other five.
+const PROFILE_FIELDS: ProfileField[] = ['first_name', 'last_name', 'company_domain', 'job_title', 'linkedin_url'];
 
 export function SignupForm({ token, tokenName, honeypotName }: GuardProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<ProfileField, string>>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -22,15 +28,23 @@ export function SignupForm({ token, tokenName, honeypotName }: GuardProps) {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true); setError(null); setMessage(null);
+    setBusy(true); setError(null); setMessage(null); setFieldErrors({});
+    const form = e.currentTarget as HTMLFormElement;
+    const fd = new FormData(form);
+    const profile = Object.fromEntries(PROFILE_FIELDS.map((k) => [k, String(fd.get(k) ?? '')]));
     try {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password, ...guardBody(e.currentTarget as HTMLFormElement) }),
+        body: JSON.stringify({ email, password, ...profile, ...guardBody(form) }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Signup failed'); setBusy(false); return; }
+      if (!res.ok) {
+        setFieldErrors(data.errors ?? {});
+        setError(data.errors?.email || data.error || 'Signup failed');
+        setBusy(false);
+        return;
+      }
       if (data.needsEmailConfirmation) {
         setMessage('Check your email to confirm your account, then sign in.');
         setBusy(false);
@@ -63,6 +77,7 @@ export function SignupForm({ token, tokenName, honeypotName }: GuardProps) {
             <input className="w-full bg-zinc-900 border border-zinc-700 focus:border-orange-500 rounded-lg px-4 py-2.5 outline-none transition"
               type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
           </div>
+          <ProfileFields fields={PROFILE_FIELDS} idPrefix="signup-" errors={fieldErrors} />
           <div>
             <label className="block text-sm text-zinc-400 mb-1">Password</label>
             <input className="w-full bg-zinc-900 border border-zinc-700 focus:border-orange-500 rounded-lg px-4 py-2.5 outline-none transition"
