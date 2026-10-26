@@ -10,7 +10,9 @@ import { createBrowserClient, createServerClient as createSsrServerClient } from
 import { createClient } from '@supabase/supabase-js';
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const PUBLISHABLE = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!;
+// PUBLISHABLE first: the image's ANON_KEY build arg defaults to the retired hosted
+// project's key, which the dev2 stack rejects, so every server page saw no user.
+const PUBLISHABLE = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const SECRET = process.env.SUPABASE_SECRET_KEY;
 
 export function createBrowserSupabase() {
