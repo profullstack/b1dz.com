@@ -11,10 +11,11 @@ import { EquitiesSection } from './sections/equities';
 import { CryptoBudgetSection } from './sections/crypto-budget';
 import { AiAnalyzerSection } from './sections/ai-analyzer';
 import { AgentsSection } from './sections/agents';
+import { ProfileSection } from './sections/profile';
 import type { SettingsResponse } from './shared';
 import { importKey } from '@/lib/browser-crypto';
 
-type Tab = 'plugins' | 'wallets' | 'equities' | 'budget' | 'ai' | 'agents' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
+type Tab = 'profile' | 'plugins' | 'wallets' | 'equities' | 'budget' | 'ai' | 'agents' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'plugins', label: 'Plugins' },
@@ -27,6 +28,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'thresholds', label: 'Thresholds' },
   { id: 'strategies', label: 'Strategies' },
   { id: 'toggles', label: 'Toggles' },
+  { id: 'profile', label: 'Profile' },
 ];
 
 export function SettingsClient() {
@@ -135,9 +137,11 @@ export function SettingsClient() {
       {loading && !data && <p className="text-sm text-zinc-500">loading…</p>}
       {error && <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
 
+      {tab === 'profile' && <ProfileSection />}
+
       {tab === 'plugins' && <PluginsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
 
-      {data && tab !== 'plugins' && (
+      {data && tab !== 'plugins' && tab !== 'profile' && (
         <div>
           {tab === 'wallets' && <WalletsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'equities' && <EquitiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
