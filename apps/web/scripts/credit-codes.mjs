@@ -21,8 +21,10 @@ const [cmd, ...rest] = process.argv.slice(2);
 const flags = {};
 const positional = [];
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i].startsWith('--')) flags[rest[i].slice(2)] = rest[i + 1]?.startsWith('--') ? true : rest[++i];
-  else positional.push(rest[i]);
+  if (!rest[i].startsWith('--')) { positional.push(rest[i]); continue; }
+  const next = rest[i + 1];
+  // A flag with no value (last, or followed by another flag) is boolean: --json.
+  flags[rest[i].slice(2)] = next === undefined || next.startsWith('--') ? true : rest[++i];
 }
 
 const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
