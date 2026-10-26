@@ -30,7 +30,8 @@ interface CacheEnvelope<T> {
   value: T;
 }
 
-type RuntimeRedisClient = ReturnType<typeof createClient>;
+const makeRedisClient = (url: string) => createClient({ url });
+type RuntimeRedisClient = ReturnType<typeof makeRedisClient>;
 
 export interface RuntimeLease {
   key: string;
@@ -94,7 +95,7 @@ async function getRedisClient(): Promise<RuntimeRedisClient | null> {
   if (!redisClientPromise) {
     redisClientPromise = (async () => {
       try {
-        const client = createClient({ url: REDIS_URL });
+        const client = makeRedisClient(REDIS_URL);
         client.on('error', () => {});
         await client.connect();
         return client;
