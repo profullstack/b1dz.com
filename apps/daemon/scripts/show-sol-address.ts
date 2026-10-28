@@ -1,5 +1,6 @@
-import { loadUserConfig, applyEnvOverlay } from '../src/user-config.js';
+import { loadUserConfig, applyEnvOverlay, unlockWithPassphraseForScript } from '../src/user-config.js';
 import { DirectSolanaWalletProvider } from '@b1dz/wallet-direct';
+await unlockWithPassphraseForScript(process.env.USER_ID!);
 const cfg = await loadUserConfig(process.env.USER_ID!);
 await applyEnvOverlay(cfg, async () => {
   const key = process.env.SOLANA_PRIVATE_KEY;

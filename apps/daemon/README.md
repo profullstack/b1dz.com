@@ -77,6 +77,28 @@ Deploy the repo as **two services** from the same Dockerfile:
 Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
 and `SUPABASE_SECRET_KEY` on both services.
 
+## Sealed user keys and unlock sessions
+
+User secrets (wallet keys, exchange secrets, broker tokens) are sealed under a
+key derived from each user's passphrase (`@b1dz/core/sealed-secrets`). The
+daemon holds no key that opens them and ignores `SETTINGS_ENCRYPTION_KEY`.
+
+- A user's workers run only while they have an unlocked trading session: the
+  web app (`/settings` Vault panel) or CLI (`b1dz unlock --ttl 8h`) sends the
+  derived data key to `POST /api/daemon/session`, which forwards it to this
+  daemon's loopback control endpoint. The key lives in process memory only
+  (TTL default 8h, max 7d, `b1dz lock` / "Lock trading now" to end it).
+- Locked users (and legacy server-key rows not yet migrated) pause with
+  `daemon.status = "locked"` and a `lockReason` in source_state.
+- A restart drops every unlock: users stay paused until they unlock again.
+- Operator wallet keys and exchange secrets in env are deleted at startup and
+  never used. The operator trades as a normal user who unlocks.
+
+Control endpoint env (same values for web and daemon):
+`B1DZ_DAEMON_CONTROL_TOKEN` (required; `scripts/start-railway.sh` generates
+one per container boot), `B1DZ_DAEMON_CONTROL_PORT` (default 8790),
+`B1DZ_DAEMON_CONTROL_URL` (web side, default `http://127.0.0.1:8790`).
+
 ## What it does today
 
 - Discovers users with credentials in `source_state.payload.credentials`

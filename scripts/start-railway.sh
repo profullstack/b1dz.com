@@ -5,6 +5,16 @@ REDIS_PORT="${REDIS_PORT:-6379}"
 : "${REDIS_URL:=redis://127.0.0.1:${REDIS_PORT}}"
 export REDIS_URL
 
+# Web -> daemon unlock channel (loopback only). A fresh random token per
+# container boot unless one is provided; both children inherit it. Unlocks
+# live in daemon memory, so a restart locks every user anyway.
+if [ -z "${B1DZ_DAEMON_CONTROL_TOKEN:-}" ]; then
+  B1DZ_DAEMON_CONTROL_TOKEN="$(head -c 32 /dev/urandom | base64 | tr -d '\n=+/')"
+fi
+export B1DZ_DAEMON_CONTROL_TOKEN
+export B1DZ_DAEMON_CONTROL_PORT="${B1DZ_DAEMON_CONTROL_PORT:-8790}"
+export B1DZ_DAEMON_CONTROL_URL="${B1DZ_DAEMON_CONTROL_URL:-http://127.0.0.1:${B1DZ_DAEMON_CONTROL_PORT}}"
+
 DAEMON_RESTART_DELAY="${DAEMON_RESTART_DELAY:-5}"
 DAEMON_MAX_DELAY="${DAEMON_MAX_DELAY:-60}"
 DAEMON_LOG="${DAEMON_LOG:-/var/log/b1dz-daemon.log}"

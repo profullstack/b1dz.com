@@ -68,6 +68,7 @@ export function StatusBar({ arb, trade, settings, loading, onMutate }: Props) {
   const freshestTickMs = Math.max(arbLastTickMs, tradeLastTickMsForOnline);
   const daemonOnline = freshestTickMs > 0 && (Date.now() - freshestTickMs) < 60_000;
   const daemonVer = arb?.daemon?.version ?? trade?.daemon?.version ?? '?';
+  const lockedDaemon = [trade?.daemon, arb?.daemon].find((d) => d?.status === 'locked');
 
   const daemonLimitPct = ts?.dailyLossLimitPct ?? 5;
   const tradingEnabled = settings?.tradingEnabled ?? null;
@@ -113,6 +114,11 @@ export function StatusBar({ arb, trade, settings, loading, onMutate }: Props) {
           <span className={`inline-block h-2 w-2 rounded-full ${daemonOnline ? 'bg-emerald-400' : 'bg-red-400'}`} />
           {daemonOnline ? 'online' : 'offline'}
         </span>
+        {lockedDaemon && (
+          <a href="/settings" className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-amber-300 hover:bg-amber-500/20" title={lockedDaemon.lockReason ?? 'locked: unlock to resume'}>
+            LOCKED: unlock to resume
+          </a>
+        )}
         <span className={visiblePositions.length === 0 ? 'text-zinc-400' : 'text-cyan-400'}>{posStr}</span>
 
         <span className="text-zinc-500">today:</span>

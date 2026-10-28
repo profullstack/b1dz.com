@@ -7,6 +7,7 @@ import {
   decryptSecretBlob,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 const SECRET_FIELDS = ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY'] as const;
@@ -19,7 +20,7 @@ export function DexSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   cryptoUnavailable: boolean;
   onSaved: (next: SettingsResponse) => void;
 }) {

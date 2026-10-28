@@ -15,7 +15,7 @@
  * on — mirroring DEX_TRADE_EXECUTION. Strategies stay signals-only; they never
  * see the broker.
  *
- * Credentials come from user_settings via loadUserConfig (decrypted server-side)
+ * Credentials come from user_settings via loadUserConfig (sealed; readable only during an unlocked session)
  * and never live as plaintext globals.
  */
 import type { SourceWorker, UserContext } from '../types.js';

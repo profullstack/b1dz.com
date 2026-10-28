@@ -3,14 +3,19 @@
  *
  * Provider redirects here with ?code&state. We verify state against the cookie,
  * exchange the code for tokens (confidential client → HTTP Basic auth), and
- * merge the access token (+ refresh/expiry when present) into the user's
- * encrypted secret blob under the provider's token key — the same key the
- * daemon's connector reads. Then back to the settings page.
+ * seal the access token (+ refresh/expiry when present) to the user's OAuth
+ * inbox public key (user_settings.secret_inbox). The server can write the
+ * token but can never read it back: the user's unlocked browser (or the
+ * daemon during an unlocked session) opens the inbox and merges it into the
+ * sealed secret blob under the provider's token key. Then back to settings.
+ *
+ * A user who has not set a passphrase yet is sent back with oauth=needs_passphrase.
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { authenticate } from '@/lib/api-auth';
 import { getOAuthProvider, isOAuthConfigured } from '@/lib/oauth-providers';
-import { mergeSecretIntoUserSettings } from '@/lib/server-crypto';
+import { sealToInbox } from '@b1dz/core/sealed-secrets';
+import { loadSettingsRow, rowInbox, rowSeal, type Sb } from '@/lib/settings-row';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +30,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ plug
 
   const auth = await authenticate(req);
   if (!auth) return NextResponse.redirect(`${origin}/login?next=/settings`);
+
+  let seal;
+  let inboxNow;
+  try {
+    const row = await loadSettingsRow(auth.client, auth.userId);
+    seal = rowSeal(row);
+    inboxNow = rowInbox(row);
+  } catch {
+    return settings(`oauth=store_failed&plugin=${plugin}`);
+  }
+  if (!seal) return settings(`oauth=needs_passphrase&plugin=${plugin}`);
 
   const error = url.searchParams.get('error');
   if (error) return settings(`oauth=denied&plugin=${plugin}`);
@@ -75,7 +91,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ plug
   }
 
   try {
-    await mergeSecretIntoUserSettings(auth.client, auth.userId, patch);
+    const entry = await sealToInbox(seal.inbox_public_key, patch, auth.userId);
+    const { error: upErr } = await (auth.client as unknown as Sb).from('user_settings').upsert(
+      { user_id: auth.userId, secret_inbox: [...inboxNow, entry].slice(-20), updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' },
+    );
+    if (upErr) throw new Error(upErr.message);
   } catch (e) {
     console.error(`[oauth] ${plugin} token store failed: ${(e as Error).message}`);
     return settings(`oauth=store_failed&plugin=${plugin}`);

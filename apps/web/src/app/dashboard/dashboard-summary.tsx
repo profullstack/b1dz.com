@@ -65,6 +65,7 @@ export function DashboardSummary() {
   const freshestMs = Math.max(arbLastMs, tradeLastMs);
   const ageMs = freshestMs > 0 ? Date.now() - freshestMs : Infinity;
   const daemonOnline = ageMs < 120_000;
+  const lockedDaemon = [trade?.daemon, arb?.daemon].find((d) => d?.status === 'locked');
   const daemonStale = ageMs >= 30_000 && ageMs < 120_000;
   const ageSec = freshestMs > 0 ? Math.floor(ageMs / 1000) : null;
   const profitableSpreads = (arb?.spreads ?? []).filter((s) => s.profitable).length;
@@ -111,6 +112,11 @@ export function DashboardSummary() {
           <span className={`inline-block h-2.5 w-2.5 rounded-full ${daemonOnline ? (daemonStale ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400') : 'bg-red-400 animate-pulse'}`} />
           {daemonOnline ? (daemonStale ? `stale ${ageSec}s` : 'online') : (ageSec !== null ? `offline ${ageSec}s` : 'offline')}
         </span>
+        {lockedDaemon && (
+          <Link href="/settings" className="mt-1 block text-xs text-amber-300 hover:underline">
+            {lockedDaemon.lockReason ?? 'locked: unlock to resume'}
+          </Link>
+        )}
       </Card>
       <div className="sm:col-span-2 flex">
         <Link

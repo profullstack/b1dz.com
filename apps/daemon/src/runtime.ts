@@ -24,7 +24,8 @@ import {
 } from '@b1dz/core';
 import type { SourceWorker, UserContext } from './types.js';
 import { SOURCES } from './registry.js';
-import { loadUserConfig, applyEnvOverlay } from './user-config.js';
+import { loadUserConfigState, applyEnvOverlay } from './user-config.js';
+import { unlockStore } from './unlock-store.js';
 import { startWsBootstrap, stopWsBootstrap } from './ws-bootstrap.js';
 
 interface ScheduledTick {
@@ -225,25 +226,39 @@ export class DaemonRuntime {
       let ctx: UserContext | null = null;
       try {
         ctx = await this.makeContext(userId, source.id);
+        // Sealed secrets open only while the user has an unlocked session
+        // (data key in daemon memory). Locked or not-yet-migrated users
+        // pause here with a visible status instead of trading — and never
+        // fall back to operator keys.
+        const state = await loadUserConfigState(userId);
+        if (state.status === 'locked' || state.status === 'legacy') {
+          await ctx.savePayload({
+            enabled: ctx.payload?.enabled ?? true,
+            daemon: {
+              lastTickAt: new Date().toISOString(),
+              worker: source.id,
+              status: 'locked',
+              lockReason: state.reason ?? 'locked: unlock to resume',
+              version: getB1dzVersion(),
+            },
+          });
+          return;
+        }
         await ctx.savePayload({
           enabled: ctx.payload?.enabled ?? true,
           daemon: {
             lastTickAt: new Date().toISOString(),
             worker: source.id,
             status: 'running',
+            lockReason: null,
             version: getB1dzVersion(),
           },
         });
-        // Per-user env overlay: temporarily expose the user's
-        // user_settings (decrypted secrets + plain overrides) on
-        // process.env for the duration of the tick. Adapter code that
-        // reads process.env.X (Coinbase / Kraken / Binance.US / Gemini
-        // / EVM / Solana) transparently sees the user's values, with
-        // env as the fallback if the user has nothing set. Concurrent
-        // ticks for different users serialize at the overlay boundary;
-        // see apps/daemon/src/user-config.ts for context.
-        const userConfig = await loadUserConfig(userId);
-        await applyEnvOverlay(userConfig, () => source.tick(ctx!));
+        // Per-user env overlay for the tick: adapters that read
+        // process.env.X see this user's unsealed values; credentials the
+        // user has not set are stripped (no operator fallback). Restored
+        // after the tick; overlays are serialized.
+        await applyEnvOverlay(state.config, () => source.tick(ctx!));
       } catch (e) {
         if (ctx) {
           await ctx.savePayload({
@@ -317,6 +332,7 @@ export class DaemonRuntime {
 
   async stop() {
     this.stopping = true;
+    unlockStore.lockAll();
     stopWsBootstrap();
     if (this.discoverTimer) clearInterval(this.discoverTimer);
     for (const sched of this.scheduled.values()) clearInterval(sched.timer);

@@ -7,7 +7,7 @@
  * and burns gas.
  *
  * Env used (same as the daemon):
- *   EVM_PRIVATE_KEY  hot wallet private key (0x-prefixed)
+ *   USER_ID + B1DZ_VAULT_PASSPHRASE  unlock the hot wallet key from that user's sealed settings
  *   BASE_RPC_URL     viem http transport
  *
  * Usage (from repo root):
@@ -33,7 +33,7 @@ import {
 } from '@b1dz/adapters-evm';
 import { WalletService } from '@b1dz/wallet-service';
 import { DirectEvmWalletProvider } from '@b1dz/wallet-direct';
-import { loadUserConfig, applyEnvOverlay } from '../src/user-config.js';
+import { loadUserConfig, applyEnvOverlay, unlockWithPassphraseForScript } from '../src/user-config.js';
 
 void UNISWAP_V3_FEE_TIERS;
 
@@ -44,19 +44,16 @@ async function main() {
   const execute = args.has('--execute');
   const unlimited = args.has('--unlimited');
 
-  // If EVM_PRIVATE_KEY is not in env, try loading it from user_settings
-  // (same decryption path the daemon uses). Requires USER_ID env var.
-  if (!process.env.EVM_PRIVATE_KEY) {
-    const userId = process.env.USER_ID;
-    if (!userId) throw new Error('EVM_PRIVATE_KEY missing and USER_ID not set — cannot load from user_settings');
-    const cfg = await loadUserConfig(userId);
-    await applyEnvOverlay(cfg, async () => {
-      await runApproval(execute, unlimited);
-    });
-    return;
-  }
-
-  await runApproval(execute, unlimited);
+  // The key comes only from the user's sealed settings, unlocked here with
+  // B1DZ_VAULT_PASSPHRASE (no plaintext EVM_PRIVATE_KEY in env).
+  delete process.env.EVM_PRIVATE_KEY;
+  const userId = process.env.USER_ID;
+  if (!userId) throw new Error('USER_ID not set — cannot load the key from user_settings');
+  await unlockWithPassphraseForScript(userId);
+  const cfg = await loadUserConfig(userId);
+  await applyEnvOverlay(cfg, async () => {
+    await runApproval(execute, unlimited);
+  });
 }
 
 async function runApproval(execute: boolean, unlimited: boolean) {

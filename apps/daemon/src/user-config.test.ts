@@ -1,23 +1,33 @@
 /**
- * Tests for user-config: lookup precedence, decrypt round-trip, caching,
- * cache invalidation, and the env overlay.
+ * user-config: sealed secrets open only while the user is unlocked, lock
+ * states, no operator-env fallback for credentials, caching, env overlay,
+ * OAuth inbox merge, and the startup credential scrub.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createCipheriv, createHmac, randomBytes } from 'node:crypto';
 import {
   applyEnvOverlay,
   clearUserConfigCacheForTesting,
   loadUserConfig,
+  loadUserConfigState,
+  mergeUserSecret,
   refreshUserConfig,
+  scrubOperatorCredentialEnv,
   setSupabaseClientForTesting,
+  verifyUnlockKey,
   __getOverlayKeysForTesting,
 } from './user-config.js';
+import { unlockStore } from './unlock-store.js';
 import {
   SECRET_FIELDS,
   PLAIN_STRING_FIELDS,
   PLAIN_NUMBER_FIELDS,
   PLAIN_BOOL_FIELDS,
 } from '@b1dz/core';
+import { createSeal, sealSecrets, sealToInbox, unsealSecrets, type SealRecord } from '@b1dz/core/sealed-secrets';
+
+const U1 = '00000000-0000-4000-8000-000000000001';
+const U2 = '00000000-0000-4000-8000-000000000002';
 
 interface FakeRow {
   user_id: string;
@@ -25,13 +35,13 @@ interface FakeRow {
   payload_secret_ciphertext: string | null;
   payload_secret_iv: string | null;
   payload_secret_tag: string | null;
+  seal_version?: number;
+  seal?: unknown;
+  secret_inbox?: unknown;
   updated_at: string | null;
 }
 
-function fakeClient(rows: FakeRow[]): {
-  client: { from: (t: string) => { select: (s: string) => { eq: (col: string, val: string) => { maybeSingle: () => Promise<{ data: FakeRow | null; error: null }> } } } };
-  fetchCount: () => number;
-} {
+function fakeClient(rows: FakeRow[]) {
   let count = 0;
   return {
     fetchCount: () => count,
@@ -41,7 +51,17 @@ function fakeClient(rows: FakeRow[]): {
           eq: (_col: string, val: string) => ({
             maybeSingle: async () => {
               count += 1;
-              return { data: rows.find((r) => r.user_id === val) ?? null, error: null };
+              const r = rows.find((x) => x.user_id === val);
+              return { data: r ? structuredClone(r) : null, error: null };
+            },
+          }),
+        }),
+        update: (patch: Record<string, unknown>) => ({
+          eq: (_c: string, val: string) => ({
+            eq: async () => {
+              const r = rows.find((x) => x.user_id === val);
+              if (r) Object.assign(r, patch);
+              return { error: null };
             },
           }),
         }),
@@ -50,33 +70,44 @@ function fakeClient(rows: FakeRow[]): {
   };
 }
 
-const TEST_KEY = randomBytes(32);
+const seals: Record<string, { dek: Uint8Array; seal: SealRecord }> = {};
 
-function deriveUserKey(userId: string): Buffer {
-  return createHmac('sha256', TEST_KEY).update(userId).digest();
-}
+beforeAll(async () => {
+  for (const u of [U1, U2]) {
+    const { dek, seal } = await createSeal('test passphrase 123', u);
+    seals[u] = { dek, seal };
+  }
+}, 30_000);
 
-function encryptForTest(secret: Record<string, string>, userId = 'u1'): { ciphertext: string; iv: string; tag: string } {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', deriveUserKey(userId), iv);
-  const enc = Buffer.concat([cipher.update(JSON.stringify(secret), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
+async function sealedRow(userId: string, secret: Record<string, string>, extra: Partial<FakeRow> = {}): Promise<FakeRow> {
+  const blob = await sealSecrets(seals[userId].dek, secret, userId);
   return {
-    ciphertext: enc.toString('base64'),
-    iv: iv.toString('base64'),
-    tag: tag.toString('base64'),
+    user_id: userId,
+    payload_plain: null,
+    payload_secret_ciphertext: blob.ciphertext,
+    payload_secret_iv: blob.iv,
+    payload_secret_tag: blob.tag,
+    seal_version: 2,
+    seal: seals[userId].seal,
+    secret_inbox: [],
+    updated_at: null,
+    ...extra,
   };
 }
 
-function encryptLegacyForTest(secret: Record<string, string>): { ciphertext: string; iv: string; tag: string } {
+function legacyRow(userId: string, secret: Record<string, string>): FakeRow {
+  const master = randomBytes(32);
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', TEST_KEY, iv);
-  const enc = Buffer.concat([cipher.update(JSON.stringify(secret), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
+  const c = createCipheriv('aes-256-gcm', createHmac('sha256', master).update(userId).digest(), iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(secret), 'utf8'), c.final()]);
   return {
-    ciphertext: enc.toString('base64'),
-    iv: iv.toString('base64'),
-    tag: tag.toString('base64'),
+    user_id: userId,
+    payload_plain: null,
+    payload_secret_ciphertext: ct.toString('base64'),
+    payload_secret_iv: iv.toString('base64'),
+    payload_secret_tag: c.getAuthTag().toString('base64'),
+    seal_version: 1,
+    updated_at: null,
   };
 }
 
@@ -84,281 +115,204 @@ const OLD_ENV = { ...process.env };
 
 beforeEach(() => {
   clearUserConfigCacheForTesting();
-  process.env = { ...OLD_ENV, SETTINGS_ENCRYPTION_KEY: TEST_KEY.toString('base64') };
+  unlockStore.lockAll();
+  process.env = { ...OLD_ENV };
 });
 
 afterEach(() => {
   process.env = { ...OLD_ENV };
   setSupabaseClientForTesting(null);
   clearUserConfigCacheForTesting();
+  unlockStore.lockAll();
 });
 
-describe('loadUserConfig — lookup precedence', () => {
-  it('returns process.env when no row exists', async () => {
-    process.env.KRAKEN_API_KEY = 'env-kraken';
-    const { client } = fakeClient([]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('user-no-row');
-    expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('env-kraken');
+describe('lock states', () => {
+  it('no row: no-secrets, runs', async () => {
+    setSupabaseClientForTesting(fakeClient([]).client as never);
+    expect((await loadUserConfigState(U1)).status).toBe('no-secrets');
   });
 
-  it('returns the fallback arg when neither row nor env has the key', async () => {
-    delete process.env.MISSING_KEY;
-    const { client } = fakeClient([]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('u');
-    expect(cfg.getSecret('MISSING_KEY', 'fallback')).toBe('fallback');
+  it('sealed row and no session: locked, secrets empty, with a visible reason', async () => {
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, { KRAKEN_API_KEY: 'k' })]).client as never);
+    const st = await loadUserConfigState(U1);
+    expect(st.status).toBe('locked');
+    expect(st.reason).toMatch(/unlock to resume/);
+    expect(st.config.getUserSecret('KRAKEN_API_KEY')).toBeUndefined();
   });
 
-  it('decrypted secret takes precedence over process.env', async () => {
-    process.env.KRAKEN_API_KEY = 'env-kraken';
-    const blob = encryptForTest({ KRAKEN_API_KEY: 'user-kraken-from-db' });
-    const { client } = fakeClient([{
-      user_id: 'u1',
-      payload_plain: null,
-      payload_secret_ciphertext: blob.ciphertext,
-      payload_secret_iv: blob.iv,
-      payload_secret_tag: blob.tag,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('u1');
-    expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('user-kraken-from-db');
+  it('sealed row and unlocked: secrets available', async () => {
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, { KRAKEN_API_KEY: 'user-kraken' })]).client as never);
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    const st = await loadUserConfigState(U1);
+    expect(st.status).toBe('unlocked');
+    expect(st.config.getSecret('KRAKEN_API_KEY')).toBe('user-kraken');
   });
 
-  it('can read legacy master-key encrypted secrets', async () => {
-    process.env.KRAKEN_API_KEY = 'env-kraken';
-    const blob = encryptLegacyForTest({ KRAKEN_API_KEY: 'legacy-user-kraken' });
-    const { client } = fakeClient([{
-      user_id: 'u1',
-      payload_plain: null,
-      payload_secret_ciphertext: blob.ciphertext,
-      payload_secret_iv: blob.iv,
-      payload_secret_tag: blob.tag,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('u1');
-    expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('legacy-user-kraken');
+  it('lock takes effect on the next load (row cached, plaintext is not)', async () => {
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, { KRAKEN_API_KEY: 'x' })]).client as never);
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    expect((await loadUserConfigState(U1)).status).toBe('unlocked');
+    unlockStore.lock(U1);
+    expect((await loadUserConfigState(U1)).status).toBe('locked');
   });
 
-  it('does not decrypt another user encrypted secret blob', async () => {
-    delete process.env.KRAKEN_API_KEY;
-    const blob = encryptForTest({ KRAKEN_API_KEY: 'wrong-user-secret' }, 'other-user');
-    const { client } = fakeClient([{
-      user_id: 'u1',
-      payload_plain: null,
-      payload_secret_ciphertext: blob.ciphertext,
-      payload_secret_iv: blob.iv,
-      payload_secret_tag: blob.tag,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('u1');
-    expect(cfg.getUserSecret('KRAKEN_API_KEY')).toBeUndefined();
+  it('another user\'s key does not open the blob: locks instead of crashing', async () => {
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, { KRAKEN_API_KEY: 'x' })]).client as never);
+    unlockStore.unlock(U1, seals[U2].dek, 3600);
+    const st = await loadUserConfigState(U1);
+    expect(st.status).toBe('locked');
+    expect(unlockStore.status(U1).unlocked).toBe(false);
   });
 
-  it('plain overrides take precedence over process.env (for non-secret keys)', async () => {
-    process.env.DAILY_LOSS_LIMIT_PCT = '5';
-    const { client } = fakeClient([{
-      user_id: 'u2',
-      payload_plain: { DAILY_LOSS_LIMIT_PCT: '12.5' },
-      payload_secret_ciphertext: null,
-      payload_secret_iv: null,
-      payload_secret_tag: null,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('u2');
-    expect(cfg.getNumber('DAILY_LOSS_LIMIT_PCT')).toBe(12.5);
-    expect(cfg.getPlain('DAILY_LOSS_LIMIT_PCT')).toBe('12.5');
-  });
-
-  it('parses booleans from plain and env', async () => {
-    process.env.MARGIN_TRADING = 'false';
-    const { client } = fakeClient([{
-      user_id: 'u3',
-      payload_plain: { DEX_TRADE_EXECUTION: 'true' },
-      payload_secret_ciphertext: null,
-      payload_secret_iv: null,
-      payload_secret_tag: null,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('u3');
-    expect(cfg.getBool('DEX_TRADE_EXECUTION')).toBe(true);
-    expect(cfg.getBool('MARGIN_TRADING')).toBe(false);
-    expect(cfg.getBool('UNSET_FLAG', true)).toBe(true);
+  it('legacy (server-key) row: paused as legacy, never decrypted, even with SETTINGS_ENCRYPTION_KEY set', async () => {
+    process.env.SETTINGS_ENCRYPTION_KEY = randomBytes(32).toString('base64');
+    setSupabaseClientForTesting(fakeClient([legacyRow(U1, { SOLANA_PRIVATE_KEY: 'k' })]).client as never);
+    const st = await loadUserConfigState(U1);
+    expect(st.status).toBe('legacy');
+    expect(st.reason).toMatch(/passphrase/);
+    expect(st.config.getUserSecret('SOLANA_PRIVATE_KEY')).toBeUndefined();
   });
 });
 
-describe('loadUserConfig — caching', () => {
+describe('no operator env fallback', () => {
+  it('credential keys never fall back to process.env', async () => {
+    process.env.SOLANA_PRIVATE_KEY = 'operator-sol';
+    process.env.EVM_PRIVATE_KEY = 'operator-evm';
+    process.env.KRAKEN_API_SECRET = 'operator-kraken';
+    setSupabaseClientForTesting(fakeClient([]).client as never);
+    const cfg = await loadUserConfig(U1);
+    expect(cfg.getSecret('SOLANA_PRIVATE_KEY')).toBeUndefined();
+    expect(cfg.getSecret('EVM_PRIVATE_KEY')).toBeUndefined();
+    expect(cfg.getSecret('KRAKEN_API_SECRET')).toBeUndefined();
+  });
+
+  it('overlay strips operator credentials for a user without their own', async () => {
+    process.env.SOLANA_PRIVATE_KEY = 'operator-sol';
+    setSupabaseClientForTesting(fakeClient([]).client as never);
+    const cfg = await loadUserConfig(U1);
+    let inside: string | undefined = 'unset';
+    await applyEnvOverlay(cfg, async () => { inside = process.env.SOLANA_PRIVATE_KEY; });
+    expect(inside).toBeUndefined();
+  });
+
+  it('non-credential knobs still use the operator default', async () => {
+    process.env.DAILY_LOSS_LIMIT_PCT = '7';
+    setSupabaseClientForTesting(fakeClient([]).client as never);
+    const cfg = await loadUserConfig(U1);
+    expect(cfg.getNumber('DAILY_LOSS_LIMIT_PCT')).toBe(7);
+  });
+
+  it('startup scrub removes wallet keys and exchange secrets from env, returns names only', () => {
+    const env: NodeJS.ProcessEnv = {
+      SOLANA_PRIVATE_KEY: 's', EVM_PRIVATE_KEY: 'e', GEMINI_API_SECRET: 'g', COINBASE_API_PRIVATE_KEY_B64: 'c',
+      PROXY_PASSWORD: 'p', SUPABASE_SECRET_KEY: 'db', BASE_RPC_URL: 'r',
+    };
+    const removed = scrubOperatorCredentialEnv(env);
+    expect(removed.sort()).toEqual(['COINBASE_API_PRIVATE_KEY_B64', 'EVM_PRIVATE_KEY', 'GEMINI_API_SECRET', 'SOLANA_PRIVATE_KEY']);
+    expect(env.SOLANA_PRIVATE_KEY).toBeUndefined();
+    expect(env.PROXY_PASSWORD).toBe('p');
+    expect(env.SUPABASE_SECRET_KEY).toBe('db');
+    expect(removed.join()).not.toContain('s,');
+  });
+});
+
+describe('unlock key verification', () => {
+  it('accepts the right key, rejects a wrong one, reports no-seal', async () => {
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, {}), legacyRow(U2, { a: 'b' })]).client as never);
+    expect(await verifyUnlockKey(U1, seals[U1].dek)).toBe('ok');
+    expect(await verifyUnlockKey(U1, seals[U2].dek)).toBe('bad-key');
+    expect(await verifyUnlockKey(U2, seals[U2].dek)).toBe('no-seal');
+  });
+});
+
+describe('OAuth inbox + token refresh', () => {
+  it('merges inbox tokens into the sealed blob while unlocked and clears them', async () => {
+    const entry = await sealToInbox(seals[U1].seal.inbox_public_key, { ALPACA_OAUTH_TOKEN: 'fresh' }, U1);
+    const row = await sealedRow(U1, { KRAKEN_API_KEY: 'k' }, { secret_inbox: [entry] });
+    setSupabaseClientForTesting(fakeClient([row]).client as never);
+
+    // locked: inbox waits
+    expect((await loadUserConfigState(U1)).status).toBe('locked');
+    expect((row.secret_inbox as unknown[]).length).toBe(1);
+
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    refreshUserConfig(U1);
+    const st = await loadUserConfigState(U1);
+    expect(st.config.getUserSecret('ALPACA_OAUTH_TOKEN')).toBe('fresh');
+    expect(st.config.getUserSecret('KRAKEN_API_KEY')).toBe('k');
+    expect(row.secret_inbox).toEqual([]);
+    const stored = await unsealSecrets(seals[U1].dek, { ciphertext: row.payload_secret_ciphertext!, iv: row.payload_secret_iv!, tag: row.payload_secret_tag! }, U1);
+    expect(stored.ALPACA_OAUTH_TOKEN).toBe('fresh');
+  });
+
+  it('mergeUserSecret requires an unlocked session', async () => {
+    const row = await sealedRow(U1, { A: '1' });
+    setSupabaseClientForTesting(fakeClient([row]).client as never);
+    await expect(mergeUserSecret(U1, { B: '2' })).rejects.toThrow(/locked/);
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    await mergeUserSecret(U1, { B: '2' });
+    const stored = await unsealSecrets(seals[U1].dek, { ciphertext: row.payload_secret_ciphertext!, iv: row.payload_secret_iv!, tag: row.payload_secret_tag! }, U1);
+    expect(stored).toEqual({ A: '1', B: '2' });
+  });
+});
+
+describe('caching', () => {
   it('cache hit within TTL does not re-fetch', async () => {
     const { client, fetchCount } = fakeClient([]);
     setSupabaseClientForTesting(client as never);
-
-    await loadUserConfig('cached');
-    await loadUserConfig('cached');
-    await loadUserConfig('cached');
-
+    await loadUserConfig(U1);
+    await loadUserConfig(U1);
     expect(fetchCount()).toBe(1);
   });
 
   it('refreshUserConfig invalidates the cache', async () => {
     const { client, fetchCount } = fakeClient([]);
     setSupabaseClientForTesting(client as never);
-
-    await loadUserConfig('refresh-me');
-    refreshUserConfig('refresh-me');
-    await loadUserConfig('refresh-me');
-
+    await loadUserConfig(U1);
+    refreshUserConfig(U1);
+    await loadUserConfig(U1);
     expect(fetchCount()).toBe(2);
   });
 });
 
 describe('applyEnvOverlay', () => {
-  it('temporarily overlays user secrets on process.env, then restores', async () => {
-    process.env.KRAKEN_API_KEY = 'env-original';
-    delete process.env.GEMINI_API_KEY;
-
-    const blob = encryptForTest({
-      KRAKEN_API_KEY: 'user-kraken',
-      GEMINI_API_KEY: 'user-gemini',
-    }, 'overlay-user');
-    const { client } = fakeClient([{
-      user_id: 'overlay-user',
-      payload_plain: null,
-      payload_secret_ciphertext: blob.ciphertext,
-      payload_secret_iv: blob.iv,
-      payload_secret_tag: blob.tag,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('overlay-user');
-
-    let inside: { kraken?: string; gemini?: string } = {};
-    await applyEnvOverlay(cfg, async () => {
-      inside = {
-        kraken: process.env.KRAKEN_API_KEY,
-        gemini: process.env.GEMINI_API_KEY,
-      };
-    });
-
-    expect(inside.kraken).toBe('user-kraken');
-    expect(inside.gemini).toBe('user-gemini');
-    // Restored
-    expect(process.env.KRAKEN_API_KEY).toBe('env-original');
-    expect(process.env.GEMINI_API_KEY).toBeUndefined();
+  it('temporarily overlays unlocked user secrets on process.env, then restores', async () => {
+    delete process.env.KRAKEN_API_KEY;
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, { KRAKEN_API_KEY: 'user-kraken' })]).client as never);
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    const cfg = await loadUserConfig(U1);
+    let inside: string | undefined;
+    await applyEnvOverlay(cfg, async () => { inside = process.env.KRAKEN_API_KEY; });
+    expect(inside).toBe('user-kraken');
+    expect(process.env.KRAKEN_API_KEY).toBeUndefined();
   });
 
   it('restores env even if the callback throws', async () => {
-    process.env.KRAKEN_API_KEY = 'safe';
-    const blob = encryptForTest({ KRAKEN_API_KEY: 'temp' }, 'throws');
-    const { client } = fakeClient([{
-      user_id: 'throws',
-      payload_plain: null,
-      payload_secret_ciphertext: blob.ciphertext,
-      payload_secret_iv: blob.iv,
-      payload_secret_tag: blob.tag,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('throws');
-    await expect(
-      applyEnvOverlay(cfg, async () => { throw new Error('boom'); }),
-    ).rejects.toThrow('boom');
-
-    expect(process.env.KRAKEN_API_KEY).toBe('safe');
-  });
-});
-
-describe('loadUserConfig — degraded mode (no encryption key)', () => {
-  it('returns env-only when SETTINGS_ENCRYPTION_KEY is missing', async () => {
-    delete process.env.SETTINGS_ENCRYPTION_KEY;
-    process.env.KRAKEN_API_KEY = 'env-only';
-
-    // Even if the row has a secret blob, without a key we can't decrypt — env should still come through.
-    const blob = encryptForTest({ KRAKEN_API_KEY: 'user-from-db' }, 'no-key');
-    const { client } = fakeClient([{
-      user_id: 'no-key',
-      payload_plain: null,
-      payload_secret_ciphertext: blob.ciphertext,
-      payload_secret_iv: blob.iv,
-      payload_secret_tag: blob.tag,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('no-key');
-    expect(cfg.getSecret('KRAKEN_API_KEY')).toBe('env-only');
+    process.env.BASE_RPC_URL = 'safe';
+    setSupabaseClientForTesting(fakeClient([]).client as never);
+    const cfg = await loadUserConfig(U1);
+    await expect(applyEnvOverlay(cfg, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(process.env.BASE_RPC_URL).toBe('safe');
   });
 });
 
 describe('OVERLAY_KEYS coverage', () => {
-  // This test guards against the silent-drift bug that caused only
-  // Gemini to execute trades in production. The daemon's per-tick env
-  // overlay must apply EVERY key the user can configure via the web
-  // settings UI — otherwise settings like BASE_RPC_URL get saved to
-  // user_settings.payload_plain but never reach process.env, and
-  // adapters that rely on them (Uniswap V3 / Jupiter / Pump.fun) silently
-  // fall through to "missing env" and never trade.
   it('includes every catalog key from @b1dz/core/settings-fields', () => {
     const overlay = new Set(__getOverlayKeysForTesting());
-    const allCatalogKeys = [
-      ...SECRET_FIELDS,
-      ...PLAIN_STRING_FIELDS,
-      ...PLAIN_NUMBER_FIELDS,
-      ...PLAIN_BOOL_FIELDS,
-    ];
-    const missing = allCatalogKeys.filter((k) => !overlay.has(k));
-    expect(missing).toEqual([]);
-  });
-
-  it('still includes the operationally-required RPC URL keys', () => {
-    // Specific regression guards — these were the smoking-gun keys
-    // missing from the original hand-maintained list. Without them
-    // every DEX adapter silently no-op'd.
-    const overlay = new Set(__getOverlayKeysForTesting());
-    expect(overlay.has('BASE_RPC_URL')).toBe(true);
-    expect(overlay.has('SOLANA_RPC_URL')).toBe(true);
-    expect(overlay.has('EVM_PRIVATE_KEY')).toBe(true);
-    expect(overlay.has('SOLANA_PRIVATE_KEY')).toBe(true);
-    expect(overlay.has('PUMPFUN_TRADE_EXECUTION')).toBe(true);
-    expect(overlay.has('DEX_TRADE_EXECUTION')).toBe(true);
+    const all = [...SECRET_FIELDS, ...PLAIN_STRING_FIELDS, ...PLAIN_NUMBER_FIELDS, ...PLAIN_BOOL_FIELDS];
+    expect(all.filter((k) => !overlay.has(k))).toEqual([]);
   });
 
   it('overlays a user-saved BASE_RPC_URL onto process.env at tick time', async () => {
     delete process.env.BASE_RPC_URL;
-    const { client } = fakeClient([{
-      user_id: 'rpc-user',
-      payload_plain: { BASE_RPC_URL: 'https://user-set-base-rpc.example' },
-      payload_secret_ciphertext: null,
-      payload_secret_iv: null,
-      payload_secret_tag: null,
-      updated_at: null,
-    }]);
-    setSupabaseClientForTesting(client as never);
-
-    const cfg = await loadUserConfig('rpc-user');
-    let observedInsideOverlay: string | undefined;
-    await applyEnvOverlay(cfg, async () => {
-      observedInsideOverlay = process.env.BASE_RPC_URL;
-    });
-
-    // The smoking-gun assertion: inside the overlay, the user's saved
-    // BASE_RPC_URL is on process.env. If this fails, every DEX adapter
-    // is going to silently fall back to "missing env" again.
-    expect(observedInsideOverlay).toBe('https://user-set-base-rpc.example');
-    // And it's restored (deleted) afterward.
+    setSupabaseClientForTesting(fakeClient([{
+      user_id: U1, payload_plain: { BASE_RPC_URL: 'https://user-set-base-rpc.example' },
+      payload_secret_ciphertext: null, payload_secret_iv: null, payload_secret_tag: null, updated_at: null,
+    }]).client as never);
+    const cfg = await loadUserConfig(U1);
+    let observed: string | undefined;
+    await applyEnvOverlay(cfg, async () => { observed = process.env.BASE_RPC_URL; });
+    expect(observed).toBe('https://user-set-base-rpc.example');
     expect(process.env.BASE_RPC_URL).toBeUndefined();
   });
 });

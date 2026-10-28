@@ -42,7 +42,7 @@ export interface ArbState {
   }[];
   rawLog?: { at: string; text: string }[];
   activityLog?: { at: string; text: string }[];
-  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string; lockReason?: string | null };
 }
 
 export interface TradeStatusData {
@@ -128,7 +128,7 @@ export interface TradeState {
       priceSamples?: number[];
     }[];
   };
-  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string; lockReason?: string | null };
 }
 
 export interface ArbPipelineState {
@@ -158,7 +158,7 @@ export interface ArbPipelineState {
     circuit: { state: string; trip?: { reason: string; at: number } };
     startedAt: string;
   };
-  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string; lockReason?: string | null };
 }
 
 export interface UiSettings {
@@ -194,5 +194,5 @@ export interface PumpfunState {
   solUsdRef?: number;
   activityLog?: { at: string; text: string }[];
   rawLog?: { at: string; text: string }[];
-  daemon?: { lastTickAt: string; worker: string; status: string; version?: string };
+  daemon?: { lastTickAt: string; worker: string; status: string; version?: string; lockReason?: string | null };
 }
