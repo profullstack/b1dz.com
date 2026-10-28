@@ -13,6 +13,16 @@
 import { loadRootEnv } from '@b1dz/core';
 loadRootEnv();
 import { DaemonRuntime } from './runtime.js';
+import { refreshUserConfig, scrubOperatorCredentialEnv, verifyUnlockKey } from './user-config.js';
+import { unlockStore } from './unlock-store.js';
+import { startControlServer } from './control-server.js';
+
+// No operator wallet keys or exchange secrets in this process: user
+// operations never fall back to them (the operator unlocks like any user).
+const scrubbed = scrubOperatorCredentialEnv();
+if (scrubbed.length > 0) {
+  console.warn(`b1dzd: removed ${scrubbed.length} operator credential(s) from env (${scrubbed.join(', ')}); they are never used. Remove them from the deploy env.`);
+}
 
 function fail(msg: string): never {
   console.error(`b1dzd: ${msg}`);
@@ -25,6 +35,7 @@ if (!url) fail('NEXT_PUBLIC_SUPABASE_URL missing');
 if (!key) fail('SUPABASE_SECRET_KEY missing');
 
 const runtime = new DaemonRuntime({ supabaseUrl: url, supabaseSecretKey: key });
+const control = startControlServer({ store: unlockStore, verifyKey: verifyUnlockKey, onChange: refreshUserConfig });
 
 // Periodic memory snapshot — 60s cadence, stderr so it bypasses any
 // log-routing wrappers that filter "[...]" prefixed lines. Lets us
@@ -37,6 +48,8 @@ const memTimer = setInterval(() => {
 
 const shutdown = async (signal: string) => {
   clearInterval(memTimer);
+  control?.close();
+  unlockStore.lockAll();
   console.log(`b1dzd: received ${signal}, shutting down…`);
   try { await runtime.stop(); } catch {}
   process.exit(0);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { BoolRow, SectionShell, readPlainBool, saveSettings, type SettingsResponse } from '../shared';
+import { BoolRow, SectionShell, readPlainBool, saveSettings, type SettingsResponse, type VaultKey } from '../shared';
 
 const TOGGLES = [
   { field: 'TRADING_ENABLED', label: 'Trading enabled (master on/off)' },
@@ -19,7 +19,7 @@ export function TogglesSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   const initial = Object.fromEntries(TOGGLES.map((t) => [t.field, readPlainBool(data, t.field)]));

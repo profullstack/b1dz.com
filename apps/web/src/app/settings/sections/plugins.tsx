@@ -15,6 +15,7 @@ import {
   readPlainBool,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 const SYSTEM_BOOLS: { key: string; label: string }[] = [
@@ -41,7 +42,7 @@ export function PluginsSection({
   onSaved,
 }: {
   data: SettingsResponse | null;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   const [rows, setRows] = useState<InstalledRow[]>([]);

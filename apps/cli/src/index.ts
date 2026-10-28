@@ -117,6 +117,10 @@ Auth:
   b1dz redeem <code>    redeem a credit code for Pro days
   b1dz invites [create [note]]  your invites, Pro-day balance, referral link
   b1dz setup [section]  guided walkthrough — prompts for keys with docs URLs
+  b1dz unlock [--ttl 8h] let the daemon trade with your keys (max 7d; passphrase
+                       prompt, or B1DZ_VAULT_PASSPHRASE / B1DZ_VAULT_PASSPHRASE_FILE)
+  b1dz lock             lock trading now (strategies pause)
+  b1dz vault [status|passwd]  vault + trading-session status / change passphrase
                         section = coinbase|kraken|binance|gemini|oneinch|evm|solana|thresholds|toggles
 
 Dashboard:
@@ -347,6 +351,11 @@ if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
 if (source === 'settings') { await settings(); process.exit(0); }
 if (source === 'setup') { await setup(process.argv.slice(3)); process.exit(0); }
+if (source === 'unlock' || source === 'lock' || source === 'vault') {
+  const { vaultCommand } = await import('./vault.js');
+  await vaultCommand(source, process.argv.slice(3));
+  process.exit(0);
+}
 if (source === 'redeem') { await redeem(process.argv.slice(3)); process.exit(0); }
 if (source === 'invites') { await invites(process.argv.slice(3)); process.exit(0); }
 if (source === 'status') runDaemonStatus();

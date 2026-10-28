@@ -1,40 +1,44 @@
 /**
  * Per-user config loader for the daemon.
  *
- * Loads the user_settings row, decrypts the AES-256-GCM secret blob with
- * SETTINGS_ENCRYPTION_KEY, and exposes a unified getter with this
- * lookup precedence:
+ * Secrets are sealed under a key only the user holds (seal_version 2, see
+ * @b1dz/core/sealed-secrets). The daemon can read them ONLY while the user
+ * has an unlocked trading session: the browser/CLI sent the data key to the
+ * control endpoint and it sits in unlockStore (memory, TTL). There is no
+ * server master key and no SETTINGS_ENCRYPTION_KEY here any more.
  *
- *   1. user_settings.payload_secret[KEY]   (decrypted)
- *   2. user_settings.payload_plain[KEY]
- *   3. process.env[KEY]
- *   4. fallback arg passed to the getter
+ * Lookup precedence:
+ *   getUserSecret(K)  this user's unsealed secret blob only
+ *   getUserPlain(K)   this user's plain blob only
+ *   getSecret(K)      secret -> plain -> process.env, but a CREDENTIAL key
+ *                     never falls back to process.env
+ *   getPlain(K)       plain -> process.env -> fallback (non-secret knobs)
  *
- * The secret-blob algorithm matches apps/web/src/lib/secret-crypto.ts:
- * AES-256-GCM, base64-encoded ciphertext + 12-byte iv + 16-byte auth tag.
+ * The row is cached (ciphertext only) for CACHE_TTL_MS; plaintext secrets are
+ * decrypted per load and never cached.
  *
- * Caches per-user for CACHE_TTL_MS. Callers that just wrote settings
- * should call refreshUserConfig(userId) to invalidate.
+ * loadUserConfigState() also reports whether the user is locked, so the
+ * runtime can pause their workers with a visible status.
  *
- * If SETTINGS_ENCRYPTION_KEY is missing the loader logs a one-shot
- * warning and degrades to env-only — the daemon must keep running for
- * users who have no user_settings row.
- *
- * Concurrency note: applyEnvOverlay() temporarily mutates process.env
- * for the duration of the callback so existing adapter code that reads
- * process.env.X transparently picks up user-specific values without
- * threading UserConfig through every adapter constructor. Concurrent
- * calls are serialized via an async mutex (envOverlayMutex) — this
- * means concurrent ticks for different users queue at the overlay
- * boundary. For the current single-active-user deployment this is
- * fine; for high-concurrency multi-user deployments the right fix is
- * to thread UserConfig through every adapter.
+ * Concurrency note: applyEnvOverlay() temporarily mutates process.env for the
+ * duration of a tick so adapter code that reads process.env.X picks up the
+ * user's values; overlays are serialized by a mutex.
  */
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ALL_OVERLAY_KEYS, SECRET_SET } from '@b1dz/core';
+import {
+  isInboxEntry,
+  isSealRecord,
+  openInbox,
+  sealSecrets,
+  unsealSecrets,
+  verifyDataKey,
+  type CipherBlob,
+  type InboxEntry,
+  type SealRecord,
+} from '@b1dz/core/sealed-secrets';
+import { unlockStore } from './unlock-store.js';
 
-const ALGORITHM = 'aes-256-gcm';
 const CACHE_TTL_MS = 60_000;
 
 interface UserSettingsRow {
@@ -43,34 +47,48 @@ interface UserSettingsRow {
   payload_secret_ciphertext: string | null;
   payload_secret_iv: string | null;
   payload_secret_tag: string | null;
+  seal_version?: number | null;
+  seal?: unknown;
+  secret_inbox?: unknown;
   updated_at: string | null;
 }
 
 export interface UserConfig {
   readonly userId: string;
-  /** Lookup with precedence: secret blob → plain blob → process.env → fallback. */
+  /** secret blob -> plain blob -> process.env (non-credential keys only) -> fallback. */
   getSecret(key: string, fallback?: string): string | undefined;
-  /** Lookup with precedence: plain blob → process.env → fallback. (Skips secret blob.) */
+  /** plain blob -> process.env -> fallback. (Skips secret blob.) */
   getPlain(key: string, fallback?: string): string | undefined;
-  /** STRICT: this user's secret blob ONLY — no plain, no env. Use for per-user
-   *  credentials so they never fall back to the operator's env keys. */
+  /** STRICT: this user's secret blob ONLY — no plain, no env. */
   getUserSecret(key: string): string | undefined;
-  /** STRICT: this user's plain blob ONLY — no env. Use for per-user identifiers
-   *  (account ids, gateway URLs) that must not fall back to operator env. */
+  /** STRICT: this user's plain blob ONLY — no env. */
   getUserPlain(key: string): string | undefined;
-  /** Convenience: parse the resolved string as a number. Returns fallback if missing or not finite. */
   getNumber(key: string, fallback?: number): number | undefined;
-  /** Convenience: parse the resolved string as a boolean ("true"/"1"/"yes"/"on"). */
   getBool(key: string, fallback?: boolean): boolean | undefined;
+}
+
+/**
+ * - no-secrets: the user has no sealed secrets; workers run without credentials.
+ * - unlocked:   sealed secrets are available for this tick.
+ * - locked:     sealed secrets exist and no unlocked session; pause the user.
+ * - legacy:     secrets are still under the old server key; pause until the
+ *               user sets a passphrase on /settings (which migrates them).
+ */
+export type UserLockState = 'no-secrets' | 'unlocked' | 'locked' | 'legacy';
+
+export interface UserConfigState {
+  status: UserLockState;
+  config: UserConfig;
+  /** Human-readable reason shown in source status when paused. */
+  reason?: string;
 }
 
 interface CacheEntry {
   expiresAt: number;
-  value: UserConfig;
+  row: UserSettingsRow | null;
 }
 
 const cache = new Map<string, CacheEntry>();
-let warnedNoKey = false;
 
 let lazyClient: SupabaseClient | null = null;
 function defaultClient(): SupabaseClient {
@@ -91,63 +109,6 @@ export function setSupabaseClientForTesting(c: SupabaseClient | null): void {
   lazyClient = c;
 }
 
-function loadEncryptionKey(): Buffer | null {
-  const raw = process.env.SETTINGS_ENCRYPTION_KEY;
-  if (!raw) {
-    if (!warnedNoKey) {
-      warnedNoKey = true;
-      console.warn('user-config: SETTINGS_ENCRYPTION_KEY missing — secrets cannot be decrypted, falling back to process.env only');
-    }
-    return null;
-  }
-  const buf = Buffer.from(raw, 'base64');
-  if (buf.length !== 32) {
-    if (!warnedNoKey) {
-      warnedNoKey = true;
-      console.warn(`user-config: SETTINGS_ENCRYPTION_KEY decodes to ${buf.length} bytes (need 32) — secrets cannot be decrypted`);
-    }
-    return null;
-  }
-  return buf;
-}
-
-function deriveUserKey(masterKey: Buffer, userId: string): Buffer {
-  return createHmac('sha256', masterKey).update(userId).digest();
-}
-
-function decryptBlobWithKey(row: UserSettingsRow, key: Buffer): Record<string, string> | null {
-  if (!row.payload_secret_ciphertext || !row.payload_secret_iv || !row.payload_secret_tag) return null;
-  const iv = Buffer.from(row.payload_secret_iv, 'base64');
-  const tag = Buffer.from(row.payload_secret_tag, 'base64');
-  const ct = Buffer.from(row.payload_secret_ciphertext, 'base64');
-  const dec = createDecipheriv(ALGORITHM, key, iv);
-  dec.setAuthTag(tag);
-  const out = Buffer.concat([dec.update(ct), dec.final()]).toString('utf8');
-  const parsed = JSON.parse(out) as unknown;
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const result: Record<string, string> = {};
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'string') result[k] = v;
-      else if (typeof v === 'number' || typeof v === 'boolean') result[k] = String(v);
-    }
-    return result;
-  }
-  return null;
-}
-
-function decryptBlob(row: UserSettingsRow, key: Buffer): Record<string, string> | null {
-  try {
-    return decryptBlobWithKey(row, deriveUserKey(key, row.user_id));
-  } catch (e) {
-    try {
-      return decryptBlobWithKey(row, key);
-    } catch {
-      console.warn(`user-config: decrypt failed for ${row.user_id.slice(0, 8)}: ${(e as Error).message}`);
-      return null;
-    }
-  }
-}
-
 function plainAsString(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
   if (typeof value === 'string') return value;
@@ -165,15 +126,6 @@ function buildConfig(userId: string, secret: Record<string, string> | null, plai
     if (env !== undefined && env !== '') return env;
     return fallback;
   };
-  const getSecret = (key: string, fallback?: string): string | undefined => {
-    const s = secretMap[key];
-    if (s !== undefined && s !== '') return s;
-    return getPlain(key, fallback);
-  };
-  // STRICT per-user getters: read ONLY this user's encrypted/plain blob — never
-  // process.env. Use these for per-user credentials in a multi-tenant context so
-  // one user's missing keys can't fall back to the operator's env keys (which
-  // would let them act on the operator's broker/exchange accounts).
   const getUserSecret = (key: string): string | undefined => {
     const s = secretMap[key];
     return s !== undefined && s !== '' ? s : undefined;
@@ -181,6 +133,14 @@ function buildConfig(userId: string, secret: Record<string, string> | null, plai
   const getUserPlain = (key: string): string | undefined => {
     const p = plainAsString(plainMap[key]);
     return p !== undefined && p !== '' ? p : undefined;
+  };
+  const getSecret = (key: string, fallback?: string): string | undefined => {
+    const s = getUserSecret(key);
+    if (s !== undefined) return s;
+    // A credential never falls back to the operator's env (rule: no
+    // operator-key fallback for user operations).
+    if (CREDENTIAL_OVERLAY_KEYS.has(key)) return getUserPlain(key) ?? fallback;
+    return getPlain(key, fallback);
   };
   const getNumber = (key: string, fallback?: number): number | undefined => {
     const raw = getSecret(key);
@@ -196,22 +156,14 @@ function buildConfig(userId: string, secret: Record<string, string> | null, plai
     if (['false', '0', 'no', 'off'].includes(lower)) return false;
     return fallback;
   };
-  return Object.freeze({
-    userId,
-    getSecret,
-    getPlain,
-    getUserSecret,
-    getUserPlain,
-    getNumber,
-    getBool,
-  });
+  return Object.freeze({ userId, getSecret, getPlain, getUserSecret, getUserPlain, getNumber, getBool });
 }
 
 async function fetchRow(userId: string): Promise<UserSettingsRow | null> {
   const client = defaultClient();
   const { data, error } = await client
     .from('user_settings')
-    .select('user_id, payload_plain, payload_secret_ciphertext, payload_secret_iv, payload_secret_tag, updated_at')
+    .select('user_id, payload_plain, payload_secret_ciphertext, payload_secret_iv, payload_secret_tag, seal_version, seal, secret_inbox, updated_at')
     .eq('user_id', userId)
     .maybeSingle();
   if (error) {
@@ -221,82 +173,165 @@ async function fetchRow(userId: string): Promise<UserSettingsRow | null> {
   return (data as UserSettingsRow | null) ?? null;
 }
 
-/**
- * Load (and cache) the per-user config provider.
- * Cache TTL: 60s. Call refreshUserConfig(userId) after a settings write
- * to invalidate.
- */
-export async function loadUserConfig(userId: string): Promise<UserConfig> {
+async function cachedRow(userId: string): Promise<UserSettingsRow | null> {
   const now = Date.now();
   const hit = cache.get(userId);
-  if (hit && hit.expiresAt > now) return hit.value;
-
+  if (hit && hit.expiresAt > now) return hit.row;
   let row: UserSettingsRow | null = null;
   try {
     row = await fetchRow(userId);
   } catch (e) {
     console.warn(`user-config: load failed for ${userId.slice(0, 8)}: ${(e as Error).message}`);
   }
-
-  let secretBlob: Record<string, string> | null = null;
-  if (row) {
-    const key = loadEncryptionKey();
-    if (key) secretBlob = decryptBlob(row, key);
-  }
-
-  const config = buildConfig(userId, secretBlob, row?.payload_plain ?? null);
-  cache.set(userId, { value: config, expiresAt: now + CACHE_TTL_MS });
-
-  // One-shot per-user load log so prod can verify user_settings is the
-  // source of truth (vs env fallback). Cache TTL means this prints
-  // ~once per minute per user, which is quiet enough.
-  const secretCount = secretBlob ? Object.keys(secretBlob).length : 0;
-  const plainCount = row?.payload_plain ? Object.keys(row.payload_plain as Record<string, unknown>).length : 0;
-  console.log(`user-config: loaded ${userId.slice(0, 8)}… secrets=${secretCount} plain=${plainCount} ${row ? 'from db' : '(no row, env-only)'}`);
-
-  return config;
+  cache.set(userId, { row, expiresAt: now + CACHE_TTL_MS });
+  return row;
 }
 
-/** Drop the cached config for a user — next loadUserConfig will refetch. */
+function rowCipher(row: UserSettingsRow | null): CipherBlob | null {
+  if (!row?.payload_secret_ciphertext || !row.payload_secret_iv || !row.payload_secret_tag) return null;
+  return { ciphertext: row.payload_secret_ciphertext, iv: row.payload_secret_iv, tag: row.payload_secret_tag };
+}
+
+function rowSeal(row: UserSettingsRow | null): SealRecord | null {
+  return row && row.seal_version === 2 && isSealRecord(row.seal) ? row.seal : null;
+}
+
+function rowInbox(row: UserSettingsRow | null): InboxEntry[] {
+  return Array.isArray(row?.secret_inbox) ? (row!.secret_inbox as unknown[]).filter(isInboxEntry) : [];
+}
+
+/** True when the row has secrets that need a user key (sealed or legacy). */
+function hasSecrets(row: UserSettingsRow | null): boolean {
+  return !!rowCipher(row) || rowInbox(row).length > 0;
+}
+
+/**
+ * Load the per-user config plus lock state. Secrets are unsealed only when
+ * the user has an unlocked session; pending OAuth inbox tokens are merged
+ * into the sealed blob at the same time.
+ */
+export async function loadUserConfigState(userId: string): Promise<UserConfigState> {
+  let row = await cachedRow(userId);
+  const plain = row?.payload_plain ?? null;
+  const seal = rowSeal(row);
+
+  if (!seal) {
+    if (rowCipher(row)) {
+      return {
+        status: 'legacy',
+        config: buildConfig(userId, null, plain),
+        reason: 'locked: set a passphrase at b1dz.com/settings to migrate your keys and resume',
+      };
+    }
+    return { status: 'no-secrets', config: buildConfig(userId, null, plain) };
+  }
+
+  if (!hasSecrets(row)) return { status: 'no-secrets', config: buildConfig(userId, null, plain) };
+
+  const dek = unlockStore.get(userId);
+  if (!dek) {
+    return {
+      status: 'locked',
+      config: buildConfig(userId, null, plain),
+      reason: 'locked: unlock to resume (b1dz.com/settings or `b1dz unlock`)',
+    };
+  }
+
+  let secret: Record<string, string> = {};
+  const cipher = rowCipher(row);
+  try {
+    if (cipher) secret = await unsealSecrets(dek, cipher, userId);
+  } catch {
+    console.warn(`user-config: unseal failed for ${userId.slice(0, 8)} (stale key?) — locking`);
+    unlockStore.lock(userId);
+    return { status: 'locked', config: buildConfig(userId, null, plain), reason: 'locked: key no longer matches, unlock again' };
+  }
+
+  const inbox = rowInbox(row);
+  if (inbox.length > 0) {
+    try {
+      const { patch, consumed } = await openInbox(dek, seal, inbox, userId);
+      if (consumed.length > 0) {
+        secret = { ...secret, ...patch };
+        await writeSealed(userId, dek, secret, inbox.filter((e) => !consumed.includes(e.id)));
+        row = await cachedRow(userId);
+        console.log(`user-config: merged ${consumed.length} OAuth inbox entr${consumed.length === 1 ? 'y' : 'ies'} for ${userId.slice(0, 8)}…`);
+      }
+    } catch (e) {
+      console.warn(`user-config: inbox merge failed for ${userId.slice(0, 8)}: ${(e as Error).message}`);
+    }
+  }
+
+  return { status: 'unlocked', config: buildConfig(userId, secret, row?.payload_plain ?? plain) };
+}
+
+/** Back-compat: the config only (secrets empty when locked). */
+export async function loadUserConfig(userId: string): Promise<UserConfig> {
+  return (await loadUserConfigState(userId)).config;
+}
+
+/** Drop the cached row for a user — next load refetches. */
 export function refreshUserConfig(userId: string): void {
   cache.delete(userId);
 }
 
-/**
- * Merge `patch` into the user's encrypted secret blob and persist it
- * (decrypt → assign → re-encrypt → upsert), then invalidate the cache. Used by
- * the daemon's OAuth token auto-refresh to write the fresh access token back.
- * No-op (throws) if SETTINGS_ENCRYPTION_KEY is missing.
- */
-export async function mergeUserSecret(userId: string, patch: Record<string, string>): Promise<void> {
-  const key = loadEncryptionKey();
-  if (!key) throw new Error('mergeUserSecret: SETTINGS_ENCRYPTION_KEY unavailable');
-  const row = await fetchRow(userId);
-  const existing = row ? decryptBlob(row, key) ?? {} : {};
-  const merged: Record<string, string> = { ...existing, ...patch };
+/** Control endpoint: is this the user's data key? (checked against seal.key_check) */
+export async function verifyUnlockKey(userId: string, dek: Uint8Array): Promise<'ok' | 'no-seal' | 'bad-key'> {
+  refreshUserConfig(userId);
+  const seal = rowSeal(await cachedRow(userId));
+  if (!seal) return 'no-seal';
+  return (await verifyDataKey(dek, seal, userId)) ? 'ok' : 'bad-key';
+}
 
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(ALGORITHM, deriveUserKey(key, userId), iv);
-  const ct = Buffer.concat([cipher.update(JSON.stringify(merged), 'utf8'), cipher.final()]);
-  const client = defaultClient();
-  const { error } = await client.from('user_settings').upsert(
-    {
-      user_id: userId,
-      payload_secret_ciphertext: ct.toString('base64'),
-      payload_secret_iv: iv.toString('base64'),
-      payload_secret_tag: cipher.getAuthTag().toString('base64'),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id' },
-  );
+async function writeSealed(userId: string, dek: Uint8Array, secret: Record<string, string>, inbox?: InboxEntry[]): Promise<void> {
+  const blob = await sealSecrets(dek, secret, userId);
+  const update: Record<string, unknown> = {
+    payload_secret_ciphertext: blob.ciphertext,
+    payload_secret_iv: blob.iv,
+    payload_secret_tag: blob.tag,
+    updated_at: new Date().toISOString(),
+  };
+  if (inbox) update.secret_inbox = inbox;
+  const { error } = await defaultClient().from('user_settings').update(update).eq('user_id', userId).eq('seal_version', 2);
   if (error) throw new Error(error.message);
   refreshUserConfig(userId);
+}
+
+/**
+ * Merge `patch` into the user's sealed secret blob and persist it. Used by
+ * the OAuth auto-refresh. Requires an unlocked session (the data key); a
+ * locked user's token is left to expire and they re-link or unlock.
+ */
+export async function mergeUserSecret(userId: string, patch: Record<string, string>): Promise<void> {
+  const dek = unlockStore.get(userId);
+  if (!dek) throw new Error('mergeUserSecret: user is locked');
+  refreshUserConfig(userId);
+  const row = await cachedRow(userId);
+  if (!rowSeal(row)) throw new Error('mergeUserSecret: user has no sealed settings');
+  const cipher = rowCipher(row);
+  const existing = cipher ? await unsealSecrets(dek, cipher, userId) : {};
+  await writeSealed(userId, dek, { ...existing, ...patch });
+}
+
+/**
+ * Operator scripts (apps/daemon/scripts/*): unlock a user in THIS process
+ * from B1DZ_VAULT_PASSPHRASE (or a prompt-supplied passphrase). Same rules as
+ * the daemon: memory only, short TTL.
+ */
+export async function unlockWithPassphraseForScript(userId: string, passphrase = process.env.B1DZ_VAULT_PASSPHRASE): Promise<void> {
+  if (!passphrase) throw new Error('set B1DZ_VAULT_PASSPHRASE to unlock this user for the script');
+  refreshUserConfig(userId);
+  const seal = rowSeal(await cachedRow(userId));
+  if (!seal) throw new Error('user has no sealed settings (set a passphrase at b1dz.com/settings)');
+  const { unlockSeal } = await import('@b1dz/core/sealed-secrets');
+  const dek = await unlockSeal(seal, passphrase, userId);
+  unlockStore.unlock(userId, dek, 15 * 60);
+  dek.fill(0);
 }
 
 /** Test hook: drop all cached entries. */
 export function clearUserConfigCacheForTesting(): void {
   cache.clear();
-  warnedNoKey = false;
 }
 
 /**
@@ -346,6 +381,42 @@ const CREDENTIAL_OVERLAY_KEYS = new Set<string>([
   'COINBASE_API_PRIVATE_KEY_B64',
   'ZEROX_API_KEY',
 ]);
+
+/** Operator service credentials that do not hold or move user funds (data
+ *  APIs, egress proxy, inference). They stay in env for the operator's own
+ *  infrastructure; the per-tick overlay still strips them for users. */
+const OPERATOR_SERVICE_KEYS = new Set<string>([
+  'PROXY_USERNAME',
+  'PROXY_PASSWORD',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'ONEINCH_API_KEY',
+  'ZEROX_API_KEY',
+  'PUMPPORTAL_API_KEY',
+]);
+
+/** Credential key names (for tests and the startup scrub). */
+export function credentialKeys(): readonly string[] {
+  return [...CREDENTIAL_OVERLAY_KEYS];
+}
+
+/**
+ * Remove operator wallet keys and exchange secrets (SOLANA_PRIVATE_KEY,
+ * EVM_PRIVATE_KEY, Coinbase/Kraken/Binance.US/Gemini) from process.env at daemon start, so no code path can fall
+ * back to them. The operator trades as a normal user who unlocks. Returns the
+ * NAMES removed (never values).
+ */
+export function scrubOperatorCredentialEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const removed: string[] = [];
+  for (const k of CREDENTIAL_OVERLAY_KEYS) {
+    if (OPERATOR_SERVICE_KEYS.has(k)) continue;
+    if (env[k] !== undefined) {
+      delete env[k];
+      removed.push(k);
+    }
+  }
+  return removed;
+}
 
 /** Exposed for tests — verifies the overlay covers every user-settable
  *  catalog key plus the extras. The list itself is stable across
