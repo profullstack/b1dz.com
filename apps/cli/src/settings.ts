@@ -15,7 +15,7 @@ const SECRET_FIELDS = [
     'BINANCE_US_API_KEY', 'BINANCE_US_API_SECRET',
     'GEMINI_API_KEY', 'GEMINI_API_SECRET',
   ]],
-  ['DEX', ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY']],
+  ['DEX', ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY', 'X402_PRIVATE_KEY']],
 ] as const;
 
 const PLAIN_GROUPS: { name: string; fields: string[] }[] = [

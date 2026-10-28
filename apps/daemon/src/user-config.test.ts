@@ -205,10 +205,12 @@ describe('no operator env fallback', () => {
   it('startup scrub removes wallet keys and exchange secrets from env, returns names only', () => {
     const env: NodeJS.ProcessEnv = {
       SOLANA_PRIVATE_KEY: 's', EVM_PRIVATE_KEY: 'e', GEMINI_API_SECRET: 'g', COINBASE_API_PRIVATE_KEY_B64: 'c',
-      PROXY_PASSWORD: 'p', SUPABASE_SECRET_KEY: 'db', BASE_RPC_URL: 'r',
+      PROXY_PASSWORD: 'p', SUPABASE_SECRET_KEY: 'db', BASE_RPC_URL: 'r', X402_PRIVATE_KEY: 'x',
     };
     const removed = scrubOperatorCredentialEnv(env);
-    expect(removed.sort()).toEqual(['COINBASE_API_PRIVATE_KEY_B64', 'EVM_PRIVATE_KEY', 'GEMINI_API_SECRET', 'SOLANA_PRIVATE_KEY']);
+    // The x402 payer key is a wallet key too: the operator's copy is scrubbed and
+    // only an unlocked user's sealed X402_PRIVATE_KEY reaches a tick.
+    expect(removed.sort()).toEqual(['COINBASE_API_PRIVATE_KEY_B64', 'EVM_PRIVATE_KEY', 'GEMINI_API_SECRET', 'SOLANA_PRIVATE_KEY', 'X402_PRIVATE_KEY']);
     expect(env.SOLANA_PRIVATE_KEY).toBeUndefined();
     expect(env.PROXY_PASSWORD).toBe('p');
     expect(env.SUPABASE_SECRET_KEY).toBe('db');

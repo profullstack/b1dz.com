@@ -10,7 +10,7 @@ import {
   type VaultKey,
 } from '../shared';
 
-const SECRET_FIELDS = ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY'] as const;
+const SECRET_FIELDS = ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY', 'X402_PRIVATE_KEY'] as const;
 type SecretField = typeof SECRET_FIELDS[number];
 
 export function DexSection({
@@ -105,6 +105,7 @@ export function DexSection({
       {secretRow('ONEINCH_API_KEY', '1inch API key', 'Required for 1inch quote/swap router')}
       {secretRow('EVM_PRIVATE_KEY', 'EVM hot wallet privkey', '0x… 64-hex (no quotes). Signs Base / Ethereum txs.')}
       {secretRow('SOLANA_PRIVATE_KEY', 'Solana hot wallet privkey', 'base58 secret key (88 chars) or JSON array')}
+      {secretRow('X402_PRIVATE_KEY', 'x402 payer privkey', '0x… 64-hex. Buys crawler passes for the deal sources (Base USDC, $5 cap per payment).')}
     </SectionShell>
   );
 }
