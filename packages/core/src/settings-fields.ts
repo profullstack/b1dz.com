@@ -42,6 +42,9 @@ export const SECRET_FIELDS = [
   // Hot wallets
   'EVM_PRIVATE_KEY',
   'SOLANA_PRIVATE_KEY',
+  // x402 payer (Base USDC) for the deal sources' crawler passes. The operator's
+  // crawler wallet lives here, sealed, never in the daemon's env.
+  'X402_PRIVATE_KEY',
   // Proxy creds
   'PROXY_USERNAME',
   'PROXY_PASSWORD',
