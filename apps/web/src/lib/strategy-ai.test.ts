@@ -34,7 +34,7 @@ const validDoc = {
 describe('generateStrategy', () => {
   it('returns a validated definition + description on a good response', async () => {
     const fetchImpl = fetchReturning(JSON.stringify(validDoc));
-    const res = await generateStrategy(input, { apiKey: 'sk-test', fetchImpl });
+    const res = await generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl });
     expect((res.definition as { id: string }).id).toBe('ai-rsi');
     expect(res.description).toMatch(/oversold/);
     expect(fetchImpl).toHaveBeenCalledOnce();
@@ -43,7 +43,7 @@ describe('generateStrategy', () => {
   it('repairs once when the first document is invalid', async () => {
     const bad = JSON.stringify({ definition: { tsp: '0.1', id: 'x', name: 'X' }, description: '' }); // missing definition body
     const fetchImpl = fetchReturning(bad, JSON.stringify(validDoc));
-    const res = await generateStrategy(input, { apiKey: 'sk-test', fetchImpl });
+    const res = await generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl });
     expect((res.definition as { id: string }).id).toBe('ai-rsi');
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -51,12 +51,12 @@ describe('generateStrategy', () => {
   it('throws after a second invalid attempt', async () => {
     const bad = JSON.stringify({ definition: { kind: 'nope' } });
     const fetchImpl = fetchReturning(bad, bad);
-    await expect(generateStrategy(input, { apiKey: 'sk-test', fetchImpl })).rejects.toThrow(/invalid strategy/);
+    await expect(generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl })).rejects.toThrow(/invalid strategy/);
   });
 
   it('tolerates prose around the JSON object', async () => {
     const text = `Here you go:\n${JSON.stringify(validDoc)}\nHope that helps!`;
-    const res = await generateStrategy(input, { apiKey: 'sk-test', fetchImpl: fetchReturning(text) });
+    const res = await generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl: fetchReturning(text) });
     expect((res.definition as { id: string }).id).toBe('ai-rsi');
   });
 
@@ -68,6 +68,6 @@ describe('generateStrategy', () => {
 
   it('surfaces an HTTP error from the model', async () => {
     const fetchImpl: FetchLike = async () => ({ ok: false, status: 500, text: async () => 'boom' });
-    await expect(generateStrategy(input, { apiKey: 'sk-test', fetchImpl })).rejects.toThrow(/http 500/);
+    await expect(generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl })).rejects.toThrow(/http 500/);
   });
 });
