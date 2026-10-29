@@ -1,50 +1,85 @@
 {
-  "name": "@b1dz/cli",
-  "version": "0.3.10",
-  "private": true,
+  "name": "@profullstack/b1dz",
+  "version": "0.4.0",
+  "description": "b1dz CLI and TUI: crypto arbitrage terminal for b1dz.com (dashboard, backtests, quote observer, account setup).",
   "type": "module",
   "bin": {
-    "b1dz": "./bin/b1dz"
+    "b1dz": "./dist/b1dz.js"
+  },
+  "files": [
+    "dist/b1dz.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "homepage": "https://b1dz.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/profullstack/b1dz.com.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/profullstack/b1dz.com/issues"
+  },
+  "keywords": [
+    "b1dz",
+    "crypto",
+    "arbitrage",
+    "trading",
+    "tui",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bundle": "node scripts/bundle.mjs",
+    "prepublishOnly": "node scripts/bundle.mjs"
   },
   "dependencies": {
+    "@profullstack/pluginstore": "^0.1.2",
+    "@supabase/supabase-js": "^2.118.0",
+    "blessed": "^0.1.81",
+    "chalk": "^6.0.1",
+    "cli-table3": "^0.6.5",
+    "object-assign": "^4.1.1",
+    "react": "^17.0.2",
+    "react-blessed": "^0.7.2",
+    "redis": "6.3.0",
+    "viem": "^2.57.11",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@b1dz/adapters-cex": "workspace:*",
+    "@b1dz/adapters-evm": "workspace:*",
+    "@b1dz/adapters-pumpfun": "workspace:*",
+    "@b1dz/adapters-solana": "workspace:*",
     "@b1dz/core": "workspace:*",
-    "@b1dz/storage-json": "workspace:*",
-    "@b1dz/storage-supabase": "workspace:*",
+    "@b1dz/event-channel": "workspace:*",
+    "@b1dz/observe-engine": "workspace:*",
+    "@b1dz/profitability": "workspace:*",
+    "@b1dz/projection-engine": "workspace:*",
+    "@b1dz/sdk": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/source-nichedb": "workspace:*",
     "@b1dz/source-strategies": "workspace:*",
     "@b1dz/storage-b1dz-api": "workspace:*",
-    "@b1dz/sdk": "workspace:*",
-    "@b1dz/venue-types": "workspace:*",
-    "@b1dz/adapters-evm": "workspace:*",
-    "@b1dz/adapters-solana": "workspace:*",
-    "@b1dz/adapters-cex": "workspace:*",
-    "@b1dz/adapters-pumpfun": "workspace:*",
-    "@b1dz/projection-engine": "workspace:*",
-    "@b1dz/profitability": "workspace:*",
-    "@b1dz/event-channel": "workspace:*",
-    "@b1dz/observe-engine": "workspace:*",
+    "@b1dz/storage-json": "workspace:*",
+    "@b1dz/storage-supabase": "workspace:*",
     "@b1dz/trade-daemon": "workspace:*",
-    "@supabase/supabase-js": "latest",
-    "chalk": "latest",
-    "cli-table3": "latest",
-    "blessed": "^0.1.81",
-    "react-blessed": "^0.7.2",
-    "blessed-contrib": "^4.11.0",
-    "react": "^17.0.2",
-    "dotenv": "latest"
-  },
-  "devDependencies": {
+    "@b1dz/venue-types": "workspace:*",
     "@types/node": "latest",
-    "@types/react": "^19.0.0",
+    "@types/react": "^19.3.0",
+    "blessed-contrib": "^4.11.0",
+    "dotenv": "latest",
+    "esbuild": "^0.28.2",
     "tsx": "latest",
     "typescript": "latest",
     "vitest": "latest"

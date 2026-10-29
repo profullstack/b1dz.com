@@ -52,14 +52,14 @@ describe('auth form guard', () => {
 
   it('lets a rendered, human-paced signup through', async () => {
     const m = await load();
-    const res = await m.signup.POST(req('/api/auth/signup', { email: 'a@b.com', password: 'password123', ...(await tokenFields(m.guard, 'signupGuard')) }));
+    const res = await m.signup.POST(req('/api/auth/signup', { email: 'a@b.com', password: 'password123', first_name: 'Ada', last_name: 'Lovelace', ...(await tokenFields(m.guard, 'signupGuard')) }));
     expect(res.status).toBe(200);
     expect(signUpMock).toHaveBeenCalledTimes(1);
   });
 
   it('drops a signup that never rendered the page: fake success, no mail', async () => {
     const m = await load();
-    const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123' }));
+    const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123', first_name: 'Ada', last_name: 'Lovelace' }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ user: null, session: null, needsEmailConfirmation: true });
     expect(signUpMock).not.toHaveBeenCalled();
@@ -67,7 +67,7 @@ describe('auth form guard', () => {
 
   it('asks a too-fast submission to retry rather than dropping it', async () => {
     const m = await load();
-    const res = await m.signup.POST(req('/api/auth/signup', { email: 'a@b.com', password: 'password123', ...(await tokenFields(m.guard, 'signupGuard', 0)) }));
+    const res = await m.signup.POST(req('/api/auth/signup', { email: 'a@b.com', password: 'password123', first_name: 'Ada', last_name: 'Lovelace', ...(await tokenFields(m.guard, 'signupGuard', 0)) }));
     expect(res.status).toBe(400);
     expect(signUpMock).not.toHaveBeenCalled();
   });
@@ -76,7 +76,7 @@ describe('auth form guard', () => {
     const m = await load();
     const fields = await tokenFields(m.guard, 'signupGuard');
     const honeypot = m.guard.signupGuard!.fields('x').honeypot.name;
-    const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123', ...fields, [honeypot]: 'gotcha' }));
+    const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123', first_name: 'Ada', last_name: 'Lovelace', ...fields, [honeypot]: 'gotcha' }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ user: null, session: null, needsEmailConfirmation: true });
     expect(signUpMock).not.toHaveBeenCalled();
@@ -84,7 +84,7 @@ describe('auth form guard', () => {
 
   it('refuses the scripted quoted user-agent with a 403 ThreatCrush can ban on', async () => {
     const m = await load();
-    const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123', ...(await tokenFields(m.guard, 'signupGuard')) }, { ua: `"${BROWSER_UA}"` }));
+    const res = await m.signup.POST(req('/api/auth/signup', { email: 'victim@example.com', password: 'password123', first_name: 'Ada', last_name: 'Lovelace', ...(await tokenFields(m.guard, 'signupGuard')) }, { ua: `"${BROWSER_UA}"` }));
     expect(res.status).toBe(403);
     expect(signUpMock).not.toHaveBeenCalled();
   });
@@ -93,7 +93,7 @@ describe('auth form guard', () => {
     const m = await load();
     const statuses: number[] = [];
     for (let i = 0; i < 6; i++) {
-      const r = req('/api/auth/signup', { email: `s${i}@b.com`, password: 'password123', ...(await tokenFields(m.guard, 'signupGuard')) }, { ip: '192.0.2.44' });
+      const r = req('/api/auth/signup', { email: `s${i}@b.com`, password: 'password123', first_name: 'Ada', last_name: 'Lovelace', ...(await tokenFields(m.guard, 'signupGuard')) }, { ip: '192.0.2.44' });
       r.headers.set('x-real-ip', '192.0.2.44');
       r.headers.set('cf-connecting-ip', `10.9.8.${i}`);
       statuses.push((await m.signup.POST(r)).status);
@@ -105,7 +105,7 @@ describe('auth form guard', () => {
     const m = await load();
     const statuses: number[] = [];
     for (let i = 0; i < 6; i++) {
-      const res = await m.signup.POST(req('/api/auth/signup', { email: `a${i}@b.com`, password: 'password123', ...(await tokenFields(m.guard, 'signupGuard')) }, { ip: '198.51.100.9' }));
+      const res = await m.signup.POST(req('/api/auth/signup', { email: `a${i}@b.com`, password: 'password123', first_name: 'Ada', last_name: 'Lovelace', ...(await tokenFields(m.guard, 'signupGuard')) }, { ip: '198.51.100.9' }));
       statuses.push(res.status);
     }
     expect(statuses.slice(0, 5)).toEqual([200, 200, 200, 200, 200]);

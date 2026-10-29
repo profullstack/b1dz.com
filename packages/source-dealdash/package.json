@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/source-dealdash",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -16,8 +16,8 @@
   },
   "dependencies": {
     "@b1dz/core": "workspace:*",
-    "@profullstack/x402-client": "0.2.0",
-    "got-scraping": "^4.2.1",
+    "@profullstack/x402-client": "0.3.0",
+    "got-scraping": "^4.2.2",
     "puppeteer": "latest",
     "puppeteer-extra": "latest",
     "puppeteer-extra-plugin-stealth": "latest"

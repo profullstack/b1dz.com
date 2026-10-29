@@ -11,6 +11,13 @@ b1dz connects to centralized exchanges (Kraken, Coinbase, Binance.US, Gemini) an
 - [Sign up](https://b1dz.com/signup): Create an account and start trading.
 - [Sign in](https://b1dz.com/login): Log in to the dashboard and console.
 
+## Install the CLI
+
+- One line: `curl -fsSL https://b1dz.com/install.sh | sh` (uses Bun if present, else npm with Node >= 22; never asks for keys).
+- Or: `npm install -g @profullstack/b1dz` / `bun add -g @profullstack/b1dz`. Command: `b1dz`.
+- Then `b1dz signup` (or `b1dz login`), `b1dz setup` to enter your own exchange keys, `b1dz tui` for the live dashboard.
+- Package: [npm @profullstack/b1dz](https://www.npmjs.com/package/@profullstack/b1dz)
+
 ## Features
 
 - Realtime Multi-Exchange Data: Persistent WebSocket feeds for prices, balances, spreads, and activity logs.

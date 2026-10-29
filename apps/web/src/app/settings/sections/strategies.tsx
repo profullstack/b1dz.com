@@ -11,6 +11,7 @@ import {
   readPlainBool,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 export function StrategiesSection({
@@ -19,7 +20,7 @@ export function StrategiesSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   // CEX Arb

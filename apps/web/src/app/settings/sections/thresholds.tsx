@@ -9,6 +9,7 @@ import {
   readPlainString,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 interface NumField { field: string; label: string; hint?: string; placeholder?: string }
@@ -61,7 +62,7 @@ export function ThresholdsSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   const initial = Object.fromEntries(ALL.map((f) => [f.field, readPlainNumber(data, f.field)]));

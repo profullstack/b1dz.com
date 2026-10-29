@@ -1,8 +1,8 @@
 /**
  * `b1dz setup [section]` — guided interactive walkthrough that prompts for
- * keys/values, encrypts secrets locally with the AES-256-GCM key fetched
- * from /api/settings/crypto-key, and PUTs the encrypted blob to
- * /api/settings. The server only ever sees ciphertext.
+ * keys/values, seals secrets locally under your vault passphrase (set up or
+ * migrated on first run), and PUTs the ciphertext to /api/settings. The
+ * server only ever sees ciphertext and holds no key for it.
  *
  * Run with no arg for the full guided tour. Run with a section name
  * (`coinbase`, `kraken`, `binance`, `gemini`, `oneinch`, `evm`, `solana`,
@@ -10,13 +10,8 @@
  */
 import { createInterface } from 'node:readline/promises';
 import { loadCredentials, promptPassword } from './auth.js';
-import { fetchCryptoKey, encryptJson, decryptJson, type CipherBlob } from './crypto-key.js';
-
-function apiBaseUrl(): string {
-  const url = process.env.B1DZ_API_URL;
-  if (!url) throw new Error('B1DZ_API_URL missing in .env');
-  return url;
-}
+import { sealSecrets, type CipherBlob } from '@b1dz/core/sealed-secrets';
+import { apiBaseUrl, openVault, type SettingsResponse } from './vault.js';
 
 const C = {
   bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
@@ -27,27 +22,12 @@ const C = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
 
-interface SettingsResponse {
-  plain: Record<string, string | number | boolean | null | undefined>;
-  cipher: CipherBlob | null;
-  lastUpdatedAt: string | null;
-  cryptoConfigured: boolean;
-}
-
 interface ApiCtx {
   accessToken: string;
   baseUrl: string;
-  /** Base64 AES-256-GCM key, fetched once on entry. May be null if server
-   *  reports SETTINGS_ENCRYPTION_KEY missing. */
-  keyB64: string | null;
-}
-
-async function fetchSettings(ctx: ApiCtx): Promise<SettingsResponse> {
-  const res = await fetch(`${ctx.baseUrl}/api/settings`, {
-    headers: { authorization: `Bearer ${ctx.accessToken}` },
-  });
-  if (!res.ok) throw new Error(`fetch settings: ${res.status}`);
-  return (await res.json()) as SettingsResponse;
+  /** The unlocked vault data key (memory only). */
+  dek: Uint8Array;
+  userId: string;
 }
 
 async function saveSettings(
@@ -266,11 +246,6 @@ async function runSection(
 
   // Apply secret changes to the full decrypted blob, then re-encrypt.
   const willTouchSecret = Object.keys(secretChanges).length > 0;
-  if (willTouchSecret && !ctx.keyB64) {
-    console.log(C.red('  ✗ encryption key unavailable; cannot save secrets'));
-    return { next: current, decrypted };
-  }
-
   const merged: Record<string, string> = { ...decrypted };
   for (const [k, v] of Object.entries(secretChanges)) {
     if (v === null) delete merged[k];
@@ -281,7 +256,7 @@ async function runSection(
   if (Object.keys(plainBody).length > 0) body.plain = plainBody;
   if (willTouchSecret) {
     body.cipher = Object.keys(merged).length > 0
-      ? encryptJson(ctx.keyB64!, merged)
+      ? await sealSecrets(ctx.dek, merged, ctx.userId)
       : null;
   }
 
@@ -303,38 +278,17 @@ export async function setup(args: string[]) {
   }
 
   const baseUrl = apiBaseUrl();
-  let keyB64: string | null = null;
+  let vault;
   try {
-    keyB64 = await fetchCryptoKey(baseUrl, c.accessToken);
+    vault = await openVault({ accessToken: c.accessToken, baseUrl }, { create: true });
   } catch (e) {
-    const msg = (e as Error).message;
-    if (msg.includes('not configured')) {
-      console.log(C.yellow(`⚠ ${msg} — secret saves will be blocked.`));
-    } else {
-      console.error(C.red(`could not fetch crypto key: ${msg}`));
-      process.exit(1);
-    }
-  }
-
-  const ctx: ApiCtx = { accessToken: c.accessToken, baseUrl, keyB64 };
-
-  let current: SettingsResponse;
-  try {
-    current = await fetchSettings(ctx);
-  } catch (e) {
-    console.error(C.red(`could not fetch settings: ${(e as Error).message}`));
+    console.error(C.red(`could not open vault: ${(e as Error).message}`));
     process.exit(1);
   }
-
-  // Decrypt the cipher locally so we can show "current" summaries and merge.
-  let decrypted: Record<string, string> = {};
-  if (current.cipher && keyB64) {
-    try {
-      decrypted = decryptJson<Record<string, string>>(keyB64, current.cipher);
-    } catch (e) {
-      console.log(C.yellow(`⚠ could not decrypt existing secrets: ${(e as Error).message}`));
-    }
-  }
+  if (!vault) process.exit(1);
+  const ctx: ApiCtx = { accessToken: c.accessToken, baseUrl, dek: vault.dek, userId: vault.userId };
+  let current: SettingsResponse = vault.settings;
+  let decrypted: Record<string, string> = vault.secrets;
 
   const wanted = args[0]?.toLowerCase();
   const sections = wanted
@@ -347,7 +301,7 @@ export async function setup(args: string[]) {
   }
 
   console.log(`\n${C.bold('b1dz setup')}  ${C.dim(`signed in as ${c.email}`)}`);
-  console.log(C.dim('Plaintext you enter is encrypted locally with AES-256-GCM and the encrypted blob is sent to the server. Press enter to skip a field. Type "clear" to remove an existing value.'));
+  console.log(C.dim('Secrets you enter are sealed locally under your vault passphrase; only ciphertext is sent. Press enter to skip a field. Type "clear" to remove an existing value.'));
 
   for (const s of sections) {
     const { next, decrypted: nextDecrypted } = await runSection(ctx, current, decrypted, s);
@@ -355,5 +309,6 @@ export async function setup(args: string[]) {
     decrypted = nextDecrypted;
   }
 
-  console.log(`\n${C.green('Setup complete.')}  Verify anytime with ${C.cyan('b1dz settings')}.\n`);
+  ctx.dek.fill(0);
+  console.log(`\n${C.green('Setup complete.')}  Verify anytime with ${C.cyan('b1dz settings')}. Run ${C.cyan('b1dz unlock')} to let the daemon trade with these keys.\n`);
 }

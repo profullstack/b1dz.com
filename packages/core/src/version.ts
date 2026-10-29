@@ -7,6 +7,13 @@ let cachedVersion: string | null = null;
 export function getB1dzVersion(): string {
   if (cachedVersion) return cachedVersion;
 
+  // The npm build of the CLI (@profullstack/b1dz) bakes its version in.
+  const bundled = process.env.B1DZ_BUNDLED_VERSION;
+  if (bundled) {
+    cachedVersion = bundled;
+    return cachedVersion;
+  }
+
   try {
     const root = findMonorepoRoot();
     const pkgPath = resolve(root, 'package.json');

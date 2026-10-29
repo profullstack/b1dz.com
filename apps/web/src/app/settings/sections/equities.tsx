@@ -11,6 +11,7 @@ import {
   readPlainString,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 /**
@@ -27,7 +28,7 @@ export function EquitiesSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   const [enabled, setEnabled] = useState(readPlainBool(data, 'EQUITIES_ENABLED'));

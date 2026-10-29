@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/source-crypto-arb",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -18,12 +18,12 @@
     "@b1dz/adapters-evm": "workspace:*",
     "@b1dz/core": "workspace:*",
     "@b1dz/source-nichedb": "workspace:*",
-    "undici": "^8.0.2",
-    "ws": "^8.20.0"
+    "undici": "^8.12.3",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "latest",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "^8.18.2",
     "typescript": "latest",
     "vitest": "latest"
   }

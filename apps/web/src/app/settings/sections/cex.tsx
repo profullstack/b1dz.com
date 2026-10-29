@@ -9,6 +9,7 @@ import {
   readPlainString,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 const SECRET_FIELDS = [
@@ -31,7 +32,7 @@ export function CexSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   cryptoUnavailable: boolean;
   onSaved: (next: SettingsResponse) => void;
 }) {

@@ -2,7 +2,7 @@
  * POST /api/store/install
  *
  * - free          → insert user_installed_plugins row, paid_until=null
- * - subscription  → require blockchain, create Coinpay invoice, return invoice details
+ * - subscription  → open a CoinPay hosted checkout session, return its url
  * - revshare      → insert active row, no paid_until (settled out-of-band)
  *
  * Rejects coming-soon entries; rejects duplicate active install (409).
@@ -10,12 +10,8 @@
 import type { NextRequest } from 'next/server';
 import { PLUGIN_CATALOG } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
-import {
-  coinpayConfigured,
-  createInvoiceForPlugin,
-  isSupportedBlockchain,
-  SUPPORTED_BLOCKCHAINS,
-} from '@/lib/coinpay-client';
+import { createAdminSupabase } from '@/lib/supabase';
+import { coinpayConfigured, createCheckoutForPlugin } from '@/lib/coinpay-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +25,7 @@ export async function POST(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const body = await req.json().catch(() => null) as { pluginId?: unknown; blockchain?: unknown } | null;
+  const body = await req.json().catch(() => null) as { pluginId?: unknown } | null;
   const pluginId = typeof body?.pluginId === 'string' ? body.pluginId : '';
   if (!pluginId) return Response.json({ error: 'pluginId required' }, { status: 400 });
 
@@ -41,7 +37,9 @@ export async function POST(req: NextRequest) {
   }
 
   // Reject duplicate active install
-  const c = auth.client as unknown as {
+  // Service role, scoped to auth.userId below: users have no write grant on
+  // user_installed_plugins (paid_until is the paid gate).
+  const c = createAdminSupabase() as unknown as {
     from: (t: string) => {
       select: (s: string) => {
         eq: (col: string, val: string) => {
@@ -86,28 +84,27 @@ export async function POST(req: NextRequest) {
     return Response.json({ installed: true, model: pricing.model });
   }
 
-  // subscription: needs Coinpay + blockchain
+  // subscription: hosted CoinPay checkout (any coin or PayPal)
   if (!coinpayConfigured()) {
     return Response.json(
-      { error: 'Coinpay payment processor not configured on this server', supportedBlockchains: SUPPORTED_BLOCKCHAINS },
+      { error: 'Coinpay payment processor not configured on this server' },
       { status: 503 },
     );
   }
-  if (!isSupportedBlockchain(body?.blockchain)) {
-    return Response.json(
-      { error: `blockchain required, must be one of: ${SUPPORTED_BLOCKCHAINS.join(', ')}` },
-      { status: 400 },
-    );
+  if (!auth.email) {
+    return Response.json({ error: 'your account needs an email address to check out' }, { status: 400 });
   }
 
   try {
-    const invoice = await createInvoiceForPlugin({
+    const invoice = await createCheckoutForPlugin({
       userId: auth.userId,
+      email: auth.email,
       pluginId,
       amountUsd: pricing.usdPerMonth,
-      blockchain: body!.blockchain as typeof SUPPORTED_BLOCKCHAINS[number],
-      description: `${entry.manifest.name} — monthly subscription`,
-      client: auth.client,
+      description: `b1dz: ${entry.manifest.name}, monthly subscription`,
+      kind: 'install',
+      // Service role: users cannot write invoices themselves (RLS has no write policy).
+      client: createAdminSupabase(),
     });
     return Response.json({ invoice });
   } catch (e) {

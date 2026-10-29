@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { PlainTextRow, SectionShell, readPlainString, saveSettings, type SettingsResponse } from '../shared';
+import { PlainTextRow, SectionShell, readPlainString, saveSettings, type SettingsResponse, type VaultKey } from '../shared';
 
 export function WalletsSection({
   data,
@@ -9,7 +9,7 @@ export function WalletsSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   const [evm, setEvm] = useState(readPlainString(data, 'EVM_WALLET_ADDRESS'));

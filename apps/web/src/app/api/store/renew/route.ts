@@ -1,18 +1,14 @@
 /**
  * POST /api/store/renew
- * Body: { pluginId, blockchain }
- * Creates a fresh Coinpay invoice for an existing subscription. The
+ * Body: { pluginId }
+ * Opens a fresh CoinPay checkout session for an existing subscription. The
  * webhook handler extends paid_until on confirmation.
  */
 import type { NextRequest } from 'next/server';
 import { PLUGIN_CATALOG } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
-import {
-  coinpayConfigured,
-  createInvoiceForPlugin,
-  isSupportedBlockchain,
-  SUPPORTED_BLOCKCHAINS,
-} from '@/lib/coinpay-client';
+import { createAdminSupabase } from '@/lib/supabase';
+import { coinpayConfigured, createCheckoutForPlugin } from '@/lib/coinpay-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +23,7 @@ export async function POST(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const body = await req.json().catch(() => null) as { pluginId?: unknown; blockchain?: unknown } | null;
+  const body = await req.json().catch(() => null) as { pluginId?: unknown } | null;
   const pluginId = typeof body?.pluginId === 'string' ? body.pluginId : '';
   if (!pluginId) return Response.json({ error: 'pluginId required' }, { status: 400 });
 
@@ -61,21 +57,20 @@ export async function POST(req: NextRequest) {
   if (!coinpayConfigured()) {
     return Response.json({ error: 'Coinpay payment processor not configured on this server' }, { status: 503 });
   }
-  if (!isSupportedBlockchain(body?.blockchain)) {
-    return Response.json(
-      { error: `blockchain required, must be one of: ${SUPPORTED_BLOCKCHAINS.join(', ')}` },
-      { status: 400 },
-    );
+  if (!auth.email) {
+    return Response.json({ error: 'your account needs an email address to check out' }, { status: 400 });
   }
 
   try {
-    const invoice = await createInvoiceForPlugin({
+    const invoice = await createCheckoutForPlugin({
       userId: auth.userId,
+      email: auth.email,
       pluginId,
       amountUsd: entry.pricing.usdPerMonth,
-      blockchain: body!.blockchain as typeof SUPPORTED_BLOCKCHAINS[number],
-      description: `${entry.manifest.name} — renewal`,
-      client: auth.client,
+      description: `b1dz: ${entry.manifest.name}, renewal`,
+      kind: 'renew',
+      // Service role: users cannot write invoices themselves (RLS has no write policy).
+      client: createAdminSupabase(),
     });
     return Response.json({ invoice });
   } catch (e) {

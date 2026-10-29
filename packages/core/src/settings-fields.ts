@@ -16,9 +16,9 @@
  * Adding a new user-facing setting: add it to one of the four arrays
  * below. The daemon's overlay automatically picks it up on next tick.
  *
- * The web layer encrypts/decrypts secrets client-side using the key
- * fetched from /api/settings/crypto-key. The server only stores
- * ciphertext for SECRET_FIELDS.
+ * Clients (web, CLI) seal SECRET_FIELDS under a key derived from the
+ * user's passphrase (see ./sealed-secrets.ts). The server only stores
+ * ciphertext and holds no key that opens it.
  */
 
 export const SECRET_FIELDS = [
@@ -42,6 +42,9 @@ export const SECRET_FIELDS = [
   // Hot wallets
   'EVM_PRIVATE_KEY',
   'SOLANA_PRIVATE_KEY',
+  // x402 payer (Base USDC) for the deal sources' crawler passes. The operator's
+  // crawler wallet lives here, sealed, never in the daemon's env.
+  'X402_PRIVATE_KEY',
   // Proxy creds
   'PROXY_USERNAME',
   'PROXY_PASSWORD',

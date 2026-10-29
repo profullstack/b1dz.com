@@ -11,10 +11,11 @@ import { EquitiesSection } from './sections/equities';
 import { CryptoBudgetSection } from './sections/crypto-budget';
 import { AiAnalyzerSection } from './sections/ai-analyzer';
 import { AgentsSection } from './sections/agents';
-import type { SettingsResponse } from './shared';
-import { importKey } from '@/lib/browser-crypto';
+import { ProfileSection } from './sections/profile';
+import type { SettingsResponse, VaultKey } from './shared';
+import { VaultPanel } from './vault-panel';
 
-type Tab = 'plugins' | 'wallets' | 'equities' | 'budget' | 'ai' | 'agents' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
+type Tab = 'profile' | 'plugins' | 'wallets' | 'equities' | 'budget' | 'ai' | 'agents' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'plugins', label: 'Plugins' },
@@ -27,13 +28,13 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'thresholds', label: 'Thresholds' },
   { id: 'strategies', label: 'Strategies' },
   { id: 'toggles', label: 'Toggles' },
+  { id: 'profile', label: 'Profile' },
 ];
 
 export function SettingsClient() {
   const [tab, setTab] = useState<Tab>('plugins');
   const [data, setData] = useState<SettingsResponse | null>(null);
-  const [cryptoKey, setCryptoKey] = useState<CryptoKey | null>(null);
-  const [keyError, setKeyError] = useState<string | null>(null);
+  const [cryptoKey, setCryptoKey] = useState<VaultKey | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [oauthNotice, setOauthNotice] = useState<{ ok: boolean; text: string } | null>(null);
@@ -46,8 +47,10 @@ export function SettingsClient() {
     const plugin = q.get('plugin') ?? 'broker';
     setOauthNotice(
       result === 'success'
-        ? { ok: true, text: `Connected ${plugin} via OAuth — token saved.` }
-        : { ok: false, text: `OAuth for ${plugin} did not complete (${result}). You can paste credentials instead.` },
+        ? { ok: true, text: `Connected ${plugin} via OAuth. The token is sealed to your vault; unlock to apply it.` }
+        : result === 'needs_passphrase'
+          ? { ok: false, text: `Set a vault passphrase first, then connect ${plugin} again.` }
+          : { ok: false, text: `OAuth for ${plugin} did not complete (${result}). You can paste credentials instead.` },
     );
     window.history.replaceState(null, '', '/settings');
   }, []);
@@ -67,26 +70,8 @@ export function SettingsClient() {
     }
   };
 
-  const loadKey = async () => {
-    setKeyError(null);
-    try {
-      const res = await fetch('/api/settings/crypto-key', { cache: 'no-store' });
-      if (res.status === 503) {
-        setKeyError('SETTINGS_ENCRYPTION_KEY is not configured on the server.');
-        return;
-      }
-      if (!res.ok) throw new Error(`crypto-key http ${res.status}`);
-      const { key } = (await res.json()) as { key: string };
-      const imported = await importKey(key);
-      setCryptoKey(imported);
-    } catch (e) {
-      setKeyError((e as Error).message);
-    }
-  };
-
   useEffect(() => {
     void refresh();
-    void loadKey();
   }, []);
 
   const onSaved = (next: SettingsResponse) => setData(next);
@@ -96,19 +81,11 @@ export function SettingsClient() {
       <header className="space-y-1">
         <h1 className="text-xl font-semibold text-zinc-100">Account settings</h1>
         <p className="text-sm text-zinc-400">
-          Secrets are encrypted in your browser with AES-256-GCM before being sent to the server. The server stores ciphertext only — plaintext never leaves your device. Click <span className="text-zinc-300">reveal</span> on any saved secret to decrypt it locally.
+          Secrets are sealed in your browser under a key derived from your vault passphrase (PBKDF2 + AES-256-GCM). b1dz stores ciphertext only and cannot decrypt it. Unlock to reveal or edit secrets, and unlock a trading session to let the daemon use them.
         </p>
-        {data && data.cryptoConfigured === false && (
-          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            Server-side encryption key (SETTINGS_ENCRYPTION_KEY) is not configured. Plaintext fields can be saved; secrets cannot.
-          </p>
-        )}
-        {keyError && data?.cryptoConfigured !== false && (
-          <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-            Could not load encryption key: {keyError}
-          </p>
-        )}
       </header>
+
+      {data && <VaultPanel data={data} vault={cryptoKey} onSaved={onSaved} onVault={setCryptoKey} />}
 
       {oauthNotice && (
         <p className={`rounded-lg border px-3 py-2 text-xs ${oauthNotice.ok ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/40 bg-amber-500/10 text-amber-300'}`}>
@@ -135,9 +112,11 @@ export function SettingsClient() {
       {loading && !data && <p className="text-sm text-zinc-500">loading…</p>}
       {error && <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</p>}
 
+      {tab === 'profile' && <ProfileSection />}
+
       {tab === 'plugins' && <PluginsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
 
-      {data && tab !== 'plugins' && (
+      {data && tab !== 'plugins' && tab !== 'profile' && (
         <div>
           {tab === 'wallets' && <WalletsSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}
           {tab === 'equities' && <EquitiesSection data={data} cryptoKey={cryptoKey} onSaved={onSaved} />}

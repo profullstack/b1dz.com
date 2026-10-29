@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/observe-engine",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -18,9 +18,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@b1dz/venue-types": "workspace:*",
+    "@b1dz/event-channel": "workspace:*",
     "@b1dz/profitability": "workspace:*",
-    "@b1dz/event-channel": "workspace:*"
+    "@b1dz/venue-types": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "latest",

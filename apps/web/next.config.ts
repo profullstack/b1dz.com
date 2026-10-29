@@ -41,10 +41,10 @@ const contentSecurityPolicy = [
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
   "connect-src 'self' https: wss:",
-  "frame-src 'self'",
+  "frame-src 'self' https://crawlproof.com",
   "frame-ancestors 'self'",
   "base-uri 'self'",
-  "form-action 'self'",
+  "form-action 'self' https://pit.world",
   "object-src 'none'",
 ].join('; ');
 
@@ -62,7 +62,17 @@ const config: NextConfig = {
   poweredByHeader: false,
   typescript: { ignoreBuildErrors: true },
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      // CLI installer is piped into sh: serve it as a shell script, never cached long.
+      {
+        source: '/install.sh',
+        headers: [
+          { key: 'Content-Type', value: 'text/x-shellscript; charset=utf-8' },
+          { key: 'Cache-Control', value: 'public, max-age=300' },
+        ],
+      },
+    ];
   },
   transpilePackages: [
     '@b1dz/ai-analyzer',

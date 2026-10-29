@@ -1,29 +1,44 @@
 'use client';
 
 import { useState } from 'react';
-import { encryptJson, decryptJson, type CipherBlob } from '@/lib/browser-crypto';
+import { sealSecrets, unsealSecrets, type CipherBlob, type InboxEntry, type SealRecord } from '@b1dz/core/sealed-secrets';
 
 export interface SettingsResponse {
+  userId: string;
   plain: Record<string, string | number | boolean | null | undefined>;
   cipher: CipherBlob | null;
+  seal: SealRecord | null;
+  sealVersion: 1 | 2;
+  inbox: InboxEntry[];
+  legacy: { pending: boolean; migrationOpen: boolean };
   lastUpdatedAt: string | null;
   cryptoConfigured: boolean;
+}
+
+/**
+ * The unlocked vault: the user's 32-byte data key (unwrapped in this browser
+ * from their passphrase) and their user id (bound into the AAD). Held in
+ * React state only: never localStorage, never sent anywhere except the
+ * trading-session unlock the user asks for.
+ */
+export interface VaultKey {
+  dek: Uint8Array;
+  userId: string;
 }
 
 export interface SaveBody {
   plain?: Record<string, string | number | boolean | null>;
   /**
    * The COMPLETE secret object after this section's edits, plaintext.
-   * Will be encrypted client-side before PUT. If undefined, cipher is
-   * not touched. If `null`, cipher is cleared.
+   * Sealed client-side before PUT. If undefined, cipher is not touched.
+   * If `null`, cipher is cleared.
    */
   secret?: Record<string, string> | null;
 }
 
 export interface SaveContext {
-  /** AES-256-GCM key for encrypting the secret blob. May be null if not yet
-   *  loaded or if SETTINGS_ENCRYPTION_KEY is not configured server-side. */
-  cryptoKey: CryptoKey | null;
+  /** The unlocked vault, or null while locked. */
+  cryptoKey: VaultKey | null;
 }
 
 export async function saveSettings(body: SaveBody, ctx: SaveContext): Promise<SettingsResponse> {
@@ -33,8 +48,8 @@ export async function saveSettings(body: SaveBody, ctx: SaveContext): Promise<Se
   if (body.secret === null) {
     wireBody.cipher = null;
   } else if (body.secret !== undefined) {
-    if (!ctx.cryptoKey) throw new Error('encryption key unavailable; cannot save secrets');
-    wireBody.cipher = await encryptJson(ctx.cryptoKey, body.secret);
+    if (!ctx.cryptoKey) throw new Error('vault locked: unlock with your passphrase to save secrets');
+    wireBody.cipher = await sealSecrets(ctx.cryptoKey.dek, body.secret, ctx.cryptoKey.userId);
   }
 
   const res = await fetch('/api/settings', {
@@ -50,15 +65,15 @@ export async function saveSettings(body: SaveBody, ctx: SaveContext): Promise<Se
 }
 
 /**
- * Decrypt the cipher blob to a plaintext secret map. Returns {} if there's
- * nothing to decrypt. Errors propagate so callers can surface them.
+ * Unseal the secret blob locally. Returns {} if there is nothing to decrypt
+ * or the vault is locked. Errors propagate so callers can surface them.
  */
 export async function decryptSecretBlob(
-  key: CryptoKey | null,
+  key: VaultKey | null,
   cipher: CipherBlob | null,
 ): Promise<Record<string, string>> {
   if (!cipher || !key) return {};
-  return decryptJson<Record<string, string>>(key, cipher);
+  return unsealSecrets(key.dek, cipher, key.userId);
 }
 
 interface SectionShellProps {

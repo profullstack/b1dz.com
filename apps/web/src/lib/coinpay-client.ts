@@ -1,9 +1,9 @@
 /**
  * CoinPay merchant integration wrapper.
  *
- * Wraps the @profullstack/coinpay SDK and provides a few helpers tied to
- * b1dz's plugin marketplace: invoice creation, status fetch, webhook
- * signature verification.
+ * Helpers for b1dz's plugin marketplace: hosted checkout sessions
+ * (POST /api/checkout/sessions, buyer picks any coin or PayPal on CoinPay),
+ * legacy payment status fetch, webhook signature verification.
  *
  * Env vars (all optional — if missing, free-plugin path still works):
  *   - COINPAY_API_KEY        (e.g. cp_live_xxxxx)
@@ -12,7 +12,6 @@
  *   - COINPAY_BASE_URL       (default https://coinpayportal.com/api)
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { createAdminSupabase } from './supabase';
 
 export interface CipherInvoice {
   id: string;
@@ -60,16 +59,6 @@ function coinpayBaseUrl(): string {
   return process.env.COINPAY_BASE_URL ?? 'https://coinpayportal.com/api';
 }
 
-export const SUPPORTED_BLOCKCHAINS = [
-  'BTC', 'BCH', 'ETH', 'POL', 'SOL',
-  'USDC_ETH', 'USDC_POL', 'USDC_BASE', 'USDC_SOL',
-] as const;
-export type SupportedBlockchain = typeof SUPPORTED_BLOCKCHAINS[number];
-
-export function isSupportedBlockchain(value: unknown): value is SupportedBlockchain {
-  return typeof value === 'string' && (SUPPORTED_BLOCKCHAINS as readonly string[]).includes(value);
-}
-
 /**
  * HMAC-SHA256(timestamp + '.' + raw_payload, COINPAY_WEBHOOK_SECRET).
  * Header format: `t=<timestamp>,v1=<hex>`. Reject if |now - timestamp| > 300.
@@ -115,100 +104,200 @@ export function verifyCoinPayWebhook(rawBody: string, signatureHeader: string | 
   }
 }
 
-interface CreateInvoiceResult {
+/** Every CoinPay checkout from this site carries this as its property. */
+export const PAYMENT_PROPERTY = 'b1dz.com';
+
+/** Invoices opened as a hosted checkout session store this as their blockchain (the buyer picks later). */
+export const CHECKOUT_BLOCKCHAIN = 'CHECKOUT';
+
+export const CHECKOUT_WINDOW_MINUTES = 60;
+
+function siteUrl(): string {
+  return (process.env.NEXT_PUBLIC_SITE_URL || 'https://b1dz.com').replace(/\/+$/, '');
+}
+
+export interface CheckoutSessionInput {
   invoiceId: string;
-  paymentAddress: string | null;
-  qrCode: string | null;
-  cryptoAmount: string | null;
-  blockchain: string;
+  userId: string;
+  email: string;
+  pluginId: string;
   amountUsd: number;
-  expiresAt: string | null;
-  coinpayPaymentId: string;
+  description: string;
+  kind: 'install' | 'renew';
+  siteUrl?: string;
 }
 
 /**
- * Create a Coinpay payment for a plugin subscription and persist the
- * invoice row. Uses the user-RLS-scoped Supabase client passed in (the
- * insert lives under the authenticated user's RLS policies).
+ * The POST /api/checkout/sessions body. The buyer's email is the CoinPay
+ * customer, the b1dz user id is the account, and our invoice id rides in
+ * metadata so the webhook can settle by it as well as by the session id.
  */
-export async function createInvoiceForPlugin(opts: {
+export function buildCheckoutSessionBody(input: CheckoutSessionInput): Record<string, unknown> {
+  const base = (input.siteUrl ?? siteUrl()).replace(/\/+$/, '');
+  return {
+    amount: input.amountUsd,
+    currency: 'USD',
+    description: input.description,
+    customer_email: input.email,
+    account_id: input.userId,
+    property: PAYMENT_PROPERTY,
+    metadata: {
+      invoice_id: input.invoiceId,
+      user_id: input.userId,
+      plugin_id: input.pluginId,
+      b1dz_kind: 'plugin_subscription',
+      b1dz_action: input.kind,
+    },
+    success_url: `${base}/store/invoice/${input.invoiceId}?session={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${base}/store`,
+    expires_in_minutes: CHECKOUT_WINDOW_MINUTES,
+  };
+}
+
+interface CheckoutSessionCreated {
+  id: string;
+  url: string;
+  expiresAt: string | null;
+}
+
+/** Open a CoinPay hosted checkout session; the buyer picks any coin or PayPal there. */
+export async function createCheckoutSession(
+  input: CheckoutSessionInput,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CheckoutSessionCreated> {
+  if (!coinpayConfigured()) throw new Error('Coinpay not configured (COINPAY_API_KEY / COINPAY_BUSINESS_ID missing)');
+  const baseUrl = coinpayBaseUrl().replace(/\/+$/, '');
+  const res = await fetchImpl(`${baseUrl}/checkout/sessions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${process.env.COINPAY_API_KEY!}`,
+      'idempotency-key': `b1dz-invoice-${input.invoiceId}`,
+    },
+    body: JSON.stringify(buildCheckoutSessionBody(input)),
+  });
+  const body = (await res.json().catch(() => ({}))) as { id?: string; url?: string; expires_at?: string; error?: string; code?: string };
+  if (!res.ok || !body.id || !body.url) {
+    throw new Error(`coinpay checkout session ${res.status}: ${(body.code ? `${body.code} ` : '') + (body.error ?? '')}`.trim());
+  }
+  // Only ever send buyers to CoinPay's own origin.
+  const origin = new URL(baseUrl).origin;
+  const u = new URL(body.url, origin);
+  if (u.origin !== origin) throw new Error('coinpay checkout session returned a foreign url');
+  return { id: body.id, url: u.toString(), expiresAt: body.expires_at ?? null };
+}
+
+export interface CheckoutSessionStatus {
+  status: string;
+  paymentId: string | null;
+  paidMethod: string | null;
+}
+
+/** GET /api/checkout/sessions/:id with the business key (owner view). */
+export async function fetchCheckoutSession(sessionId: string, fetchImpl: typeof fetch = fetch): Promise<CheckoutSessionStatus | null> {
+  if (!coinpayConfigured()) return null;
+  const baseUrl = coinpayBaseUrl().replace(/\/+$/, '');
+  const res = await fetchImpl(`${baseUrl}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: { authorization: `Bearer ${process.env.COINPAY_API_KEY!}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) return null;
+  const body = (await res.json().catch(() => ({}))) as {
+    session?: { status?: string; payment_id?: string | null; paid_reference?: string | null; paypal_transaction_id?: string | null; paid_method?: string | null };
+  };
+  if (!body.session?.status) return null;
+  const s = body.session;
+  return {
+    status: s.status!,
+    paymentId: s.paid_reference ?? s.payment_id ?? s.paypal_transaction_id ?? null,
+    paidMethod: s.paid_method ?? null,
+  };
+}
+
+interface CreateInvoiceResult {
+  invoiceId: string;
+  checkoutSessionId: string;
+  checkoutUrl: string;
+  amountUsd: number;
+  expiresAt: string | null;
+}
+
+type InvoiceClient = {
+  from: (t: string) => {
+    insert: (r: Record<string, unknown>) => {
+      select: (s: string) => {
+        single: () => Promise<{ data: { id: string } | null; error: { message: string } | null }>;
+      };
+    };
+    update: (r: Record<string, unknown>) => {
+      eq: (c: string, v: string) => Promise<{ error: { message: string } | null }>;
+    };
+  };
+};
+
+/**
+ * Open a hosted CoinPay checkout for a plugin subscription. The invoice row
+ * is written first (so its id can travel in the session metadata), then the
+ * session id and url are stored on it. Uses the user-RLS-scoped client.
+ */
+export async function createCheckoutForPlugin(opts: {
   userId: string;
+  email: string;
   pluginId: string;
   amountUsd: number;
-  blockchain: SupportedBlockchain;
-  description?: string;
-  /** Pass the per-user Supabase client from authenticate(req).client */
-  client: ReturnType<typeof createAdminSupabase>;
-}): Promise<CreateInvoiceResult> {
+  description: string;
+  kind: 'install' | 'renew';
+  client: unknown;
+}, fetchImpl: typeof fetch = fetch): Promise<CreateInvoiceResult> {
   if (!coinpayConfigured()) {
     throw new Error('Coinpay not configured (COINPAY_API_KEY / COINPAY_BUSINESS_ID missing)');
   }
-  const apiKey = process.env.COINPAY_API_KEY!;
-  const businessId = process.env.COINPAY_BUSINESS_ID!;
-  const baseUrl = coinpayBaseUrl();
-
-  const description = opts.description ?? `b1dz plugin: ${opts.pluginId}`;
-  const metadata = {
+  const db = opts.client as InvoiceClient;
+  const baseMeta = {
     user_id: opts.userId,
     plugin_id: opts.pluginId,
     b1dz_kind: 'plugin_subscription' as const,
+    b1dz_action: opts.kind,
   };
-
-  const res = await fetch(`${baseUrl}/payments/create`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      business_id: businessId,
-      amount: opts.amountUsd,
-      currency: 'USD',
-      blockchain: opts.blockchain,
-      description,
-      metadata,
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`coinpay create payment ${res.status}: ${text.slice(0, 200)}`);
-  }
-  const body = (await res.json()) as CoinPayPaymentResponse;
-  const payment = body.payment;
-  if (!payment) {
-    throw new Error(`coinpay returned no payment object: ${body.error ?? 'unknown'}`);
-  }
-
-  // Insert invoice row scoped to the user.
-  const { data, error } = await (opts.client as unknown as {
-    from: (t: string) => {
-      insert: (r: Record<string, unknown>) => {
-        select: (s: string) => {
-          single: () => Promise<{ data: { id: string } | null; error: { message: string } | null }>;
-        };
-      };
-    };
-  }).from('plugin_invoices').insert({
+  const { data, error } = await db.from('plugin_invoices').insert({
     user_id: opts.userId,
     plugin_id: opts.pluginId,
-    coinpay_payment_id: payment.id,
     amount_usd: opts.amountUsd,
-    blockchain: opts.blockchain,
-    payment_address: payment.payment_address ?? null,
-    crypto_amount: payment.crypto_amount != null ? String(payment.crypto_amount) : null,
-    qr_code: payment.qr_code ?? null,
-    status: payment.status ?? 'pending',
-    expires_at: payment.expires_at ?? null,
-    metadata,
+    blockchain: CHECKOUT_BLOCKCHAIN,
+    status: 'pending',
+    metadata: baseMeta,
   }).select('id').single();
   if (error || !data) throw new Error(`insert invoice: ${error?.message ?? 'no row returned'}`);
 
+  let session: CheckoutSessionCreated;
+  try {
+    session = await createCheckoutSession({
+      invoiceId: data.id,
+      userId: opts.userId,
+      email: opts.email,
+      pluginId: opts.pluginId,
+      amountUsd: opts.amountUsd,
+      description: opts.description,
+      kind: opts.kind,
+    }, fetchImpl);
+  } catch (e) {
+    await db.from('plugin_invoices').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', data.id);
+    throw e;
+  }
+
+  const upd = await db.from('plugin_invoices').update({
+    expires_at: session.expiresAt,
+    metadata: { ...baseMeta, checkout_session_id: session.id, checkout_url: session.url },
+    updated_at: new Date().toISOString(),
+  }).eq('id', data.id);
+  if (upd.error) throw new Error(`store checkout session: ${upd.error.message}`);
+
   return {
     invoiceId: data.id,
-    paymentAddress: payment.payment_address ?? null,
-    qrCode: payment.qr_code ?? null,
-    cryptoAmount: payment.crypto_amount != null ? String(payment.crypto_amount) : null,
-    blockchain: opts.blockchain,
+    checkoutSessionId: session.id,
+    checkoutUrl: session.url,
     amountUsd: opts.amountUsd,
-    expiresAt: payment.expires_at ?? null,
-    coinpayPaymentId: payment.id,
+    expiresAt: session.expiresAt,
   };
 }
 

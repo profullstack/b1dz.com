@@ -84,7 +84,7 @@ describe('web auth route handlers', () => {
     });
     const { POST } = await import('./signup/route');
 
-    const res = await POST(jsonReq('/api/auth/signup', { email: 'new@b1dz.com', password: 'password123' }));
+    const res = await POST(jsonReq('/api/auth/signup', { email: 'new@b1dz.com', password: 'password123', first_name: 'Ada', last_name: 'Lovelace' }));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -93,7 +93,7 @@ describe('web auth route handlers', () => {
     expect(signUpMock).toHaveBeenCalledWith(expect.objectContaining({
       email: 'new@b1dz.com',
       password: 'password123',
-      options: { emailRedirectTo: 'https://b1dz.com/auth/callback?next=/dashboard' },
+      options: expect.objectContaining({ emailRedirectTo: 'https://b1dz.com/auth/callback?next=/dashboard' }),
     }));
   });
 

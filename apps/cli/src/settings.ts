@@ -1,20 +1,12 @@
 /**
  * `b1dz settings` — read-only print of /api/settings.
  *
- * Fetches the encryption key from /api/settings/crypto-key and decrypts the
- * cipher blob locally to determine which secrets are set (without printing
- * any values). Editing happens at https://b1dz.com/settings or via
- * `b1dz setup`.
+ * Unseals the secret blob locally with your vault passphrase (prompt, or
+ * B1DZ_VAULT_PASSPHRASE) to show which secrets are set, without printing any
+ * values. Editing happens at https://b1dz.com/settings or via `b1dz setup`.
  */
 import { loadCredentials } from './auth.js';
-import { fetchCryptoKey, decryptJson, type CipherBlob } from './crypto-key.js';
-
-interface SettingsResponse {
-  plain: Record<string, string | number | boolean | null | undefined>;
-  cipher: CipherBlob | null;
-  lastUpdatedAt: string | null;
-  cryptoConfigured: boolean;
-}
+import { apiBaseUrl, openVault, type SettingsResponse } from './vault.js';
 
 const SECRET_FIELDS = [
   ['CEX', [
@@ -23,7 +15,7 @@ const SECRET_FIELDS = [
     'BINANCE_US_API_KEY', 'BINANCE_US_API_SECRET',
     'GEMINI_API_KEY', 'GEMINI_API_SECRET',
   ]],
-  ['DEX', ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY']],
+  ['DEX', ['ONEINCH_API_KEY', 'EVM_PRIVATE_KEY', 'SOLANA_PRIVATE_KEY', 'X402_PRIVATE_KEY']],
 ] as const;
 
 const PLAIN_GROUPS: { name: string; fields: string[] }[] = [
@@ -54,12 +46,6 @@ const PLAIN_GROUPS: { name: string; fields: string[] }[] = [
   ] },
 ];
 
-function apiBaseUrl(): string {
-  const url = process.env.B1DZ_API_URL;
-  if (!url) throw new Error('B1DZ_API_URL missing in .env');
-  return url;
-}
-
 function fmtPlain(v: unknown): string {
   if (v === null || v === undefined || v === '') return '\x1b[2munset\x1b[0m';
   if (typeof v === 'boolean') return v ? '\x1b[32mtrue\x1b[0m' : '\x1b[31mfalse\x1b[0m';
@@ -87,23 +73,25 @@ export async function settings() {
   }
   const data = await res.json() as SettingsResponse;
 
-  // Decrypt the cipher locally to know which secrets are set (without
-  // printing values).
+  // Unseal locally to know which secrets are set (without printing values).
   let decrypted: Record<string, string> = {};
-  if (data.cipher && data.cryptoConfigured) {
+  if (data.seal && data.cipher) {
     try {
-      const keyB64 = await fetchCryptoKey(baseUrl, c.accessToken);
-      decrypted = decryptJson<Record<string, string>>(keyB64, data.cipher);
+      const v = await openVault({ accessToken: c.accessToken, baseUrl });
+      decrypted = v?.secrets ?? {};
+      v?.dek.fill(0);
     } catch (e) {
-      console.log(`\x1b[33m⚠ could not decrypt secrets: ${(e as Error).message}\x1b[0m`);
+      console.log(`\x1b[33m⚠ could not unlock vault: ${(e as Error).message}\x1b[0m`);
     }
   }
 
   console.log(`\n\x1b[1msigned in as\x1b[0m ${c.email}`);
   console.log(`\x1b[2muser_id: ${c.userId}\x1b[0m`);
   console.log(`\x1b[2mlast updated: ${data.lastUpdatedAt ?? 'never'}\x1b[0m`);
-  if (!data.cryptoConfigured) {
-    console.log('\x1b[33m⚠ server-side encryption key not configured; secret writes are blocked\x1b[0m');
+  if (!data.seal) {
+    console.log(data.legacy.pending
+      ? '\x1b[33m⚠ secrets still under the old server key: run `b1dz setup` to set a passphrase and migrate (trading is paused until then)\x1b[0m'
+      : '\x1b[33m⚠ no vault passphrase yet: run `b1dz setup` before saving secrets\x1b[0m');
   }
 
   for (const group of PLAIN_GROUPS) {

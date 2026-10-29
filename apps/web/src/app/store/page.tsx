@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { Webring } from '@/components/webring';
+import { SiteFooter } from '@/components/site-footer';
+import { AdUnit } from '@/components/ad-unit';
 import Image from 'next/image';
 import type { Metadata } from 'next';
 import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
@@ -103,6 +104,8 @@ export default async function StorePage() {
         </div>
       </nav>
 
+      <AdUnit />
+
       <section className="max-w-6xl mx-auto px-6 pt-16 pb-10 text-center">
         <h1 className="text-5xl md:text-6xl font-bold mb-4 leading-tight">
           <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">Plugin Store</span>
@@ -154,20 +157,7 @@ export default async function StorePage() {
         </div>
       </section>
 
-      <footer className="border-t border-zinc-800 py-8 text-center text-zinc-500 text-sm">
-        <p>&copy; {new Date().getFullYear()} b1dz.com — AI Arbitrage Terminal</p>
-        <p className="mt-2">
-          <a
-            href="https://github.com/profullstack/b1dz.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-zinc-400 underline-offset-4 transition hover:text-zinc-200 hover:underline"
-          >
-            GitHub
-          </a>
-        </p>
-        <Webring className="mt-2" />
-      </footer>
+      <SiteFooter />
     </main>
   );
 }

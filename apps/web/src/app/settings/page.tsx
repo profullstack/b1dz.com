@@ -4,6 +4,7 @@ import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import { SettingsClient } from './settings-client';
 import { SignOutForm } from '@/components/sign-out-form';
+import { RedeemCodeCard } from '@/components/redeem-code-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,12 +23,16 @@ export default async function SettingsPage() {
           </Link>
           <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-300">summary</Link>
           <Link href="/console" className="text-xs text-zinc-500 hover:text-zinc-300">console</Link>
+          <Link href="/invites" className="text-xs text-zinc-500 hover:text-zinc-300">invites</Link>
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-zinc-400">{user.email}</span>
           <SignOutForm className="text-zinc-500 hover:text-zinc-300" />
         </div>
       </nav>
+      <div className="mx-auto max-w-4xl px-6 pt-6">
+        <RedeemCodeCard />
+      </div>
       <SettingsClient />
     </main>
   );

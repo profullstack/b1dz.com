@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/inventory",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@b1dz/adapters-evm": "workspace:*",
-    "viem": "^2.48.0"
+    "viem": "^2.57.11"
   },
   "devDependencies": {
     "@types/node": "latest",

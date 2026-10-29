@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/core",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -17,6 +17,10 @@
     "./storage-contract": {
       "import": "./src/storage-contract.ts",
       "default": "./src/storage-contract.ts"
+    },
+    "./sealed-secrets": {
+      "import": "./src/sealed-secrets.ts",
+      "default": "./src/sealed-secrets.ts"
     }
   },
   "scripts": {
@@ -27,8 +31,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@profullstack/pluginstore": "^0.1.1",
-    "redis": "5.12.1"
+    "@profullstack/pluginstore": "^0.1.2",
+    "redis": "6.3.0"
   },
   "devDependencies": {
     "@types/node": "latest",

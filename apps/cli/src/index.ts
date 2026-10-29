@@ -17,8 +17,12 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadRootEnv, Runner, AlertBus, type Source, type Storage, getB1dzVersion } from '@b1dz/core';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { loadRootEnv, findMonorepoRoot, Runner, AlertBus, type Source, type Storage, getB1dzVersion } from '@b1dz/core';
 loadRootEnv();
+// Installed from npm there is no monorepo .env: talk to the hosted API.
+process.env.B1DZ_API_URL ||= 'https://b1dz.com';
 import { JsonStorage } from '@b1dz/storage-json';
 import { SupabaseStorage } from '@b1dz/storage-supabase';
 import { B1dzApiStorage } from '@b1dz/storage-b1dz-api';
@@ -29,9 +33,16 @@ import { cryptoTradeSource } from '@b1dz/source-crypto-trade';
 import { signup, login, logout, whoami, currentUser } from './auth.js';
 import { settings } from './settings.js';
 import { setup } from './setup.js';
+import { redeem, invites } from './credits.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.resolve(here, '../../../data');
+// In the monorepo, JSON storage lives in <root>/data; an npm install keeps it
+// under ~/.config/b1dz/data (next to credentials.json).
+const monorepoRoot = findMonorepoRoot(here);
+const dataDir = process.env.B1DZ_DATA_DIR
+  ?? (existsSync(path.join(monorepoRoot, 'pnpm-workspace.yaml'))
+    ? path.join(monorepoRoot, 'data')
+    : path.join(homedir(), '.config', 'b1dz', 'data'));
 
 // ----- registry: name → list of sources for that subcommand -----
 const SOURCE_REGISTRY: Record<string, Source[]> = {
@@ -103,7 +114,13 @@ Auth:
   b1dz logout           clear local credentials
   b1dz whoami           show current user
   b1dz settings         show account settings (API keys, thresholds, toggles)
+  b1dz redeem <code>    redeem a credit code for Pro days
+  b1dz invites [create [note]]  your invites, Pro-day balance, referral link
   b1dz setup [section]  guided walkthrough — prompts for keys with docs URLs
+  b1dz unlock [--ttl 8h] let the daemon trade with your keys (max 7d; passphrase
+                       prompt, or B1DZ_VAULT_PASSPHRASE / B1DZ_VAULT_PASSPHRASE_FILE)
+  b1dz lock             lock trading now (strategies pause)
+  b1dz vault [status|passwd]  vault + trading-session status / change passphrase
                         section = coinbase|kraken|binance|gemini|oneinch|evm|solana|thresholds|toggles
 
 Dashboard:
@@ -189,6 +206,7 @@ Other:
   b1dz restart          restart daemon
   b1dz alerts           tail the alert bus
   b1dz help             this message
+  b1dz --version        print the version
 `);
 }
 
@@ -316,6 +334,11 @@ if (source === 'tui' && isProd && process.env.B1DZ_API_URL_PROD) {
   process.env.B1DZ_API_URL = process.env.B1DZ_API_URL_PROD;
 }
 
+if (source === '--version' || source === '-v' || source === 'version') {
+  console.log(getB1dzVersion());
+  process.exit(0);
+}
+
 if (!source || source === 'help' || source === '--help' || source === '-h') {
   help();
   process.exit(0);
@@ -328,6 +351,13 @@ if (source === 'logout') { logout(); process.exit(0); }
 if (source === 'whoami') { whoami(); process.exit(0); }
 if (source === 'settings') { await settings(); process.exit(0); }
 if (source === 'setup') { await setup(process.argv.slice(3)); process.exit(0); }
+if (source === 'unlock' || source === 'lock' || source === 'vault') {
+  const { vaultCommand } = await import('./vault.js');
+  await vaultCommand(source, process.argv.slice(3));
+  process.exit(0);
+}
+if (source === 'redeem') { await redeem(process.argv.slice(3)); process.exit(0); }
+if (source === 'invites') { await invites(process.argv.slice(3)); process.exit(0); }
 if (source === 'status') runDaemonStatus();
 if (source === 'restart') runDaemonRestart();
 

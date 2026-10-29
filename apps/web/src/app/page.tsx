@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Webring } from '@/components/webring';
+import { SiteFooter } from '@/components/site-footer';
 import Image from 'next/image';
 import { createServerSupabase } from '@/lib/supabase';
 import {
@@ -249,6 +249,15 @@ export default async function LandingPage() {
           className="w-full h-auto rounded-xl"
           priority
         />
+        <div id="install" className="mt-6 text-center">
+          <p className="text-sm text-zinc-400 mb-2">Install the terminal client (Node 22+ or Bun):</p>
+          <code className="inline-block max-w-full overflow-x-auto whitespace-nowrap rounded-lg bg-zinc-900 border border-zinc-800 px-4 py-2 text-sm text-zinc-100">
+            curl -fsSL https://b1dz.com/install.sh | sh
+          </code>
+          <p className="text-xs text-zinc-500 mt-2">
+            or <code>npm i -g @profullstack/b1dz</code>, then <code>b1dz login</code> and <code>b1dz setup</code>. The installer never asks for your keys.
+          </p>
+        </div>
       </section>
 
       {/* Web Dashboard Mock */}
@@ -447,21 +456,7 @@ export default async function LandingPage() {
         </Link>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-zinc-800 py-8 text-center text-zinc-500 text-sm">
-        <p>&copy; {new Date().getFullYear()} b1dz.com — AI Arbitrage Terminal</p>
-        <p className="mt-2">
-          <a
-            href="https://github.com/profullstack/b1dz.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-zinc-400 underline-offset-4 transition hover:text-zinc-200 hover:underline"
-          >
-            GitHub
-          </a>
-        </p>
-        <Webring className="mt-2" />
-      </footer>
+      <SiteFooter />
     </main>
   );
 }

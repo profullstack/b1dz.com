@@ -9,6 +9,7 @@ import {
   readPlainString,
   saveSettings,
   type SettingsResponse,
+  type VaultKey,
 } from '../shared';
 
 export function SolanaSection({
@@ -17,7 +18,7 @@ export function SolanaSection({
   onSaved,
 }: {
   data: SettingsResponse;
-  cryptoKey: CryptoKey | null;
+  cryptoKey: VaultKey | null;
   onSaved: (next: SettingsResponse) => void;
 }) {
   const [walletAddr, setWalletAddr] = useState(readPlainString(data, 'SOLANA_WALLET_ADDRESS'));
