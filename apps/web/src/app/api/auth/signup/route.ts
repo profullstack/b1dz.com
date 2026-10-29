@@ -3,6 +3,7 @@ import { authJson, siteOrigin, withAuthCookies } from '@/lib/auth-route-client';
 import { checkAuthForm, signupGuard } from '@/lib/auth-form-guard';
 import { saveSignupProfile, validateProfile } from '@profullstack/profile';
 import { profileStore } from '@/lib/profile';
+import { isPlaceholderEmail } from '@/lib/coinpay-signin';
 import { INVITE_COOKIE, INVITE_META_KEY, looksLikeInviteCode } from '@/lib/credits';
 
 export async function POST(req: NextRequest) {
@@ -17,6 +18,8 @@ export async function POST(req: NextRequest) {
   if (guarded) return Response.json({ user: null, session: null, needsEmailConfirmation: true });
 
   const email = body.email.trim();
+  // Accounts made by Sign in with CoinPay hold placeholder addresses there.
+  if (isPlaceholderEmail(email)) return Response.json({ error: 'Signup failed' }, { status: 400 });
   // The @profullstack/profile fields (first/last name required; company
   // domain, job title, LinkedIn optional) are checked before the user exists.
   const fields = { ...body, email };

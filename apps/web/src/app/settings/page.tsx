@@ -5,6 +5,9 @@ import { createServerSupabase } from '@/lib/supabase';
 import { SettingsClient } from './settings-client';
 import { SignOutForm } from '@/components/sign-out-form';
 import { RedeemCodeCard } from '@/components/redeem-code-card';
+import { CoinpayCard } from '@/components/coinpay-card';
+import { createAdminSupabase } from '@/lib/supabase';
+import { isPlaceholderEmail } from '@/lib/coinpay-signin';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +15,13 @@ export default async function SettingsPage() {
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect('/login?next=/settings');
+  const coinpayOnly = isPlaceholderEmail(user.email);
+  const linked = await createAdminSupabase()
+    .from('coinpay_identities')
+    .select('user_id')
+    .eq('user_id', user.id)
+    .maybeSingle()
+    .then((r) => Boolean(r.data), () => false);
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -26,12 +36,15 @@ export default async function SettingsPage() {
           <Link href="/invites" className="text-xs text-zinc-500 hover:text-zinc-300">invites</Link>
         </div>
         <div className="flex items-center gap-4 text-sm">
-          <span className="text-zinc-400">{user.email}</span>
+          <span className="text-zinc-400">{coinpayOnly ? 'Signed in with CoinPay' : user.email}</span>
           <SignOutForm className="text-zinc-500 hover:text-zinc-300" />
         </div>
       </nav>
       <div className="mx-auto max-w-4xl px-6 pt-6">
         <RedeemCodeCard />
+      </div>
+      <div className="mx-auto max-w-4xl px-6 pt-4">
+        <CoinpayCard linked={linked} coinpayOnly={coinpayOnly} />
       </div>
       <SettingsClient />
     </main>
