@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   buildDefinition,
   builderStateFromDefinition,
@@ -16,6 +17,19 @@ import {
 } from '@/lib/tsp-builder';
 import { fmtReturnPct, fmtWinRate } from '@/lib/strategy-backtest-display';
 import type { BacktestResponse } from '@/lib/strategy-backtest-runner';
+import type { Visibility } from '@/lib/user-strategies';
+
+/** A saved strategy as the builder sees it (GET /api/strategies[/:id]). */
+export interface SavedStrategy {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  definition: Record<string, unknown>;
+  visibility: Visibility;
+  backtest: BacktestResponse | null;
+  updated_at: string;
+}
 
 const INDICATOR_FNS: IndicatorFn[] = ['rsi', 'ema', 'sma', 'macdHist'];
 const COMPARATORS = ['gt', 'gte', 'lt', 'lte', 'eq', 'neq'] as const;
@@ -42,8 +56,23 @@ const KNOBS: { key: keyof Knobs; label: string; low: string; high: string }[] = 
   { key: 'assetFocus', label: 'Asset focus', low: 'equities', high: 'crypto' },
 ];
 
-export function StrategyBuilder() {
-  const [state, setState] = useState<BuilderState>(defaultBuilderState);
+export function StrategyBuilder({ initial = null, owned = false, mine: initialMine = [] }: {
+  /** The strategy opened via ?id=, if any. */
+  initial?: SavedStrategy | null;
+  /** Whether `initial` belongs to the viewer; a published one that doesn't is saved as a copy. */
+  owned?: boolean;
+  mine?: SavedStrategy[];
+}) {
+  const [state, setState] = useState<BuilderState>(() =>
+    initial ? builderStateFromDefinition(initial.definition) : defaultBuilderState(),
+  );
+  // Persistence
+  const [saved, setSaved] = useState<SavedStrategy | null>(owned ? initial : null);
+  const [forkedFrom, setForkedFrom] = useState<string | null>(initial && !owned ? initial.id : null);
+  const [mine, setMine] = useState<SavedStrategy[]>(initialMine);
+  const [busy, setBusy] = useState<'' | 'save' | 'publish' | 'unpublish' | 'delete'>('');
+  const [saveMsg, setSaveMsg] = useState('');
+  const [saveError, setSaveError] = useState<string[]>([]);
   const [bankroll, setBankroll] = useState(1000);
   const [timeframe, setTimeframe] = useState('1 year');
   const [classes, setClasses] = useState<AssetClass[]>(['crypto', 'equity']);
@@ -60,6 +89,98 @@ export function StrategyBuilder() {
   const [aiNote, setAiNote] = useState('');
 
   const doc = useMemo(() => buildDefinition(state), [state]);
+  // Compare through the builder: jsonb reorders keys, and the form is a lossy view of some docs.
+  const savedJson = useMemo(
+    () => (saved ? JSON.stringify(buildDefinition(builderStateFromDefinition(saved.definition))) : ''),
+    [saved],
+  );
+  const dirty = !saved || JSON.stringify(doc) !== savedJson;
+
+  function remember(s: SavedStrategy) {
+    setSaved(s);
+    setForkedFrom(null);
+    setMine((list) => [s, ...list.filter((x) => x.id !== s.id)]);
+    window.history.replaceState(null, '', `/store/build?id=${s.id}`);
+  }
+
+  function resetStatus() {
+    setSaveError([]);
+    setSaveMsg('');
+  }
+
+  /** Fetch a strategies endpoint; on failure show its errors and return null. */
+  async function call(url: string, method: string, body?: unknown): Promise<{ strategy?: SavedStrategy } | null> {
+    resetStatus();
+    const res = await fetch(url, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setSaveError(json.details ?? [json.error ?? `request failed (${res.status})`]);
+      return null;
+    }
+    return json;
+  }
+
+  async function run(kind: Exclude<typeof busy, ''>, fn: () => Promise<void>) {
+    setBusy(kind);
+    try {
+      await fn();
+    } catch (e) {
+      setSaveError([(e as Error).message]);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const save = () =>
+    run('save', async () => {
+      const wasPublished = saved?.visibility === 'published';
+      const json = saved
+        ? await call(`/api/strategies/${saved.id}`, 'PATCH', { definition: doc })
+        : await call('/api/strategies', 'POST', { definition: doc, forkedFrom });
+      if (!json?.strategy) return;
+      remember(json.strategy);
+      setSaveMsg(
+        wasPublished && json.strategy.visibility === 'private'
+          ? 'Saved. The logic changed, so it was unpublished: publish again to refresh its store listing.'
+          : 'Saved.',
+      );
+    });
+
+  const setPublished = (publish: boolean) =>
+    run(publish ? 'publish' : 'unpublish', async () => {
+      if (!saved) return;
+      const json = await call(`/api/strategies/${saved.id}/publish`, publish ? 'POST' : 'DELETE');
+      if (!json?.strategy) return;
+      remember(json.strategy);
+      setSaveMsg(publish ? 'Published to the store with a fresh 1-year backtest.' : 'Unpublished. Only you can see it now.');
+    });
+
+  const remove = () => {
+    if (!saved || !window.confirm(`Delete "${saved.name}"? This cannot be undone.`)) return;
+    const id = saved.id;
+    return run('delete', async () => {
+      const json = await call(`/api/strategies/${id}`, 'DELETE');
+      if (!json) return;
+      setMine((list) => list.filter((x) => x.id !== id));
+      open(null);
+      setSaveMsg('Deleted.');
+    });
+  };
+
+  /** Load a saved strategy into the form, or a blank one for null. */
+  function open(s: SavedStrategy | null) {
+    setState(s ? builderStateFromDefinition(s.definition) : defaultBuilderState());
+    setSaved(s);
+    setForkedFrom(null);
+    setResult(null);
+    setAiNote('');
+    resetStatus();
+    window.history.replaceState(null, '', s ? `/store/build?id=${s.id}` : '/store/build');
+  }
 
   async function generateWithAI() {
     setAiLoading(true);
@@ -116,6 +237,38 @@ export function StrategyBuilder() {
     <section className="max-w-6xl mx-auto px-6 pb-20 grid lg:grid-cols-2 gap-6">
       {/* ── left: the form ── */}
       <div className="space-y-6">
+        <Card title="My strategies">
+          {mine.length === 0 ? (
+            <p className="text-xs text-zinc-400">Nothing saved yet. Build one below and hit Save.</p>
+          ) : (
+            <ul className="divide-y divide-zinc-800 -my-1">
+              {mine.map((m) => (
+                <li key={m.id} className="flex items-center justify-between gap-3 py-2">
+                  <button
+                    onClick={() => open(m)}
+                    className={`text-left text-sm truncate ${saved?.id === m.id ? 'text-orange-300' : 'text-zinc-200 hover:text-orange-300'}`}
+                  >
+                    {m.name}
+                    <span className="ml-2 text-[11px] font-mono text-zinc-500">{m.slug}</span>
+                  </button>
+                  <span
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${m.visibility === 'published' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-zinc-700 text-zinc-500'}`}
+                  >
+                    {m.visibility}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button onClick={() => open(null)} className={btnGhost}>+ New strategy</button>
+        </Card>
+
+        {initial && forkedFrom === initial.id && (
+          <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-5 py-3 text-sm text-sky-200">
+            You opened <strong>{initial.name}</strong> from the store. Saving makes your own private copy.
+          </div>
+        )}
+
         <Card title="✨ Start with AI (optional)">
           <p className="text-xs text-zinc-400 -mt-1 mb-1">Answer a couple of questions, set the knobs, and let AI draft a strategy you can then tweak below.</p>
           <div className="grid sm:grid-cols-2 gap-3">
@@ -260,11 +413,65 @@ export function StrategyBuilder() {
           {result && <Results result={result} />}
         </Card>
 
-        <div className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-5 py-4">
-          <div className="text-sm text-zinc-400">Happy with it? Publishing to the store is coming soon.</div>
-          <button disabled className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-500 cursor-not-allowed" title="Publishing lands in the next release">
-            Publish (soon)
-          </button>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 px-5 py-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-zinc-400">
+              {!saved ? (
+                'Save it to keep it, then publish it to the store.'
+              ) : saved.visibility === 'published' ? (
+                <>
+                  Published in the <Link href="/store#community" className="text-orange-400 hover:underline">store</Link>
+                  {dirty ? ' (unsaved changes)' : ''}.
+                </>
+              ) : (
+                `Saved privately${dirty ? ' (unsaved changes)' : ''}.`
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {saved && (
+                <button
+                  onClick={remove}
+                  disabled={!!busy}
+                  className="rounded-lg border border-rose-500/30 px-3 py-2 text-sm text-rose-300 hover:bg-rose-500/10 disabled:opacity-50 transition"
+                >
+                  {busy === 'delete' ? 'Deleting…' : 'Delete'}
+                </button>
+              )}
+              <button
+                onClick={save}
+                disabled={!!busy || (!!saved && !dirty)}
+                className="rounded-lg border border-orange-500/40 px-4 py-2 text-sm text-orange-300 hover:bg-orange-500/10 disabled:opacity-50 transition"
+              >
+                {busy === 'save' ? 'Saving…' : forkedFrom ? 'Save a copy' : saved ? 'Save changes' : 'Save'}
+              </button>
+              {saved?.visibility === 'published' ? (
+                <button
+                  onClick={() => setPublished(false)}
+                  disabled={!!busy}
+                  className="rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:text-zinc-100 disabled:opacity-50 transition"
+                >
+                  {busy === 'unpublish' ? 'Unpublishing…' : 'Unpublish'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => setPublished(true)}
+                  disabled={!!busy || dirty}
+                  title={dirty ? 'Save first' : 'Runs a 1-year backtest and lists it in the store'}
+                  className="rounded-lg bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 disabled:opacity-50 text-black font-medium px-4 py-2 text-sm transition"
+                >
+                  {busy === 'publish' ? 'Publishing… (backtesting)' : 'Publish'}
+                </button>
+              )}
+            </div>
+          </div>
+          {saveMsg && (
+            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">{saveMsg}</div>
+          )}
+          {saveError.length > 0 && (
+            <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              <ul className="list-disc list-inside space-y-0.5">{saveError.map((e, i) => <li key={i}>{e}</li>)}</ul>
+            </div>
+          )}
         </div>
       </div>
     </section>

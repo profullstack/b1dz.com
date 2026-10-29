@@ -4,7 +4,8 @@ import { AdUnit } from '@/components/ad-unit';
 import Image from 'next/image';
 import type { Metadata } from 'next';
 import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
-import { createServerSupabase } from '@/lib/supabase';
+import { createAdminSupabase, createServerSupabase } from '@/lib/supabase';
+import { PUBLIC_COLUMNS, type UserStrategyRow } from '@/lib/user-strategies';
 import { coinpayConfigured } from '@/lib/coinpay-client';
 import { InstallButton } from './install-button';
 import { SignOutForm } from '@/components/sign-out-form';
@@ -69,11 +70,29 @@ async function fetchInstalled(): Promise<Map<string, InstalledRow>> {
   return map;
 }
 
+type CommunityStrategy = Omit<UserStrategyRow, 'user_id'>;
+
+/** Strategies users built in /store/build and published. */
+async function fetchCommunity(): Promise<CommunityStrategy[]> {
+  try {
+    const { data } = await createAdminSupabase()
+      .from('user_strategies')
+      .select(PUBLIC_COLUMNS)
+      .eq('visibility', 'published')
+      .order('published_at', { ascending: false })
+      .limit(60);
+    return (data ?? []) as CommunityStrategy[];
+  } catch {
+    return [];
+  }
+}
+
 export default async function StorePage() {
   const supabase = await createServerSupabase();
   const { data: { user } } = await supabase.auth.getUser();
   const installed = user ? await fetchInstalled() : new Map<string, InstalledRow>();
   const cpOk = coinpayConfigured();
+  const community = await fetchCommunity();
 
   const connectors = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'connector' && !e.manifest.capabilities.includes('asset:equity'));
   const equityConnectors = PLUGIN_CATALOG.filter((e) => e.manifest.kind === 'connector' && e.manifest.capabilities.includes('asset:equity'));
@@ -157,6 +176,19 @@ export default async function StorePage() {
         </div>
       </section>
 
+      <section id="community" className="max-w-6xl mx-auto px-6 py-10">
+        <SectionHeader title="Community strategies" count={community.length} />
+        {community.length === 0 ? (
+          <p className="text-sm text-zinc-400">
+            None published yet. <Link href="/store/build" className="text-orange-400 hover:underline">Build one</Link> and be the first.
+          </p>
+        ) : (
+          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {community.map((s) => <CommunityCard key={s.id} strategy={s} />)}
+          </div>
+        )}
+      </section>
+
       <SiteFooter />
     </main>
   );
@@ -218,6 +250,53 @@ function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk, backt
  * the same horizons the daemon trades, from the latest ~/bin/backtest.js run.
  * Horizons with zero trades are hidden to keep the card tight.
  */
+function CommunityCard({ strategy: s }: { strategy: CommunityStrategy }) {
+  const kind = (s.definition.definition as { kind?: string } | undefined)?.kind;
+  return (
+    <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-5 hover:border-orange-500/30 transition">
+      <div className="mb-3">
+        <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">Community strategy{kind ? ` · ${kind}` : ''}</div>
+        <h3 className="text-lg font-semibold text-zinc-100 leading-tight">{s.name}</h3>
+        <div className="text-xs text-zinc-500 mt-1">
+          by {s.author_name ?? 'b1dz user'}
+          {s.published_at ? ` · ${new Date(s.published_at).toLocaleDateString()}` : ''}
+        </div>
+      </div>
+      {s.description && <p className="text-sm text-zinc-400 leading-relaxed mb-4">{s.description}</p>}
+      {s.backtest && s.backtest.classes.length > 0 && (
+        <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2.5">
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5">
+            Backtest · {s.backtest.timeframe} · ${s.backtest.bankroll.toLocaleString()}
+          </div>
+          <table className="w-full text-[11px]">
+            <tbody className="font-mono">
+              {s.backtest.classes.map((c) => (
+                <tr key={c.assetClass}>
+                  <td className="text-left text-zinc-400 py-0.5">{c.assetClass === 'crypto' ? 'Crypto' : 'Equities'}</td>
+                  <td className={`text-right py-0.5 ${c.returnPct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtReturnPct(c.returnPct)}</td>
+                  <td className="text-right text-zinc-300 py-0.5">{fmtWinRate(c.winRate)} win</td>
+                  <td className="text-right text-zinc-500 py-0.5">{c.trades} trades</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="mt-1.5 text-[10px] text-zinc-600 leading-snug">Rerun by b1dz at publish time. Excludes fees/slippage. Not financial advice.</p>
+        </div>
+      )}
+      <div className="mt-auto flex items-center justify-between pt-3 border-t border-zinc-800 gap-3">
+        <div className="flex flex-wrap gap-1.5">
+          {s.asset_classes.map((c) => (
+            <span key={c} className="rounded-md bg-zinc-950 border border-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-400">{c}</span>
+          ))}
+        </div>
+        <Link href={`/store/build?id=${s.id}`} className="text-sm text-orange-400 hover:text-orange-300 whitespace-nowrap">
+          Open in builder →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function BacktestSummary({ backtest }: { backtest: BacktestStrategy }) {
   const rows = visibleHorizons(backtest);
   if (rows.length === 0) return null;
