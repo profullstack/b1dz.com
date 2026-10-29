@@ -9,7 +9,8 @@ vi.mock('@/lib/api-auth', () => ({
   unauthorized: unauthorizedMock,
 }));
 
-vi.mock('@/lib/strategy-ai', () => ({
+vi.mock('@/lib/strategy-ai', async (orig) => ({
+  ...(await orig<typeof import('@/lib/strategy-ai')>()),
   generateStrategy: generateStrategyMock,
 }));
 
@@ -38,6 +39,20 @@ describe('POST /api/strategies/generate', () => {
   });
   afterEach(() => {
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.AI_FALLBACK_URL;
+    delete process.env.AI_FALLBACK_API_KEY;
+    delete process.env.AI_FALLBACK_MODEL;
+  });
+
+  it('passes the cheaper fallback provider through, and runs on it alone without a Claude key', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.AI_FALLBACK_URL = 'https://cf.example/ai/v1';
+    process.env.AI_FALLBACK_API_KEY = 'cf-test';
+    const { POST } = await importRoute();
+    const res = await POST(makeReq(goodBody) as never);
+    expect(res.status).toBe(200);
+    const [, opts] = generateStrategyMock.mock.calls[0]!;
+    expect(opts.fallback).toEqual({ baseUrl: 'https://cf.example/ai/v1', apiKey: 'cf-test', model: '@cf/openai/gpt-oss-120b' });
   });
 
   it('401 when unauthenticated', async () => {
