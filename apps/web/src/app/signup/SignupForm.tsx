@@ -5,6 +5,7 @@ import Image from 'next/image';
 import type { GuardProps } from '@/lib/auth-form-guard';
 import { ProfileFields } from '@profullstack/profile/react';
 import type { ProfileField } from '@profullstack/profile';
+import { CoinpaySigninButton } from '@/components/coinpay-signin-button';
 
 // Email has its own input above; the package renders the other five.
 const PROFILE_FIELDS: ProfileField[] = ['first_name', 'last_name', 'company_domain', 'job_title', 'linkedin_url'];
@@ -66,6 +67,7 @@ export function SignupForm({ token, tokenName, honeypotName }: GuardProps) {
           <h1 className="text-2xl font-bold">Create your <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">b1dz</span> account</h1>
           <p className="text-sm text-zinc-400 mt-1">Start trading in minutes</p>
         </div>
+        <CoinpaySigninButton />
         <form onSubmit={onSubmit} className="space-y-4">
           {honeypotName && (
             <div aria-hidden="true" style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, overflow: 'hidden' }}>
