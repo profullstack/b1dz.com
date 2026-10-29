@@ -113,23 +113,45 @@ async function callAnthropic(
   return (body.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
 }
 
-/**
- * Generate a validated TSP strategy from wizard inputs. Throws if the model
- * can't produce a valid document after one repair attempt, or if no API key.
- */
-export async function generateStrategy(
-  input: GenerateInput,
-  opts: { apiKey: string; model?: string; fetchImpl: FetchLike },
-): Promise<GeneratedStrategy> {
-  if (!opts.apiKey) throw new Error('AI generation is not configured (missing operator API key).');
-  const model = await resolveAnthropicModel(opts.apiKey, opts.model ?? DEFAULT_AI_MODEL, opts.fetchImpl);
+async function callOpenAICompatible(
+  fb: FallbackProvider,
+  fetchImpl: FetchLike,
+  messages: { role: 'user' | 'assistant'; content: string }[],
+): Promise<string> {
+  const res = await fetchImpl(`${fb.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${fb.apiKey}` },
+    body: JSON.stringify({
+      model: fb.model,
+      max_tokens: 8000,
+      messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+    }),
+  });
+  if (!res.ok) throw new Error(`fallback http ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const body = JSON.parse(await res.text()) as { choices?: { message?: { content?: string | null } }[] };
+  return body.choices?.[0]?.message?.content ?? '';
+}
 
+/** A cheaper OpenAI-compatible endpoint (e.g. Cloudflare Workers AI) used when Claude is unavailable. */
+export interface FallbackProvider {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+/** Errors that mean "this key can't be used right now", not "the request was bad". */
+export const isProviderUnavailable = (msg: string): boolean =>
+  /usage limits|credit balance is too low|http (401|402|403|429|529)/i.test(msg);
+
+type Complete = (messages: { role: 'user' | 'assistant'; content: string }[]) => Promise<string>;
+
+async function draftAndValidate(input: GenerateInput, complete: Complete): Promise<GeneratedStrategy> {
   const messages: { role: 'user' | 'assistant'; content: string }[] = [
     { role: 'user', content: buildUserPrompt(input) },
   ];
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const text = await callAnthropic(opts.apiKey, model, opts.fetchImpl, messages);
+    const text = await complete(messages);
     const parsed = extractJson(text) as { definition?: unknown; description?: unknown } | null;
     const definition = parsed?.definition;
     const validation = tsp.validateDefinition(definition);
@@ -158,4 +180,27 @@ export async function generateStrategy(
   }
 
   throw new Error('AI generation failed.');
+}
+
+/**
+ * Generate a validated TSP strategy from wizard inputs. Tries Claude first; if
+ * the operator key is capped, out of credit or revoked, retries on `fallback`.
+ * Throws if no provider is configured or neither yields a valid document.
+ */
+export async function generateStrategy(
+  input: GenerateInput,
+  opts: { apiKey: string; model?: string; fetchImpl: FetchLike; fallback?: FallbackProvider },
+): Promise<GeneratedStrategy> {
+  const { fallback, fetchImpl } = opts;
+  if (!opts.apiKey && !fallback) throw new Error('AI generation is not configured (missing operator API key).');
+  const viaFallback = () => draftAndValidate(input, (m) => callOpenAICompatible(fallback!, fetchImpl, m));
+  if (!opts.apiKey) return viaFallback();
+
+  try {
+    const model = await resolveAnthropicModel(opts.apiKey, opts.model ?? DEFAULT_AI_MODEL, fetchImpl);
+    return await draftAndValidate(input, (m) => callAnthropic(opts.apiKey, model, fetchImpl, m));
+  } catch (e) {
+    if (fallback && isProviderUnavailable((e as Error).message)) return viaFallback();
+    throw e;
+  }
 }

@@ -70,4 +70,42 @@ describe('generateStrategy', () => {
     const fetchImpl: FetchLike = async () => ({ ok: false, status: 500, text: async () => 'boom' });
     await expect(generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl })).rejects.toThrow(/http 500/);
   });
+
+  describe('fallback provider', () => {
+    const fallback = { baseUrl: 'https://cf.example/ai/v1/', apiKey: 'cf-test', model: '@cf/openai/gpt-oss-120b' };
+    const openAiOk = (text: string) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ choices: [{ message: { content: text } }] }),
+    });
+
+    it('retries on the fallback when Claude is over its spend limit', async () => {
+      const urls: string[] = [];
+      const fetchImpl: FetchLike = vi.fn(async (url: string) => {
+        urls.push(url);
+        if (url.includes('anthropic')) {
+          return { ok: false, status: 400, text: async () => 'You have reached your specified API usage limits.' };
+        }
+        return openAiOk(JSON.stringify(validDoc));
+      });
+      const res = await generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl, fallback });
+      expect((res.definition as { id: string }).id).toBe('ai-rsi');
+      expect(urls.at(-1)).toBe('https://cf.example/ai/v1/chat/completions');
+    });
+
+    it('uses the fallback alone when no Claude key is set', async () => {
+      const fetchImpl: FetchLike = vi.fn(async () => openAiOk(JSON.stringify(validDoc)));
+      const res = await generateStrategy(input, { apiKey: '', fetchImpl, fallback });
+      expect((res.definition as { id: string }).id).toBe('ai-rsi');
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    });
+
+    it('does not fall back on a non-quota failure', async () => {
+      const fetchImpl: FetchLike = vi.fn(async () => ({ ok: false, status: 500, text: async () => 'boom' }));
+      await expect(
+        generateStrategy(input, { apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl, fallback }),
+      ).rejects.toThrow(/anthropic http 500/);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    });
+  });
 });

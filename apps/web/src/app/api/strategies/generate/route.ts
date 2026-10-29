@@ -4,13 +4,22 @@
  * AI-drafts a TSP strategy for the builder wizard from a few inputs (niches,
  * goal) + four 1–10 knobs. Auth-gated and rate-limited per user — it spends the
  * OPERATOR's Anthropic key, so we guard against the shared-key quota/abuse trap.
+ * When that key is capped or revoked it falls back to a cheaper OpenAI-compatible
+ * endpoint (AI_FALLBACK_URL / AI_FALLBACK_API_KEY / AI_FALLBACK_MODEL, e.g.
+ * Cloudflare Workers AI).
  *
  * Body: { niches?: string, goal?: string, knobs: { risk, horizon, frequency, assetFocus } }
  * Returns: { definition: <TSP doc>, description: string }
  */
 import type { NextRequest } from 'next/server';
 import { authenticate, unauthorized } from '@/lib/api-auth';
-import { generateStrategy, type FetchLike, type GenerateInput } from '@/lib/strategy-ai';
+import {
+  generateStrategy,
+  isProviderUnavailable,
+  type FallbackProvider,
+  type FetchLike,
+  type GenerateInput,
+} from '@/lib/strategy-ai';
 
 export const maxDuration = 60;
 
@@ -32,6 +41,15 @@ function rateLimited(userId: string): boolean {
   return false;
 }
 
+const DEFAULT_FALLBACK_MODEL = '@cf/openai/gpt-oss-120b';
+
+function fallbackProvider(): FallbackProvider | undefined {
+  const baseUrl = process.env.AI_FALLBACK_URL;
+  const apiKey = process.env.AI_FALLBACK_API_KEY;
+  if (!baseUrl || !apiKey) return undefined;
+  return { baseUrl, apiKey, model: process.env.AI_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL };
+}
+
 interface GenerateBody {
   niches?: string;
   goal?: string;
@@ -42,8 +60,9 @@ export async function POST(req: NextRequest) {
   const auth = await authenticate(req);
   if (!auth) return unauthorized();
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  const apiKey = process.env.ANTHROPIC_API_KEY ?? '';
+  const fallback = fallbackProvider();
+  if (!apiKey && !fallback) {
     return Response.json({ error: 'AI generation is not configured on this server.' }, { status: 503 });
   }
 
@@ -65,12 +84,16 @@ export async function POST(req: NextRequest) {
   };
 
   try {
-    const result = await generateStrategy(input, { apiKey, fetchImpl: globalThis.fetch as unknown as FetchLike });
+    const result = await generateStrategy(input, {
+      apiKey,
+      fallback,
+      fetchImpl: globalThis.fetch as unknown as FetchLike,
+    });
     return Response.json(result);
   } catch (e) {
     const msg = (e as Error).message;
     // The operator key is shared and capped: say so plainly instead of dumping provider JSON.
-    if (/usage limits|credit balance is too low|anthropic http (401|429)/i.test(msg)) {
+    if (isProviderUnavailable(msg)) {
       return Response.json(
         { error: 'AI generation is over its spend limit right now. Try again later, or build the strategy by hand.' },
         { status: 503 },
