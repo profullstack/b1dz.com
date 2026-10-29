@@ -70,6 +70,16 @@ describe('POST /api/strategies/generate', () => {
     expect((await res.json()).error).toMatch(/invalid strategy/);
   });
 
+  it('503 with a plain message when the operator key is over its spend limit', async () => {
+    generateStrategyMock.mockRejectedValueOnce(
+      new Error('anthropic http 400: {"type":"error","error":{"message":"You have reached your specified API usage limits."}}'),
+    );
+    const { POST } = await importRoute();
+    const res = await POST(makeReq(goodBody) as never);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/spend limit/);
+  });
+
   it('429 after exceeding the per-user rate limit', async () => {
     const { POST } = await importRoute();
     let last: Response | undefined;

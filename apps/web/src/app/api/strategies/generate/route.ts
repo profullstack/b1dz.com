@@ -68,6 +68,14 @@ export async function POST(req: NextRequest) {
     const result = await generateStrategy(input, { apiKey, fetchImpl: globalThis.fetch as unknown as FetchLike });
     return Response.json(result);
   } catch (e) {
-    return Response.json({ error: (e as Error).message }, { status: 502 });
+    const msg = (e as Error).message;
+    // The operator key is shared and capped: say so plainly instead of dumping provider JSON.
+    if (/usage limits|credit balance is too low|anthropic http (401|429)/i.test(msg)) {
+      return Response.json(
+        { error: 'AI generation is over its spend limit right now. Try again later, or build the strategy by hand.' },
+        { status: 503 },
+      );
+    }
+    return Response.json({ error: msg }, { status: 502 });
   }
 }
