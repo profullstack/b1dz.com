@@ -32,6 +32,9 @@ interface InstalledRow {
   status: string;
   paid_until: string | null;
   installed_at: string;
+  /** Set for builder strategies (`tsp:<id>`), which have no catalog entry. */
+  name?: string;
+  strategyId?: string;
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -331,7 +334,7 @@ export function PluginsSection({
           <div className="divide-y divide-zinc-800">
             {rows.map((row) => {
               const entry = PLUGIN_CATALOG.find((e) => e.manifest.id === row.plugin_id);
-              const name = entry?.manifest.name ?? row.plugin_id;
+              const name = entry?.manifest.name ?? row.name ?? row.plugin_id;
               const isFree = !row.paid_until;
               const expiresMs = row.paid_until ? new Date(row.paid_until).getTime() : null;
               const isDisabled = row.status === 'disabled';

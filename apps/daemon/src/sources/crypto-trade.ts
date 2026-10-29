@@ -16,11 +16,13 @@ import {
   isBudgetWindow,
   windowStartFor,
   setAiSizeMultiplier,
+  setStrategyOverride,
   executeAgentMarketBuy,
   type BudgetWindow,
 } from '@b1dz/source-crypto-trade';
 import { analyze, aiSizeMultiplier, RateLimiter, type AiAnalysis } from '@b1dz/ai-analyzer';
 import { loadUserConfig } from '../user-config.js';
+import { combineStrategies, forAssetClass, loadUserStrategies } from '../user-strategies.js';
 import { AlertBus, getAnalysisCache, getB1dzVersion, setAnalysisCache } from '@b1dz/core';
 import { runnerStorageFor } from '../runner-storage.js';
 import { logActivity, logRaw, getActivityLog, getRawLog } from './activity-log.js';
@@ -420,6 +422,9 @@ export const cryptoTradeWorker: SourceWorker = {
       // so quiet ticks don't spam.
       const tickStart = Date.now();
       const items = await cryptoTradeSource.poll(sourceCtx);
+      // The user's own enabled strategies replace the default composite when present.
+      const mine = forAssetClass(await loadUserStrategies(ctx.supabase, ctx.userId), 'crypto');
+      const userStrategy = mine.length ? combineStrategies(mine) : null;
       const pollMs = Date.now() - tickStart;
       const evalStart = Date.now();
       const signals: unknown[] = (ctx.payload?.signals as unknown[]) ?? [];
@@ -427,7 +432,14 @@ export const cryptoTradeWorker: SourceWorker = {
       let signalCount = 0;
       let executedCount = 0;
       for (const item of items) {
-        const opp = cryptoTradeSource.evaluate(item, sourceCtx);
+        // evaluate() is synchronous, so the override can't leak into another user's tick.
+        setStrategyOverride(userStrategy);
+        let opp;
+        try {
+          opp = cryptoTradeSource.evaluate(item, sourceCtx);
+        } finally {
+          setStrategyOverride(null);
+        }
         if (!opp) continue;
         signals.push(opp);
         signalCount += 1;

@@ -39,8 +39,10 @@ import {
   type BrokerConnectorPlugin,
   type MarketSnapshot,
   type Signal,
+  type StrategyPlugin,
 } from '@b1dz/core';
 import { loadUserConfig, mergeUserSecret, type UserConfig } from '../user-config.js';
+import { combineStrategies, forAssetClass, loadUserStrategies } from '../user-strategies.js';
 
 const POLL_INTERVAL_MS = 30_000;
 const HISTORY_CAP = 120;
@@ -180,10 +182,10 @@ function watchlist(cfg: UserConfig): string[] {
 interface SymbolState { history: { bid: number; ask: number; ts: number }[]; openedEtDate?: string; }
 interface RecentOrder { at: string; symbol: string; side: string; status: string; executed: boolean; note: string; }
 
-/** Pick the strongest signal across all strategies for one snapshot. */
-function strongestSignal(snap: MarketSnapshot, history: MarketSnapshot[]): Signal | null {
+/** Pick the strongest signal across the given strategies for one snapshot. */
+function strongestSignal(strategies: readonly Pick<StrategyPlugin, 'evaluate'>[], snap: MarketSnapshot, history: MarketSnapshot[]): Signal | null {
   let best: Signal | null = null;
-  for (const s of STRATEGY_PLUGINS) {
+  for (const s of strategies) {
     const sig = s.evaluate(snap, history);
     if (sig && (!best || sig.strength > best.strength)) best = sig;
   }
@@ -240,6 +242,10 @@ export const equitiesWorker: SourceWorker = {
       return;
     }
 
+    // The user's own enabled strategies replace the built-in set when present.
+    const mine = forAssetClass(await loadUserStrategies(ctx.supabase, ctx.userId), 'equity');
+    const strategies = mine.length ? [combineStrategies(mine)] : STRATEGY_PLUGINS;
+
     for (const symbol of symbols) {
       try {
         const [quote, session] = await Promise.all([broker.connector.quote(symbol), broker.connector.session(symbol)]);
@@ -254,7 +260,7 @@ export const equitiesWorker: SourceWorker = {
         });
         const snaps = st.history.map(toSnap);
         const snap = snaps.at(-1)!;
-        const signal = strongestSignal(snap, snaps.slice(0, -1));
+        const signal = strongestSignal(strategies, snap, snaps.slice(0, -1));
         if (!signal) continue;
 
         const qty = positionsBySymbol.get(symbol) ?? 0;
@@ -304,6 +310,7 @@ export const equitiesWorker: SourceWorker = {
       dayTrades: prunedDayTrades,
       recentDayTrades: countRecentDayTrades(prunedDayTrades, now.getTime()),
       recentOrders,
+      strategies: mine.length ? mine.map((s) => ({ id: s.id, name: s.name, source: 'user' })) : STRATEGY_PLUGINS.map((s) => ({ id: s.manifest.id, name: s.manifest.name, source: 'built-in' })),
       daemon: { lastTickAt: nowIso, worker: 'equities', status: 'running', version },
     });
   },

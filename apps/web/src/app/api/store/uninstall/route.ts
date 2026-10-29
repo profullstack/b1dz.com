@@ -8,6 +8,7 @@ import type { NextRequest } from 'next/server';
 import { PLUGIN_CATALOG } from '@b1dz/core';
 import { authenticate, unauthorized } from '@/lib/api-auth';
 import { createAdminSupabase } from '@/lib/supabase';
+import { TSP_PLUGIN_PREFIX } from '@/lib/user-strategies';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,10 +20,13 @@ export async function POST(req: NextRequest) {
   const pluginId = typeof body?.pluginId === 'string' ? body.pluginId : '';
   if (!pluginId) return Response.json({ error: 'pluginId required' }, { status: 400 });
 
+  // `tsp:<id>` rows are the user's own builder strategies (free, no catalog entry).
   const entry = PLUGIN_CATALOG.find((e) => e.manifest.id === pluginId);
-  if (!entry) return Response.json({ error: `unknown plugin: ${pluginId}` }, { status: 404 });
+  if (!entry && !pluginId.startsWith(TSP_PLUGIN_PREFIX)) {
+    return Response.json({ error: `unknown plugin: ${pluginId}` }, { status: 404 });
+  }
 
-  if (entry.pricing.model === 'subscription') {
+  if (entry?.pricing.model === 'subscription') {
     return Response.json({ error: 'paid subscriptions cannot be uninstalled — they expire automatically' }, { status: 400 });
   }
 

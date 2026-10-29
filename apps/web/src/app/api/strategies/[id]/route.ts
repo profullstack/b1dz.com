@@ -14,6 +14,7 @@ import {
   isDuplicateSlug,
   isUuid,
   OWNER_COLUMNS,
+  runPluginId,
   strategyFieldsFromDefinition,
   type UserStrategyRow,
 } from '@/lib/user-strategies';
@@ -78,5 +79,11 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     .select('id');
   if (error) return Response.json({ error: error.message }, { status: 500 });
   if (!data?.length) return notFound();
+  // Stop running it too (other users' runs of a deleted strategy just load nothing).
+  await createAdminSupabase()
+    .from('user_installed_plugins')
+    .delete()
+    .eq('user_id', auth.userId)
+    .eq('plugin_id', runPluginId(id));
   return Response.json({ deleted: id });
 }

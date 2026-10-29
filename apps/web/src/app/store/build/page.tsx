@@ -3,7 +3,7 @@ import Image from 'next/image';
 import type { Metadata } from 'next';
 import { createAdminSupabase, createServerSupabase } from '@/lib/supabase';
 import { SignOutForm } from '@/components/sign-out-form';
-import { isUuid, OWNER_COLUMNS, type UserStrategyRow } from '@/lib/user-strategies';
+import { isUuid, OWNER_COLUMNS, TSP_PLUGIN_PREFIX, type UserStrategyRow } from '@/lib/user-strategies';
 import { StrategyBuilder, type SavedStrategy } from './builder-client';
 
 export const metadata: Metadata = {
@@ -37,7 +37,14 @@ async function loadStrategies(userId: string, id: string | undefined) {
       initial = published ?? null;
     }
   }
-  return { mine, initial, owned };
+  const { data: installs } = await createAdminSupabase()
+    .from('user_installed_plugins')
+    .select('plugin_id')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .like('plugin_id', `${TSP_PLUGIN_PREFIX}%`);
+  const runningIds = (installs ?? []).map((r: { plugin_id: string }) => r.plugin_id.slice(TSP_PLUGIN_PREFIX.length));
+  return { mine, initial, owned, runningIds };
 }
 
 const forClient = ({ user_id: _userId, ...s }: UserStrategyRow): SavedStrategy => s;
@@ -86,6 +93,7 @@ export default async function BuildPage({ searchParams }: { searchParams: Promis
           initial={loaded.initial ? forClient(loaded.initial) : null}
           owned={loaded.owned}
           mine={loaded.mine.map(forClient)}
+          runningIds={loaded.runningIds}
         />
       ) : (
         <section className="max-w-6xl mx-auto px-6 py-16">

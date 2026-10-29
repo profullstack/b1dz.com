@@ -5,7 +5,8 @@ import Image from 'next/image';
 import type { Metadata } from 'next';
 import { PLUGIN_CATALOG, type CatalogEntry } from '@b1dz/core';
 import { createAdminSupabase, createServerSupabase } from '@/lib/supabase';
-import { PUBLIC_COLUMNS, type UserStrategyRow } from '@/lib/user-strategies';
+import { PUBLIC_COLUMNS, runPluginId, type UserStrategyRow } from '@/lib/user-strategies';
+import { RunStrategyButton } from './build/run-button';
 import { coinpayConfigured } from '@/lib/coinpay-client';
 import { InstallButton } from './install-button';
 import { SignOutForm } from '@/components/sign-out-form';
@@ -184,7 +185,14 @@ export default async function StorePage() {
           </p>
         ) : (
           <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {community.map((s) => <CommunityCard key={s.id} strategy={s} />)}
+            {community.map((s) => (
+              <CommunityCard
+                key={s.id}
+                strategy={s}
+                loggedIn={!!user}
+                running={installed.get(runPluginId(s.id))?.status === 'active'}
+              />
+            ))}
           </div>
         )}
       </section>
@@ -250,7 +258,7 @@ function PluginCard({ entry, loggedIn, installed, coinpayConfigured: cpOk, backt
  * the same horizons the daemon trades, from the latest ~/bin/backtest.js run.
  * Horizons with zero trades are hidden to keep the card tight.
  */
-function CommunityCard({ strategy: s }: { strategy: CommunityStrategy }) {
+function CommunityCard({ strategy: s, loggedIn, running }: { strategy: CommunityStrategy; loggedIn: boolean; running: boolean }) {
   const kind = (s.definition.definition as { kind?: string } | undefined)?.kind;
   return (
     <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900 px-6 py-5 hover:border-orange-500/30 transition">
@@ -289,9 +297,12 @@ function CommunityCard({ strategy: s }: { strategy: CommunityStrategy }) {
             <span key={c} className="rounded-md bg-zinc-950 border border-zinc-800 px-2 py-0.5 text-[10px] font-mono text-zinc-400">{c}</span>
           ))}
         </div>
-        <Link href={`/store/build?id=${s.id}`} className="text-sm text-orange-400 hover:text-orange-300 whitespace-nowrap">
-          Open in builder →
-        </Link>
+        <div className="flex flex-col items-end gap-2">
+          {loggedIn && <RunStrategyButton strategyId={s.id} initialRunning={running} compact />}
+          <Link href={`/store/build?id=${s.id}`} className="text-xs text-orange-400 hover:text-orange-300 whitespace-nowrap">
+            Open in builder →
+          </Link>
+        </div>
       </div>
     </div>
   );

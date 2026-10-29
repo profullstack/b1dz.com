@@ -2254,6 +2254,14 @@ async function getDefaultStrategy(): Promise<Strategy> {
   return defaultStrategy;
 }
 
+// The current user's own strategy (their enabled TSP strategies), set by the
+// daemon immediately before each synchronous evaluate() call so concurrent
+// users' ticks can't see each other's. null = the default composite.
+let strategyOverride: Strategy | null = null;
+export function setStrategyOverride(strategy: Strategy | null): void {
+  strategyOverride = strategy;
+}
+
 /** Slippage used for DEX buys/sells. Env-tunable; mirrors the
  *  buySlippageBpsFromEnv ceiling used on CEX IOC orders but routed to
  *  the adapter's quoter instead of a limit-price encoding. Default
@@ -2536,7 +2544,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return null;
       }
 
-      const activeStrategy = strategy ?? defaultStrategy ?? momentumStrategy;
+      const activeStrategy = strategy ?? strategyOverride ?? defaultStrategy ?? momentumStrategy;
       const analysisSignal = analysisToTradeSignal(item.analysis);
 
       // ── Check exits first ──
