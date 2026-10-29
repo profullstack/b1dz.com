@@ -8,6 +8,7 @@
 import {
   callAnthropic,
   callOpenAI,
+  resolveAnthropicModel,
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_OPENAI_MODEL,
   type AnalyzePromptInput,
@@ -35,7 +36,7 @@ export async function analyze(input: AnalyzePromptInput, opts: AnalyzeOptions): 
     const raw = await callOpenAI(opts.apiKey, input, { model, fetchImpl: opts.fetchImpl });
     return coerceAnalysis(raw, { provider: 'openai', model, ts });
   }
-  const model = opts.model ?? DEFAULT_ANTHROPIC_MODEL;
+  const model = await resolveAnthropicModel(opts.apiKey, opts.model ?? DEFAULT_ANTHROPIC_MODEL, opts.fetchImpl);
   const raw = await callAnthropic(opts.apiKey, input, { model, fetchImpl: opts.fetchImpl });
   return coerceAnalysis(raw, { provider: 'anthropic', model, ts });
 }
@@ -55,6 +56,13 @@ export {
   extractJson,
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_OPENAI_MODEL,
+  FALLBACK_ANTHROPIC_MODELS,
+  LATEST_ALIAS,
+  aliasFamily,
+  clearModelCache,
+  resolveAnthropicModel,
+  supportsEffort,
+  type AnthropicFamily,
   type AnalyzePromptInput,
   type FetchLike,
 } from './providers.js';

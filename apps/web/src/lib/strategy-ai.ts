@@ -14,9 +14,11 @@
  * it's recursive (and/or/not → condition), which json-schema strict mode
  * rejects — so we prompt for JSON, extract it, and verify with tsp.compile.
  */
+import { resolveAnthropicModel } from '@b1dz/ai-analyzer';
 import { tsp } from '@b1dz/source-strategies';
 
-export const DEFAULT_AI_MODEL = process.env.STRATEGY_AI_MODEL || 'claude-opus-4-8';
+/** `latest` tracks the newest Opus via /v1/models; set a concrete id to pin. */
+export const DEFAULT_AI_MODEL = process.env.STRATEGY_AI_MODEL || 'latest';
 
 export interface Knobs {
   /** 1 = conservative … 10 = extreme/aggressive */
@@ -43,7 +45,7 @@ export interface GeneratedStrategy {
 /** Minimal fetch shape so this module needs no DOM/node typings. */
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: { method: string; headers: Record<string, string>; body?: string },
 ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
 const clamp10 = (n: number): number => Math.max(1, Math.min(10, Math.round(Number(n) || 1)));
@@ -103,7 +105,8 @@ async function callAnthropic(
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({ model, max_tokens: 1500, system: SYSTEM_PROMPT, messages }),
+    // Current models always think, so the budget covers thinking + the JSON.
+    body: JSON.stringify({ model, max_tokens: 16000, system: SYSTEM_PROMPT, messages }),
   });
   if (!res.ok) throw new Error(`anthropic http ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const body = JSON.parse(await res.text()) as { content?: { type: string; text?: string }[] };
@@ -119,7 +122,7 @@ export async function generateStrategy(
   opts: { apiKey: string; model?: string; fetchImpl: FetchLike },
 ): Promise<GeneratedStrategy> {
   if (!opts.apiKey) throw new Error('AI generation is not configured (missing operator API key).');
-  const model = opts.model ?? DEFAULT_AI_MODEL;
+  const model = await resolveAnthropicModel(opts.apiKey, opts.model ?? DEFAULT_AI_MODEL, opts.fetchImpl);
 
   const messages: { role: 'user' | 'assistant'; content: string }[] = [
     { role: 'user', content: buildUserPrompt(input) },

@@ -226,6 +226,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@b1dz/ai-analyzer':
+        specifier: workspace:*
+        version: link:../../packages/ai-analyzer
       '@b1dz/core':
         specifier: workspace:*
         version: link:../../packages/core

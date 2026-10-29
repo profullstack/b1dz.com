@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@b1dz/ai-analyzer": "workspace:*",
     "@b1dz/core": "workspace:*",
     "@b1dz/projection-engine": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",

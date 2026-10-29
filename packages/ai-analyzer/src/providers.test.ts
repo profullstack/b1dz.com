@@ -1,6 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { analyze } from './index.js';
-import { buildUserPrompt, extractJson, type FetchLike } from './providers.js';
+import {
+  buildUserPrompt,
+  clearModelCache,
+  extractJson,
+  FALLBACK_ANTHROPIC_MODELS,
+  resolveAnthropicModel,
+  supportsEffort,
+  type FetchLike,
+} from './providers.js';
 
 const input = {
   pair: 'BTC-USD',
@@ -59,5 +67,49 @@ describe('analyze (openai)', () => {
     expect(a.provider).toBe('openai');
     expect(a.bias).toBe('neutral');
     expect(a.regime).toBe('ranging');
+  });
+});
+
+describe('resolveAnthropicModel', () => {
+  const models = (data: Array<{ id: string; created_at: string }>): FetchLike =>
+    vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ data }) }));
+  const catalogue = [
+    { id: 'claude-sonnet-5-5', created_at: '2026-09-01T00:00:00Z' },
+    { id: 'claude-opus-5', created_at: '2026-05-01T00:00:00Z' },
+    { id: 'claude-opus-6', created_at: '2027-03-01T00:00:00Z' },
+    { id: 'claude-opus-5-5', created_at: '2026-09-01T00:00:00Z' },
+  ];
+
+  it('resolves `latest` to the newest Opus and caches it', async () => {
+    clearModelCache();
+    const fetchImpl = models(catalogue);
+    expect(await resolveAnthropicModel('k', 'latest', fetchImpl)).toBe('claude-opus-6');
+    expect(await resolveAnthropicModel('k', undefined, fetchImpl)).toBe('claude-opus-6');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('tracks a named family', async () => {
+    clearModelCache();
+    expect(await resolveAnthropicModel('k', 'latest-sonnet', models(catalogue))).toBe('claude-sonnet-5-5');
+  });
+
+  it('passes a concrete id through without a lookup', async () => {
+    const fetchImpl = models(catalogue);
+    expect(await resolveAnthropicModel('k', 'claude-opus-5', fetchImpl)).toBe('claude-opus-5');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the pinned id when the models API fails', async () => {
+    clearModelCache();
+    const fetchImpl: FetchLike = async () => ({ ok: false, status: 401, text: async () => 'nope' });
+    expect(await resolveAnthropicModel('k', 'latest', fetchImpl)).toBe(FALLBACK_ANTHROPIC_MODELS.opus);
+  });
+
+  it('only sends effort to models that accept it', () => {
+    expect(supportsEffort('claude-opus-5-5')).toBe(true);
+    expect(supportsEffort('claude-haiku-5-5')).toBe(true);
+    expect(supportsEffort('claude-sonnet-4-6')).toBe(true);
+    expect(supportsEffort('claude-haiku-4-5-20251001')).toBe(false);
+    expect(supportsEffort('claude-sonnet-4-5')).toBe(false);
   });
 });
