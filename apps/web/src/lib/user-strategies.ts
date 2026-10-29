@@ -11,6 +11,14 @@ import type { BacktestResponse } from '@/lib/strategy-backtest-runner';
 
 export type Visibility = 'private' | 'published';
 
+/**
+ * A strategy switched on for live trading is a user_installed_plugins row with
+ * this plugin_id prefix + the user_strategies id; the daemon (apps/daemon
+ * src/user-strategies.ts) loads and runs those.
+ */
+export const TSP_PLUGIN_PREFIX = 'tsp:';
+export const runPluginId = (strategyId: string) => `${TSP_PLUGIN_PREFIX}${strategyId}`;
+
 export interface UserStrategyRow {
   id: string;
   user_id: string;

@@ -18,6 +18,7 @@ import {
 import { fmtReturnPct, fmtWinRate } from '@/lib/strategy-backtest-display';
 import type { BacktestResponse } from '@/lib/strategy-backtest-runner';
 import type { Visibility } from '@/lib/user-strategies';
+import { RunStrategyButton } from './run-button';
 
 /** A saved strategy as the builder sees it (GET /api/strategies[/:id]). */
 export interface SavedStrategy {
@@ -56,13 +57,23 @@ const KNOBS: { key: keyof Knobs; label: string; low: string; high: string }[] = 
   { key: 'assetFocus', label: 'Asset focus', low: 'equities', high: 'crypto' },
 ];
 
-export function StrategyBuilder({ initial = null, owned = false, mine: initialMine = [] }: {
+export function StrategyBuilder({ initial = null, owned = false, mine: initialMine = [], runningIds = [] }: {
   /** The strategy opened via ?id=, if any. */
   initial?: SavedStrategy | null;
   /** Whether `initial` belongs to the viewer; a published one that doesn't is saved as a copy. */
   owned?: boolean;
   mine?: SavedStrategy[];
+  /** Strategies the viewer has switched on for live trading. */
+  runningIds?: string[];
 }) {
+  const [running, setRunning] = useState(() => new Set(runningIds));
+  const markRunning = (id: string, on: boolean) =>
+    setRunning((s) => {
+      const next = new Set(s);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   const [state, setState] = useState<BuilderState>(() =>
     initial ? builderStateFromDefinition(initial.definition) : defaultBuilderState(),
   );
@@ -254,7 +265,7 @@ export function StrategyBuilder({ initial = null, owned = false, mine: initialMi
                   <span
                     className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wider ${m.visibility === 'published' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-zinc-700 text-zinc-500'}`}
                   >
-                    {m.visibility}
+                    {running.has(m.id) ? '● running' : m.visibility}
                   </span>
                 </li>
               ))}
@@ -265,7 +276,16 @@ export function StrategyBuilder({ initial = null, owned = false, mine: initialMi
 
         {initial && forkedFrom === initial.id && (
           <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-5 py-3 text-sm text-sky-200">
-            You opened <strong>{initial.name}</strong> from the store. Saving makes your own private copy.
+            <p>
+              You opened <strong>{initial.name}</strong> from the store. Run it as-is, or edit and save your own private copy.
+            </p>
+            <div className="mt-2">
+              <RunStrategyButton
+                strategyId={initial.id}
+                initialRunning={running.has(initial.id)}
+                onChange={(on) => markRunning(initial.id, on)}
+              />
+            </div>
           </div>
         )}
 
@@ -464,6 +484,16 @@ export function StrategyBuilder({ initial = null, owned = false, mine: initialMi
               )}
             </div>
           </div>
+          {saved && (
+            <div className="border-t border-zinc-800 pt-3">
+              <RunStrategyButton
+                key={saved.id}
+                strategyId={saved.id}
+                initialRunning={running.has(saved.id)}
+                onChange={(on) => markRunning(saved.id, on)}
+              />
+            </div>
+          )}
           {saveMsg && (
             <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">{saveMsg}</div>
           )}
