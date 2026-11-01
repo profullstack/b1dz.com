@@ -42,7 +42,7 @@ export function ProfileSection() {
 
   return (
     <SectionShell title="Profile" description="Your name, company and role." onSave={onSave}>
-      <ProfileFields idPrefix="settings-" values={values} onChange={setValues} errors={errors} disabled={!loaded} />
+      <ProfileFields idPrefix="settings-" values={values} onChange={setValues} errors={errors} disabled={!loaded}  importOpenProfile/>
     </SectionShell>
   );
 }

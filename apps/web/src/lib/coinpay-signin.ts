@@ -94,7 +94,7 @@ export function decodePending(raw: string | null | undefined): PendingAuth | nul
 
 export { sameState };
 
-export type CoinpayClaims = { sub: string; email: string | null; name: string | null };
+export type CoinpayClaims = { sub: string; email: string | null; name: string | null; openprofile_url?: string };
 
 /** Code -> tokens -> id_token checks -> userinfo (sub must match). */
 export async function fetchCoinpayClaims(
@@ -119,6 +119,7 @@ export async function fetchCoinpayClaims(
         sub: r.sub,
         email: r.email && r.email.includes('@') ? r.email.slice(0, 320) : null,
         name: r.name ? r.name.trim().slice(0, 200) : null,
+        ...(typeof r.userinfo?.openprofile_url === 'string' ? { openprofile_url: r.userinfo.openprofile_url } : {}),
       },
     };
   } catch (e) {
