@@ -1,4 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { saveOpenProfileContact } from '@profullstack/profile';
+import { profileStore } from '@/lib/profile';
 import { createServerClient } from '@supabase/ssr';
 import { createAdminSupabase } from '@/lib/supabase';
 import {
@@ -73,6 +75,10 @@ export async function GET(req: NextRequest) {
     return back(failPath, 'CoinPay sign-in failed. Try again.');
   }
   if (!resolved.ok) return back(failPath, resolved.error);
+  if (pending.mode === 'connect' && claims.claims.openprofile_url) {
+    try { await saveOpenProfileContact(profileStore(), resolved.userId, claims.claims.openprofile_url); }
+    catch { console.warn('[coinpay-signin] OpenProfile import skipped'); }
+  }
   if (pending.mode === 'connect') return back(`${pending.next}${pending.next.includes('?') ? '&' : '?'}coinpay=connected`);
 
   // Already signed in as that very user: nothing to mint.
