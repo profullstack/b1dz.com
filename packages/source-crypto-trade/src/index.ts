@@ -48,6 +48,17 @@ import {
   type VenueSellLimits,
 } from './sellability.js';
 import { DEFAULT_ANALYSIS_CONFIG } from './analysis/config.js';
+import { isTradablePair, scanPairs, momentumOnlyFromEnv, isMomentumEntry } from './universe.js';
+export {
+  DEFAULT_TRADE_UNIVERSE,
+  BLOCKED_BASES,
+  isTradablePair,
+  scanPairs,
+  tradeUniverse,
+  isMomentumEntry,
+  momentumOnlyFromEnv,
+  MOMENTUM_SETUPS,
+} from './universe.js';
 import {
   TAKE_PROFIT_PCT,
   TIME_EXIT_MS,
@@ -2440,9 +2451,17 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // actually get scanned by the momentum engine. Canonical names with
       // a USD suffix are mapped to each DEX's native equivalent inside
       // the feeds themselves.
-      const dexPairsRaw = process.env.DCA_DEX_TRADE_PAIRS ?? process.env.ARB_DEX_PAIRS ?? 'SOL-USD,BONK-USD,WIF-USD,JUP-USD,JTO-USD';
+      // Default is large caps only: the old default (BONK, WIF, JUP, JTO)
+      // put meme coins in the momentum scan.
+      const dexPairsRaw = process.env.DCA_DEX_TRADE_PAIRS ?? process.env.ARB_DEX_PAIRS ?? 'SOL-USD,ETH-USD';
       const dexPairs = dexPairsRaw.split(',').map((s) => s.trim()).filter(Boolean);
-      const PAIRS = [...new Set([...cexPairs, ...dexPairs])];
+      // Only top, non-meme assets (universe.ts), plus anything still held so
+      // its exits keep running.
+      const heldPairs = [
+        ...[...openPositions.values()].map((p) => p.pair),
+        ...[...pendingLiquidations.values()].map((l) => l.pair),
+      ];
+      const PAIRS = scanPairs([...new Set([...cexPairs, ...dexPairs])], heldPairs);
       lastEligiblePairs = [...PAIRS];
       pruneInactivePairState(PAIRS);
       await refreshPerExchangeVolumesIfStale();
@@ -2651,8 +2670,18 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       if (pendingBuyExchange === tradeExchange) return null;
       if (currentLiquidationOnExchange(tradeExchange)) return null;
 
-      // Run strategy
-      const sig = analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
+      // Top cryptos only: no meme coins or small caps (universe.ts).
+      // Held positions outside the universe still exit above.
+      if (!isTradablePair(item.pair)) return null;
+
+      // Run strategy. The built-in strategy is momentum-only by default:
+      // enter on an engine trend-continuation or breakout setup, never on
+      // a dip-buy / mean-reversion signal. A user's own strategy
+      // (strategy / strategyOverride) is left as written.
+      const usingBuiltIn = !strategy && !strategyOverride;
+      const sig = usingBuiltIn && momentumOnlyFromEnv()
+        ? (isMomentumEntry(item.analysis) ? analysisSignal : null)
+        : analysisSignal ?? activeStrategy.evaluate(item.snap, item.history);
       if (!sig || sig.side !== 'buy') return null;
 
       // Entry threshold is env-tunable via ENTRY_MIN_SCORE (0-100,
