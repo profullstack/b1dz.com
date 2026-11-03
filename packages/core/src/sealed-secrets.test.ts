@@ -75,10 +75,12 @@ describe('sealed-secrets', () => {
 
   it('server can seal OAuth tokens to the inbox; only the DEK holder opens them', async () => {
     const { dek, seal } = await createSeal(PASS, USER);
-    const e1 = await sealToInbox(seal.inbox_public_key, { ALPACA_OAUTH_TOKEN: 't1' }, USER);
+    // A long plaintext: a 2-char one like 't1' turns up in random base64 ciphertext by chance.
+    const T1 = 'plaintext-oauth-token-one';
+    const e1 = await sealToInbox(seal.inbox_public_key, { ALPACA_OAUTH_TOKEN: T1 }, USER);
     const e2 = await sealToInbox(seal.inbox_public_key, { ALPACA_OAUTH_TOKEN: 't2', ALPACA_OAUTH_REFRESH: 'r2' }, USER);
     e2.created_at = new Date(Date.parse(e1.created_at) + 1000).toISOString();
-    expect(JSON.stringify(e1)).not.toContain('t1');
+    expect(JSON.stringify(e1)).not.toContain(T1);
     const { patch, consumed } = await openInbox(dek, seal, [e2, e1], USER);
     expect(patch).toEqual({ ALPACA_OAUTH_TOKEN: 't2', ALPACA_OAUTH_REFRESH: 'r2' });
     expect(consumed.sort()).toEqual([e1.id, e2.id].sort());
