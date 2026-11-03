@@ -97,24 +97,6 @@ export class DaemonRuntime {
     console.log(`b1dzd: auto-enabled crypto-dca for user ${userId.slice(0, 8)}…`);
   }
 
-  /** Auto-enable pumpfun-trade for any user who has crypto-trade enabled.
-   *  Execution is guarded at runtime by PUMPFUN_TRADE_EXECUTION=true, so the
-   *  per-user row just needs { enabled: true } to schedule the worker. */
-  private async bootstrapPumpfunFor(userId: string): Promise<void> {
-    const { data } = await this.supabase
-      .from('source_state')
-      .select('user_id')
-      .eq('user_id', userId)
-      .eq('source_id', 'pumpfun-trade')
-      .maybeSingle();
-    if (data) return;
-    await this.supabase.from('source_state').upsert(
-      { user_id: userId, source_id: 'pumpfun-trade', payload: { enabled: true }, updated_at: new Date().toISOString() },
-      { onConflict: 'user_id,source_id' },
-    );
-    console.log(`b1dzd: auto-enabled pumpfun-trade for user ${userId.slice(0, 8)}…`);
-  }
-
   /** Install Alpaca by default and auto-enable the equities source for a user.
    *  Alpaca is the default broker (API-key/OAuth + paper sandbox, no gateway);
    *  IBKR stays available in the store but isn't default. The worker is inert
@@ -154,15 +136,9 @@ export class DaemonRuntime {
       catch (e) { console.error(`b1dzd: dca bootstrap failed: ${(e as Error).message}`); }
     }
 
-    // Auto-enable pumpfun-trade for any user who already has crypto-trade on.
-    const { data: tradeUsers } = await this.supabase
-      .from('source_state')
-      .select('user_id')
-      .eq('source_id', 'crypto-trade');
-    for (const row of tradeUsers ?? []) {
-      try { await this.bootstrapPumpfunFor(row.user_id as string); }
-      catch (e) { console.error(`b1dzd: pumpfun bootstrap failed: ${(e as Error).message}`); }
-    }
+    // pumpfun-trade (new bonding-curve meme coins) is no longer auto-enabled
+    // alongside crypto-trade: the trading bot sticks to top cryptos. A user
+    // can still opt in from the store; existing rows are left as they are.
 
     // Default-install IBKR + auto-enable equities for every known user.
     const { data: allRows } = await this.supabase
