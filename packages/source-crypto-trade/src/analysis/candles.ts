@@ -66,7 +66,7 @@ export function applySnapshotToCandles(
 }
 
 async function fetchJson(url: string) {
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`${res.status} ${text.slice(0, 160)}`.trim());

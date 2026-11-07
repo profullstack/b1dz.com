@@ -22,7 +22,8 @@
  *
  * Concurrency note: applyEnvOverlay() temporarily mutates process.env for the
  * duration of a tick so adapter code that reads process.env.X picks up the
- * user's values; overlays are serialized by a mutex.
+ * user's values. Identical overlays (one user's concurrent workers) share
+ * one application; different overlays are serialized.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { ALL_OVERLAY_KEYS, SECRET_SET } from '@b1dz/core';
@@ -425,49 +426,98 @@ export function __getOverlayKeysForTesting(): readonly string[] {
   return OVERLAY_KEYS;
 }
 
-let envOverlayMutex: Promise<void> = Promise.resolve();
+/**
+ * One overlay is applied to process.env at a time. Ticks that would write
+ * exactly the same values (same user, same settings) share it, so one
+ * user's workers run in parallel instead of queueing behind each other's
+ * slowest tick. Anything else (another user, or the same user after a
+ * settings change) waits until the active overlay drains and is restored.
+ */
+interface ActiveOverlay {
+  signature: string;
+  refs: number;
+  originals: Record<string, string | undefined>;
+  drained: Promise<void>;
+  release: () => void;
+}
+let activeOverlay: ActiveOverlay | null = null;
+let overlayWaiters = 0;
+
+/** key -> value to set, or null to delete. Built once per call. */
+function overlayPlan(config: UserConfig): Array<[string, string | null]> {
+  const plan: Array<[string, string | null]> = [];
+  for (const k of OVERLAY_KEYS) {
+    const isCredential = CREDENTIAL_OVERLAY_KEYS.has(k);
+    // Credentials: this user's secret blob ONLY. Non-credentials (RPC URLs,
+    // thresholds): the user's plain value, else keep the operator default.
+    const v = isCredential ? config.getUserSecret(k) : config.getUserPlain(k);
+    if (v !== undefined && v !== '') {
+      plan.push([k, v]);
+    } else if (isCredential) {
+      // No per-user credential -> strip the operator's env value so it can't
+      // leak into this user's tick (they'd otherwise act on the operator's
+      // exchange/broker/wallet). Non-credentials keep the operator default.
+      plan.push([k, null]);
+    }
+  }
+  return plan;
+}
+
+function leaveOverlay(a: ActiveOverlay): void {
+  a.refs -= 1;
+  if (a.refs > 0) return;
+  for (const k of OVERLAY_KEYS) {
+    const orig = a.originals[k];
+    if (orig === undefined) delete process.env[k];
+    else process.env[k] = orig;
+  }
+  if (activeOverlay === a) activeOverlay = null;
+  a.release();
+}
 
 /**
  * Run `fn` with the user's settings temporarily overlaid on process.env.
  * Adapter code that reads `process.env.X` directly will see the user's
  * value (with secret > plain > existing-env precedence). Original env
- * is restored after `fn` resolves or rejects.
- *
- * Concurrent overlay calls are serialized — concurrent ticks for
- * different users will queue here. See module header for context.
+ * is restored after the last concurrent `fn` sharing the overlay settles.
  */
 export async function applyEnvOverlay<T>(config: UserConfig, fn: () => Promise<T>): Promise<T> {
-  const prev = envOverlayMutex;
-  let release!: () => void;
-  envOverlayMutex = new Promise<void>((r) => { release = r; });
-  await prev;
+  const plan = overlayPlan(config);
+  // Held in memory only, never logged: it contains secret values.
+  const signature = JSON.stringify([config.userId, plan]);
 
-  // Snapshot original values so we can restore exactly.
-  const originals: Record<string, string | undefined> = {};
-  for (const k of OVERLAY_KEYS) originals[k] = process.env[k];
-
-  try {
-    for (const k of OVERLAY_KEYS) {
-      const isCredential = CREDENTIAL_OVERLAY_KEYS.has(k);
-      // Credentials: this user's secret blob ONLY. Non-credentials (RPC URLs,
-      // thresholds): the user's plain value, else keep the operator default.
-      const v = isCredential ? config.getUserSecret(k) : config.getUserPlain(k);
-      if (v !== undefined && v !== '') {
-        process.env[k] = v;
-      } else if (isCredential) {
-        // No per-user credential → strip the operator's env value so it can't
-        // leak into this user's tick (they'd otherwise act on the operator's
-        // exchange/broker/wallet). Non-credentials keep the operator default.
-        delete process.env[k];
+  for (;;) {
+    const current = activeOverlay;
+    if (current && current.signature === signature && overlayWaiters === 0) {
+      current.refs += 1;
+      try {
+        return await fn();
+      } finally {
+        leaveOverlay(current);
       }
     }
-    return await fn();
-  } finally {
-    for (const k of OVERLAY_KEYS) {
-      const orig = originals[k];
-      if (orig === undefined) delete process.env[k];
-      else process.env[k] = orig;
+    if (!current) {
+      const originals: Record<string, string | undefined> = {};
+      for (const k of OVERLAY_KEYS) originals[k] = process.env[k];
+      let release!: () => void;
+      const drained = new Promise<void>((r) => { release = r; });
+      const mine: ActiveOverlay = { signature, refs: 1, originals, drained, release };
+      activeOverlay = mine;
+      try {
+        for (const [k, v] of plan) {
+          if (v === null) delete process.env[k];
+          else process.env[k] = v;
+        }
+        return await fn();
+      } finally {
+        leaveOverlay(mine);
+      }
     }
-    release();
+    overlayWaiters += 1;
+    try {
+      await current.drained;
+    } finally {
+      overlayWaiters -= 1;
+    }
   }
 }

@@ -62,7 +62,7 @@ function normalizeKrakenBase(krakenName: string): string | null {
 }
 
 async function getKrakenVolumes(): Promise<Map<string, number>> {
-  const res = await fetch('https://api.kraken.com/0/public/Ticker');
+  const res = await fetch('https://api.kraken.com/0/public/Ticker', { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`Kraken ticker: ${res.status}`);
   const data = (await res.json()) as { error: string[]; result: Record<string, { v: [string, string]; c: [string, string] }> };
   if (data.error?.length) throw new Error(data.error.join(', '));
@@ -106,6 +106,7 @@ async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; chang
 
   const res = await fetch(`https://api.coinbase.com${path}?product_type=SPOT&limit=250`, {
     headers: { Authorization: `Bearer ${jwt}` },
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) return new Map();
   const data = (await res.json()) as { products: { product_id: string; quote_currency_id: string; base_currency_id: string; volume_24h: string; price: string; price_percentage_change_24h: string }[] };
@@ -231,6 +232,7 @@ async function discoverPairsFromVenues(): Promise<string[]> {
     for (let page = 1; page <= 2; page++) {
       const res = await fetch(
         `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`,
+        { signal: AbortSignal.timeout(20_000) },
       );
       if (!res.ok) break;
       const coins = (await res.json()) as { symbol: string; market_cap: number }[];
@@ -300,7 +302,7 @@ async function discoverPairsFromVenues(): Promise<string[]> {
  *  treat pairs present there as "live" — honest-enough proxy for our filter. */
 async function getGeminiVolumes(): Promise<Map<string, number>> {
   try {
-    const res = await fetch('https://api.gemini.com/v1/pricefeed');
+    const res = await fetch('https://api.gemini.com/v1/pricefeed', { signal: AbortSignal.timeout(20_000) });
     if (!res.ok) return new Map();
     const data = (await res.json()) as Array<{ pair: string; price: string; percentChange24h: string }>;
     const out = new Map<string, number>();
