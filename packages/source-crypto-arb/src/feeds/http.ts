@@ -8,11 +8,14 @@ import { proxyFetch } from './proxy.js';
 const MIN_INTERVAL_MS = 100; // batch calls = fewer requests, can throttle less
 const lastRequestAt = new Map<string, number>();
 
+// Reserve the next slot per host before waiting, so concurrent callers
+// queue at MIN_INTERVAL_MS apart instead of all reading the same "last"
+// timestamp and firing together.
 async function throttle(host: string): Promise<void> {
-  const last = lastRequestAt.get(host) ?? 0;
-  const wait = MIN_INTERVAL_MS - (Date.now() - last);
+  const slot = Math.max(Date.now(), lastRequestAt.get(host) ?? 0);
+  lastRequestAt.set(host, slot + MIN_INTERVAL_MS);
+  const wait = slot - Date.now();
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-  lastRequestAt.set(host, Date.now());
 }
 
 export async function fetchJson<T>(url: string, retries = 3): Promise<T> {

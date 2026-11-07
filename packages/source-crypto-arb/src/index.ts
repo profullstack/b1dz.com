@@ -297,8 +297,10 @@ export const cryptoArbSource: Source<ArbItem> = {
   async poll() {
     const PAIRS = await getActivePairs();
     const items: ArbItem[] = [];
-    for (const pair of PAIRS) {
-      const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair))))
+    // 8 pairs in flight; per-host REST pacing lives in feeds/http.ts.
+    let next = 0;
+    const scanOne = async (pair: string) => {
+      const snaps = (await Promise.all(FEEDS.map((f) => f.snapshot(pair).catch(() => null))))
         .filter((s): s is MarketSnapshot => (
           s != null
           && Number.isFinite(s.bid)
@@ -309,7 +311,10 @@ export const cryptoArbSource: Source<ArbItem> = {
       if (snaps.length >= 2) {
         items.push({ pair, snapshots: snaps });
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, PAIRS.length) }, async () => {
+      while (next < PAIRS.length) await scanOne(PAIRS[next++]!);
+    }));
     return items;
   },
   evaluate(item, ctx): Opportunity | null {
