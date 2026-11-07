@@ -9,7 +9,7 @@
  * Reads COINBASE_API_KEY_NAME and COINBASE_API_PRIVATE_KEY from env.
  */
 
-import { createSign, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 
 const BASE = 'https://api.coinbase.com';
 const PRODUCT_CACHE_TTL_MS = 5 * 60_000;
@@ -17,7 +17,7 @@ const PRODUCT_CACHE_TTL_MS = 5 * 60_000;
 export const MAX_POSITION_USD = 100;
 export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 
-import { getCoinbasePem } from './coinbase-pem.js';
+import { getCoinbasePem, getCoinbaseSigner } from './coinbase-pem.js';
 let productFetchedAt = 0;
 let tradableProducts = new Set<string>();
 let productMetaById = new Map<string, CoinbaseProduct>();
@@ -27,16 +27,18 @@ export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid
   const pem = getCoinbasePem();
   return {
     hasKeyName: keyName.length > 0,
-    keyNameLooksValid: /^organizations\/[^/]+\/apiKeys\/[^/]+$/.test(keyName),
-    hasPem: !!pem,
+    // Legacy keys use the long name; CDP keys use the bare key ID (a UUID).
+    keyNameLooksValid: /^organizations\/[^/]+\/apiKeys\/[^/]+$/.test(keyName)
+      || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(keyName),
+    hasPem: !!pem || !!getCoinbaseSigner(),
   };
 }
 
 function getKeys() {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const pem = getCoinbasePem();
-  if (!keyName || !pem) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
-  return { keyName, pem };
+  const signer = getCoinbaseSigner();
+  if (!keyName || !signer) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
+  return { keyName, signer };
 }
 
 function base64url(buf: Buffer): string {
@@ -44,7 +46,7 @@ function base64url(buf: Buffer): string {
 }
 
 function buildJwt(method: string, path: string): string {
-  const { keyName, pem } = getKeys();
+  const { keyName, signer } = getKeys();
   const now = Math.floor(Date.now() / 1000);
   const nonce = randomBytes(16).toString('hex');
 
@@ -52,7 +54,7 @@ function buildJwt(method: string, path: string): string {
   const pathOnly = path.split('?')[0];
   const uri = `${method} api.coinbase.com${pathOnly}`;
 
-  const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
+  const header = { alg: signer.alg, kid: keyName, nonce, typ: 'JWT' };
   const payload = {
     sub: keyName,
     iss: 'cdp',
@@ -67,9 +69,7 @@ function buildJwt(method: string, path: string): string {
   ];
   const signingInput = segments.join('.');
 
-  const sign = createSign('SHA256');
-  sign.update(signingInput);
-  const sig = sign.sign({ key: pem, dsaEncoding: 'ieee-p1363' });
+  const sig = signer.sign(signingInput);
 
   return `${signingInput}.${base64url(sig)}`;
 }

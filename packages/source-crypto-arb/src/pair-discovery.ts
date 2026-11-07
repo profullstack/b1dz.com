@@ -14,7 +14,7 @@
  * an empty answer falls back to the live path below, logged once per outage.
  */
 
-import { createSign, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import {
   createNichedbClient,
   fetchCryptoAssets,
@@ -25,7 +25,7 @@ import {
   type DiscoveredPair,
   type FetchLike,
 } from '@b1dz/source-nichedb';
-import { getCoinbasePem } from './feeds/coinbase-pem.js';
+import { getCoinbaseSigner } from './feeds/coinbase-pem.js';
 import { fetchJson } from './feeds/http.js';
 
 /** Per-exchange 24h USD volume floor. A pair listed on a venue with volume
@@ -91,18 +91,16 @@ function base64url(buf: Buffer): string {
 
 async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; change24h: number }>> {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const pem = getCoinbasePem();
-  if (!keyName || !pem) return new Map();
+  const signer = getCoinbaseSigner();
+  if (!keyName || !signer) return new Map();
   const path = '/api/v3/brokerage/products';
   const now = Math.floor(Date.now() / 1000);
   const nonce = randomBytes(16).toString('hex');
-  const header = { alg: 'ES256', kid: keyName, nonce, typ: 'JWT' };
+  const header = { alg: signer.alg, kid: keyName, nonce, typ: 'JWT' };
   const payload = { sub: keyName, iss: 'cdp', aud: ['cdp_service'], nbf: now, exp: now + 120, uris: [`GET api.coinbase.com${path}`] };
   const segs = [base64url(Buffer.from(JSON.stringify(header))), base64url(Buffer.from(JSON.stringify(payload)))];
   const input = segs.join('.');
-  const sign = createSign('SHA256');
-  sign.update(input);
-  const jwt = input + '.' + base64url(sign.sign({ key: pem, dsaEncoding: 'ieee-p1363' }));
+  const jwt = input + '.' + base64url(signer.sign(input));
 
   const res = await fetch(`https://api.coinbase.com${path}?product_type=SPOT&limit=250`, {
     headers: { Authorization: `Bearer ${jwt}` },
