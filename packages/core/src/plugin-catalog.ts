@@ -24,7 +24,7 @@ const PLUGIN_CONFIG_SCHEMAS = Object.fromEntries(
     coinbase: {
       strings: [{ key: 'COINBASE_API_KEY_NAME', label: 'API key ID', hint: 'The key ID Coinbase shows (or a legacy organizations/.../apiKeys/... name)' }],
       secrets: [
-        { key: 'COINBASE_API_PRIVATE_KEY', label: 'API secret', multiline: true, hint: 'The Secret Coinbase shows (Ed25519), or a -----BEGIN EC PRIVATE KEY----- block' },
+        { key: 'COINBASE_API_PRIVATE_KEY', label: 'API secret', multiline: true, hint: 'The Secret Coinbase shows (Ed25519), or a legacy EC private key in PEM form' },
         { key: 'COINBASE_API_PRIVATE_KEY_B', label: 'EC private key B (PEM, optional)', multiline: true, hint: 'Second account key' },
         { key: 'COINBASE_EC_KEY_B', label: 'EC key B legacy (PEM, optional)', multiline: true, hint: 'Legacy secondary key' },
       ],
