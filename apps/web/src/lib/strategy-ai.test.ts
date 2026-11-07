@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { generateStrategy, type FetchLike, type GenerateInput } from './strategy-ai';
 
 const input: GenerateInput = {
@@ -107,5 +107,68 @@ describe('generateStrategy', () => {
       ).rejects.toThrow(/anthropic http 500/);
       expect(fetchImpl).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('generateStrategy on c0mpute', () => {
+  afterEach(() => {
+    delete process.env.C0MPUTE_API_KEY;
+    delete process.env.C0MPUTE_DISABLED;
+  });
+
+  const chat = (text: string) => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ choices: [{ message: { content: text } }] }),
+  });
+  const claude = (text: string) => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ content: [{ type: 'text', text }] }),
+  });
+  const refused = (status: number, message: string) => ({ ok: false, status, text: async () => message });
+  const opts = (fetchImpl: FetchLike) => ({ apiKey: 'sk-test', model: 'claude-opus-5-5', fetchImpl });
+
+  it('goes to c0mpute first, peers only, and never touches the operator key', async () => {
+    process.env.C0MPUTE_API_KEY = 'ik_live_test';
+    const urls: string[] = [];
+    let body: { p2p_only?: boolean } = {};
+    const fetchImpl: FetchLike = async (url, init) => {
+      urls.push(url);
+      body = JSON.parse(init.body!);
+      return chat(JSON.stringify(validDoc));
+    };
+    const res = await generateStrategy(input, opts(fetchImpl));
+    expect((res.definition as { id: string }).id).toBe('ai-rsi');
+    expect(urls).toEqual(['https://infernetprotocol.com/v1/chat/completions']);
+    expect(body.p2p_only).toBe(true);
+  });
+
+  it('falls back to Claude when c0mpute has no node or writes a bad document', async () => {
+    process.env.C0MPUTE_API_KEY = 'ik_live_test';
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const answer of [refused(503, 'no live node'), chat('{"definition":{"kind":"nope"}}')]) {
+      const fetchImpl: FetchLike = async (url) =>
+        url.includes('infernetprotocol') ? answer : claude(JSON.stringify(validDoc));
+      const res = await generateStrategy(input, opts(fetchImpl));
+      expect((res.definition as { id: string }).id).toBe('ai-rsi');
+    }
+  });
+
+  it('a dead Anthropic key behind a failed c0mpute fails as it does today', async () => {
+    process.env.C0MPUTE_API_KEY = 'ik_live_test';
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchImpl: FetchLike = async (url) =>
+      url.includes('infernetprotocol') ? refused(503, 'no live node') : refused(400, 'Your credit balance is too low');
+    await expect(generateStrategy(input, opts(fetchImpl))).rejects.toThrow(/credit balance is too low/);
+  });
+
+  it('counts as configured with no operator key, and C0MPUTE_DISABLED turns it off', async () => {
+    process.env.C0MPUTE_API_KEY = 'ik_live_test';
+    const fetchImpl: FetchLike = async () => chat(JSON.stringify(validDoc));
+    const res = await generateStrategy(input, { apiKey: '', fetchImpl });
+    expect((res.definition as { id: string }).id).toBe('ai-rsi');
+    process.env.C0MPUTE_DISABLED = '1';
+    await expect(generateStrategy(input, { apiKey: '', fetchImpl })).rejects.toThrow(/not configured/);
   });
 });
