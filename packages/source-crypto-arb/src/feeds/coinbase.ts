@@ -43,7 +43,7 @@ async function coinbaseFetch<T>(path: string): Promise<T> {
   const jwt = buildJwt('GET', path);
   const headers: Record<string, string> = {};
   if (jwt) headers.Authorization = `Bearer ${jwt}`;
-  const res = await fetch(`${BASE}${path}`, { headers });
+  const res = await fetch(`${BASE}${path}`, { headers, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`Coinbase ${path}: ${res.status}`);
   return (await res.json()) as T;
 }

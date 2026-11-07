@@ -39,10 +39,18 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
   if (!shouldProxy(url)) return fetch(url, { ...init, signal: init?.signal ?? AbortSignal.timeout(15_000) });
 
   const proxyUrl = getProxyUrl();
-  if (!proxyUrl) return fetch(url, init);
+  if (!proxyUrl) {
+    // Reads get the same 15 s ceiling as the direct path above. Writes
+    // (orders) keep the caller's own behaviour: aborting a request the
+    // exchange may already have accepted would hide a fill.
+    const isRead = (init?.method ?? 'GET').toUpperCase() === 'GET';
+    return fetch(url, isRead ? { ...init, signal: init?.signal ?? AbortSignal.timeout(15_000) } : init);
+  }
 
   // Use curl through proxy — most reliable approach
-  const { execFileSync } = await import('node:child_process');
+  // Async on purpose: execFileSync froze the whole daemon (every user's
+  // workers, timers and the API) for up to 20 s per proxied call.
+  const { execFile } = await import('node:child_process');
   const method = init?.method ?? 'GET';
   const headers = init?.headers as Record<string, string> | undefined;
   const args = ['-sS', '--fail-with-body', '-x', proxyUrl, '--max-time', '15', '-X', method];
@@ -57,7 +65,12 @@ export async function proxyFetch(url: string, init?: RequestInit): Promise<Respo
   args.push(url);
 
   try {
-    const stdout = execFileSync('curl', args, { encoding: 'utf8', timeout: 20000 });
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile('curl', args, { encoding: 'utf8', timeout: 20000, maxBuffer: 64 * 1024 * 1024 }, (err, out, errOut) => {
+        if (err) reject(Object.assign(err, { stderr: errOut }));
+        else resolve(out);
+      });
+    });
     return new Response(stdout, { status: 200, headers: { 'content-type': 'application/json' } });
   } catch (e) {
     const host = new URL(url).host;

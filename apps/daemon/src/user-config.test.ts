@@ -296,6 +296,49 @@ describe('applyEnvOverlay', () => {
     await expect(applyEnvOverlay(cfg, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
     expect(process.env.BASE_RPC_URL).toBe('safe');
   });
+
+  it('lets ticks with an identical overlay run concurrently and restores after the last one', async () => {
+    delete process.env.KRAKEN_API_KEY;
+    setSupabaseClientForTesting(fakeClient([await sealedRow(U1, { KRAKEN_API_KEY: 'user-kraken' })]).client as never);
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    const cfg = await loadUserConfig(U1);
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((r) => { releaseSlow = r; });
+    let fastSaw: string | undefined;
+    const slow = applyEnvOverlay(cfg, () => slowGate);
+    // Must finish while the slow tick is still running (it used to queue).
+    await applyEnvOverlay(cfg, async () => { fastSaw = process.env.KRAKEN_API_KEY; });
+    expect(fastSaw).toBe('user-kraken');
+    expect(process.env.KRAKEN_API_KEY).toBe('user-kraken');
+    releaseSlow();
+    await slow;
+    expect(process.env.KRAKEN_API_KEY).toBeUndefined();
+  });
+
+  it('never overlaps two different users', async () => {
+    delete process.env.KRAKEN_API_KEY;
+    setSupabaseClientForTesting(fakeClient([
+      await sealedRow(U1, { KRAKEN_API_KEY: 'u1-kraken' }),
+      await sealedRow(U2, { KRAKEN_API_KEY: 'u2-kraken' }),
+    ]).client as never);
+    unlockStore.unlock(U1, seals[U1].dek, 3600);
+    unlockStore.unlock(U2, seals[U2].dek, 3600);
+    const cfg1 = await loadUserConfig(U1);
+    const cfg2 = await loadUserConfig(U2);
+    let releaseU1!: () => void;
+    const gate = new Promise<void>((r) => { releaseU1 = r; });
+    const seen: string[] = [];
+    const t1 = applyEnvOverlay(cfg1, async () => { seen.push(`u1:${process.env.KRAKEN_API_KEY}`); await gate; seen.push(`u1:${process.env.KRAKEN_API_KEY}`); });
+    const t2 = applyEnvOverlay(cfg2, async () => { seen.push(`u2:${process.env.KRAKEN_API_KEY}`); });
+    // A same-user tick arriving while U2 waits must not jump the queue.
+    const t1b = applyEnvOverlay(cfg1, async () => { seen.push(`u1b:${process.env.KRAKEN_API_KEY}`); });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seen).toEqual(['u1:u1-kraken']);
+    releaseU1();
+    await Promise.all([t1, t2, t1b]);
+    expect(seen).toEqual(['u1:u1-kraken', 'u1:u1-kraken', 'u2:u2-kraken', 'u1b:u1-kraken']);
+    expect(process.env.KRAKEN_API_KEY).toBeUndefined();
+  });
 });
 
 describe('OVERLAY_KEYS coverage', () => {
