@@ -3,8 +3,9 @@
  *
  * Turns a few plain-language inputs (niches, goal) plus four 1–10 knobs into a
  * valid TSP (Trading Strategy Protocol) document + a human description, by
- * prompting Claude. The model picks a template or composes rules; we then
- * validate + compile the result and, if it's malformed, do one repair round.
+ * prompting c0mpute first, then Claude. The model picks a template or composes
+ * rules; we then validate + compile the result and, if it's malformed, do one
+ * repair round.
  *
  * Dep-free `fetch` against the Anthropic Messages API — matches the
  * @b1dz/ai-analyzer convention rather than pulling in the SDK. The fetch + API
@@ -45,7 +46,7 @@ export interface GeneratedStrategy {
 /** Minimal fetch shape so this module needs no DOM/node typings. */
 export type FetchLike = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body?: string },
+  init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 
 const clamp10 = (n: number): number => Math.max(1, Math.min(10, Math.round(Number(n) || 1)));
@@ -125,7 +126,9 @@ async function callOpenAICompatible(
       model: fb.model,
       max_tokens: 8000,
       messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages],
+      ...fb.extraBody,
     }),
+    ...(fb.timeoutMs ? { signal: AbortSignal.timeout(fb.timeoutMs) } : {}),
   });
   if (!res.ok) throw new Error(`fallback http ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const body = JSON.parse(await res.text()) as { choices?: { message?: { content?: string | null } }[] };
@@ -137,6 +140,21 @@ export interface FallbackProvider {
   baseUrl: string;
   apiKey: string;
   model: string;
+  extraBody?: Record<string, unknown>;
+  timeoutMs?: number;
+}
+
+/** c0mpute, through Infernet's OpenAI-shaped endpoint. Peer nodes only, and a job can take minutes. */
+function c0mputeProvider(env: NodeJS.ProcessEnv = process.env): FallbackProvider | undefined {
+  const apiKey = env.C0MPUTE_API_KEY;
+  if (!apiKey || /^(1|true|yes|on)$/i.test(env.C0MPUTE_DISABLED ?? '')) return undefined;
+  return {
+    baseUrl: 'https://infernetprotocol.com/v1',
+    apiKey,
+    model: 'huihui_ai/qwen3.5-abliterated:9b',
+    extraBody: { p2p_only: true },
+    timeoutMs: Number(env.C0MPUTE_TIMEOUT_MS) || 300_000,
+  };
 }
 
 /** Errors that mean "this key can't be used right now", not "the request was bad". */
@@ -183,16 +201,30 @@ async function draftAndValidate(input: GenerateInput, complete: Complete): Promi
 }
 
 /**
- * Generate a validated TSP strategy from wizard inputs. Tries Claude first; if
- * the operator key is capped, out of credit or revoked, retries on `fallback`.
- * Throws if no provider is configured or neither yields a valid document.
+ * Generate a validated TSP strategy from wizard inputs. Tries c0mpute first,
+ * and any failure there, a bad document included, moves on to Claude. If the
+ * operator key is capped, out of credit or revoked, retries on `fallback`.
+ * Throws if no provider is configured or none yields a valid document.
  */
 export async function generateStrategy(
   input: GenerateInput,
   opts: { apiKey: string; model?: string; fetchImpl: FetchLike; fallback?: FallbackProvider },
 ): Promise<GeneratedStrategy> {
   const { fallback, fetchImpl } = opts;
-  if (!opts.apiKey && !fallback) throw new Error('AI generation is not configured (missing operator API key).');
+  const c0mpute = c0mputeProvider();
+  if (!opts.apiKey && !fallback && !c0mpute) throw new Error('AI generation is not configured (missing operator API key).');
+
+  let c0mputeError: unknown;
+  if (c0mpute) {
+    try {
+      return await draftAndValidate(input, (m) => callOpenAICompatible(c0mpute, fetchImpl, m));
+    } catch (e) {
+      c0mputeError = e;
+      console.warn(`[strategy-ai] c0mpute failed, falling back: ${(e as Error).message}`);
+    }
+  }
+  if (!opts.apiKey && !fallback) throw c0mputeError;
+
   const viaFallback = () => draftAndValidate(input, (m) => callOpenAICompatible(fallback!, fetchImpl, m));
   if (!opts.apiKey) return viaFallback();
 
