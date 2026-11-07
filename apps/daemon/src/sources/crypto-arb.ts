@@ -135,6 +135,18 @@ function labelForLiqDecision(d: LiquidateDecisionKind): string {
   }
 }
 
+/** Run `fn` over `items` with at most `limit` in flight. */
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+}
+
 export const cryptoArbWorker: SourceWorker = {
   id: 'crypto-arb',
   pollIntervalMs: 2000,
@@ -260,12 +272,16 @@ export const cryptoArbWorker: SourceWorker = {
       }
 
       const prices: { exchange: string; pair: string; bid: number; ask: number }[] = [];
-      for (const pair of pairsToFetch) {
+      // Up to 8 pairs at a time: one sequential pass over every held coin
+      // (dozens on a funded Kraken account, most not in the WS cache) took
+      // minutes and kept the dashboard on "Waiting for daemon prices".
+      // Per-host REST pacing is enforced in feeds/http.ts.
+      await mapLimit([...pairsToFetch], 8, async (pair) => {
         const snaps = await Promise.all(FEEDS.map((f) => f.snapshot(pair).catch(() => null)));
         for (const snap of snaps) {
           if (snap && snap.bid > 0 && snap.ask > 0) prices.push({ exchange: snap.exchange, pair: snap.pair, bid: snap.bid, ask: snap.ask });
         }
-      }
+      });
 
     // ── Compute arb spreads every tick ──
       const spreads: { pair: string; spread: number; buyExchange: string; sellExchange: string; profitable: boolean; seedStatus?: SeedDecisionKind | null; seedLabel?: string; liqStatus?: LiquidateDecisionKind | null; liqLabel?: string }[] = [];
@@ -304,6 +320,29 @@ export const cryptoArbWorker: SourceWorker = {
         logActivity(`[arb][spread] ★ PROFITABLE: ${s.pair} ${s.spread.toFixed(4)}% ${s.buyExchange}→${s.sellExchange}`, 'crypto-arb');
       }
       }
+
+      // Publish balances + prices now, before the slow arb sweep below, so
+      // the dashboard fills within seconds of an unlock instead of waiting
+      // for the whole tick. savePayload merges, so nothing else is touched.
+      await ctx.savePayload({
+        prices,
+        spreads,
+        krakenBalance: cachedKrakenBalance,
+        binanceBalance: cachedBinanceBalance,
+        coinbaseBalance: cachedCoinbaseBalance,
+        geminiBalance: cachedGeminiBalance,
+        exchangeErrors: cachedExchangeErrors,
+        binanceDetailedBalance: cachedBinanceDetailedBalance,
+        binanceOpenOrders: cachedBinanceOpenOrders,
+        recentTrades: cachedRecentTrades,
+        openOrders: cachedOpenOrders,
+        daemon: {
+          lastTickAt: new Date().toISOString(),
+          worker: 'crypto-arb',
+          status: 'running',
+          version: getB1dzVersion(),
+        },
+      });
 
       sourceCtx.state = {
         ...ctx.payload,
