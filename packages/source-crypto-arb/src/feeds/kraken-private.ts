@@ -21,7 +21,7 @@ export const MAX_POSITION_USD = 100;
 export const KRAKEN_TAKER_FEE = 0.0026;
 let assetPairsFetchedAt = 0;
 let tradablePairs = new Set<string>();
-let assetPairMeta = new Map<string, { altname?: string; status?: string; ordermin?: string }>();
+let assetPairMeta = new Map<string, { altname?: string; status?: string; ordermin?: string; pair_decimals?: number; lot_decimals?: number }>();
 let privateBlockedUntil = 0;
 let privateLockoutBackoffMs = KRAKEN_LOCKOUT_BASE_MS;
 
@@ -106,7 +106,7 @@ async function syncAssetPairs(force = false): Promise<void> {
   if (!force && Date.now() - assetPairsFetchedAt < ASSET_PAIR_CACHE_TTL_MS && tradablePairs.size > 0) return;
   const res = await fetch(`${BASE}/0/public/AssetPairs`, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`Kraken /0/public/AssetPairs: ${res.status} ${res.statusText}`);
-  const data = (await res.json()) as { error: string[]; result: Record<string, { altname?: string; status?: string; ordermin?: string }> };
+  const data = (await res.json()) as { error: string[]; result: Record<string, { altname?: string; status?: string; ordermin?: string; pair_decimals?: number; lot_decimals?: number }> };
   if (data.error?.length) throw new Error(`Kraken /0/public/AssetPairs: ${data.error.join(', ')}`);
   assetPairMeta = new Map(Object.entries(data.result ?? {}));
   tradablePairs = new Set(
@@ -131,6 +131,32 @@ export async function getPairMinVolume(pair: string): Promise<number | null> {
     }
   }
   return null;
+}
+
+/**
+ * Decimal places Kraken accepts for a pair's price (pair_decimals) and volume
+ * (lot_decimals). BTC/USD takes 1 price decimal, so a blanket toFixed(2) is
+ * refused with "EOrder:Invalid price ... can only be specified up to 1 decimals".
+ */
+export async function getPairDecimals(pair: string): Promise<{ price: number; volume: number } | null> {
+  await syncAssetPairs();
+  for (const [id, meta] of assetPairMeta.entries()) {
+    if (id === pair || meta.altname === pair) {
+      const price = Number(meta.pair_decimals);
+      const volume = Number(meta.lot_decimals);
+      return {
+        price: Number.isInteger(price) && price >= 0 ? price : 2,
+        volume: Number.isInteger(volume) && volume >= 0 ? volume : 8,
+      };
+    }
+  }
+  return null;
+}
+
+/** Round a limit price to the pair's allowed decimals (default 2 if unknown). */
+export function formatKrakenPrice(price: number, decimals: number | null | undefined): string {
+  const d = Number.isInteger(decimals) && (decimals as number) >= 0 ? (decimals as number) : 2;
+  return price.toFixed(d);
 }
 
 export async function getBalance(): Promise<Record<string, string>> {
