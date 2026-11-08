@@ -21,7 +21,7 @@ interface BriskResponse {
   }[];
 }
 
-const BRISK_URL = 'https://brisk.news/api/news?limit=20&search=crypto+trading';
+const BRISK_URL = 'https://brisk.pwa.pit.world/api/news?limit=20&search=crypto+trading';
 
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
