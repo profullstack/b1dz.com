@@ -381,6 +381,10 @@ const KRAKEN_ASSET_TO_PAIR: Record<string, string> = {
   XXLM: 'XLM-USD',
   XXMR: 'XMR-USD',
   XXDG: 'DOGE-USD',
+  XLTC: 'LTC-USD',
+  XETC: 'ETC-USD',
+  XMLN: 'MLN-USD',
+  XREP: 'REP-USD',
 };
 const KRAKEN_BASE_ALIASES: Record<string, string[]> = {
   BTC: ['XXBT', 'XBT', 'BTC'],
@@ -487,8 +491,19 @@ function findNonStableHoldings(balance: Record<string, string>): { asset: string
   return holdings;
 }
 
-function krakenPairForAsset(asset: string): string {
-  return KRAKEN_ASSET_TO_PAIR[asset] ?? `${asset}-USD`;
+/**
+ * Kraken balance suffixes: .S staked, .B bonded, .M opt-in rewards, .P
+ * parachain/locked. Those are not sellable, so hydration must neither
+ * restore nor liquidate them. .F (auto-earn) is spendable and trades as
+ * its base asset.
+ */
+export function isLockedKrakenAsset(asset: string): boolean {
+  return /\.(S|B|M|P)$/i.test(asset);
+}
+
+export function krakenPairForAsset(asset: string): string {
+  const base = asset.replace(/\.F$/i, '');
+  return KRAKEN_ASSET_TO_PAIR[base] ?? `${base}-USD`;
 }
 
 function krakenTradeMatchesAsset(tradePair: string, base: string, holdingAsset: string): boolean {
@@ -522,12 +537,25 @@ function currentPositionOnExchange(exchange: string): Position | null {
   return null;
 }
 
+/**
+ * A pending liquidation on this exchange that the engine can actually carry
+ * out (its market has live prices, so its pair is evaluated and the sell
+ * runs). One that can never execute (a bad symbol, a delisted or locked
+ * asset) must not freeze every buy on the venue: that is what kept Kraken
+ * from buying while XLTC-USD / SOL.S-USD sat queued forever.
+ */
 function currentLiquidationOnExchange(exchange: string): PendingLiquidation | null {
   for (const liquidation of pendingLiquidations.values()) {
-    if (liquidation.exchange === exchange) return liquidation;
+    if (liquidation.exchange !== exchange) continue;
+    if ((histories.get(`${exchange}:${liquidation.pair}`)?.length ?? 0) === 0) continue;
+    return liquidation;
   }
   return null;
 }
+
+/** Venues that just failed a buy for lack of cash, muted until this time. */
+const noCashUntil = new Map<string, number>();
+const NO_CASH_COOLDOWN_MS = 10 * 60_000;
 
 function isMinimumOrderSizeError(message: string): boolean {
   const normalized = message.toLowerCase();
@@ -1330,6 +1358,7 @@ async function hydrateKrakenPositions(): Promise<void> {
 
   const trades = Object.values(tradeHistory).sort((a, b) => b.time - a.time);
   for (const holding of holdings) {
+    if (isLockedKrakenAsset(holding.asset)) continue;
     const pair = krakenPairForAsset(holding.asset);
     const base = pair.replace('-USD', '');
     const fills = trades
@@ -2360,6 +2389,7 @@ async function actOnDex(args: {
   const onChain = spendableQuoteFor(exchange, pair);
   const availableQuote = onChain > 0 ? Math.min(onChain, dexBudget) : dexBudget;
   if (availableQuote < MIN_SPENDABLE_QUOTE_USD) {
+    noCashUntil.set(exchange, Date.now() + NO_CASH_COOLDOWN_MS);
     return { ok: false, message: `insufficient USDC on ${exchange} ($${availableQuote.toFixed(2)})` };
   }
   const spendBudget = applySpendBudget(
@@ -2751,12 +2781,16 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
       // flow. In both cases we cap by DEX_TRADE_BUDGET_USD as a ceiling
       // so a full wallet doesn't auto-size into a larger DEX position
       // than the operator intends.
+      if ((noCashUntil.get(tradeExchange) ?? 0) > Date.now()) return null;
       const isDex = DEX_VENUES.has(tradeExchange);
       let spendableQuote: number;
       if (isDex) {
         const dexBudget = Number(process.env.DEX_TRADE_BUDGET_USD ?? '20');
         const onChain = spendableQuoteFor(tradeExchange, item.pair);
-        spendableQuote = onChain > 0 ? Math.min(onChain, dexBudget) : dexBudget;
+        // With an executor wired, the on-chain balance is real: an empty
+        // wallet means no buy. The flat budget is only a fallback when
+        // there is no balance source at all.
+        spendableQuote = dexExecutor ? Math.min(onChain, dexBudget) : (onChain > 0 ? Math.min(onChain, dexBudget) : dexBudget);
       } else {
         spendableQuote = spendableQuoteFor(tradeExchange, item.pair);
       }
@@ -2970,6 +3004,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         }
       }
       if (availableQuote < 5) {
+        noCashUntil.set(exchange, Date.now() + NO_CASH_COOLDOWN_MS);
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
       const feeRate = feeRateForExchange(exchange);
@@ -2981,6 +3016,7 @@ export function makeCryptoTradeSource(strategy?: Strategy): Source<TradeItem> {
         return { ok: false, message: `crypto spend budget reached on ${exchange}` };
       }
       if (spendBudget < 5) {
+        noCashUntil.set(exchange, Date.now() + NO_CASH_COOLDOWN_MS);
         return { ok: false, message: `insufficient ${quoteAsset} on ${exchange} ($${availableQuote.toFixed(2)})` };
       }
       const volume = spendBudget / price;
