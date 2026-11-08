@@ -26,6 +26,8 @@ import type { SourceWorker, UserContext } from '../types.js';
 import {
   KrakenFeed, CoinbaseFeed, BinanceUsFeed, GeminiFeed,
   placeOrder as placeKrakenOrder,
+  getKrakenPairDecimals,
+  formatKrakenPrice,
   placeBinanceOrder,
   placeCoinbaseOrder,
   placeGeminiOrder,
@@ -111,12 +113,13 @@ async function executeDcaBuy(buy: DcaBuy): Promise<{ ok: true; orderId: string; 
   try {
     if (buy.exchange === 'kraken') {
       const krakenPair = pair.replace('-', '').replace('BTC', 'XBT');
+      const decimals = await getKrakenPairDecimals(krakenPair).catch(() => null);
       const result = await placeKrakenOrder({
         pair: krakenPair,
         type: 'buy',
         ordertype: 'limit',
-        volume: quantity.toFixed(8),
-        price: limitPrice.toFixed(2),
+        volume: quantity.toFixed(decimals?.volume ?? 8),
+        price: formatKrakenPrice(limitPrice, decimals?.price),
         timeinforce: 'IOC',
       });
       return { ok: true, orderId: result.txid?.[0] ?? result.descr?.order ?? 'unknown', filled: quantity };

@@ -32,7 +32,7 @@ export {
   __getWsCacheStateForTests,
   __injectGeminiBookTickerForTests,
 } from './feeds/index.js';
-export { getBalance, placeOrder, getOpenOrders, cancelOrder as cancelKrakenOrder, getTradeHistory, getPairMinVolume as getKrakenPairMinVolume, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
+export { getBalance, placeOrder, getOpenOrders, cancelOrder as cancelKrakenOrder, getTradeHistory, getPairMinVolume as getKrakenPairMinVolume, getPairDecimals as getKrakenPairDecimals, formatKrakenPrice, MAX_POSITION_USD, KRAKEN_TAKER_FEE, type TradeEntry, type OpenOrder } from './feeds/kraken-private.js';
 export { hasTradingPair as hasKrakenTradingPair } from './feeds/kraken-private.js';
 export {
   getBalance as getBinanceBalance,
