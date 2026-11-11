@@ -25,7 +25,7 @@ import {
   type DiscoveredPair,
   type FetchLike,
 } from '@b1dz/source-nichedb';
-import { getCoinbaseSigner } from './feeds/coinbase-pem.js';
+import { getCoinbaseSigner, getCoinbaseKeyName } from './feeds/coinbase-pem.js';
 import { fetchJson } from './feeds/http.js';
 
 /** Per-exchange 24h USD volume floor. A pair listed on a venue with volume
@@ -90,7 +90,7 @@ function base64url(buf: Buffer): string {
 }
 
 async function getCoinbaseVolumes(): Promise<Map<string, { volUsd: number; change24h: number }>> {
-  const keyName = process.env.COINBASE_API_KEY_NAME;
+  const keyName = getCoinbaseKeyName();
   const signer = getCoinbaseSigner();
   if (!keyName || !signer) return new Map();
   const path = '/api/v3/brokerage/products';

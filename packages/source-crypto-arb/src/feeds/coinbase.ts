@@ -1,7 +1,7 @@
 import type { PriceFeed, MarketSnapshot, OrderBook } from '@b1dz/core';
 import { randomBytes } from 'node:crypto';
 import { getSnapshot } from './ws-price-cache.js';
-import { getCoinbaseSigner } from './coinbase-pem.js';
+import { getCoinbaseSigner, getCoinbaseKeyName } from './coinbase-pem.js';
 
 const BASE = 'https://api.coinbase.com';
 
@@ -10,7 +10,7 @@ function base64url(buf: Buffer): string {
 }
 
 function buildJwt(method: string, path: string): string | null {
-  const keyName = process.env.COINBASE_API_KEY_NAME;
+  const keyName = getCoinbaseKeyName();
   const signer = getCoinbaseSigner();
   if (!keyName || !signer) return null;
 
