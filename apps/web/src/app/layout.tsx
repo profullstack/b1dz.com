@@ -111,6 +111,15 @@ const jsonLd = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={datatypeFont.variable}>
+      <head>
+        {/* WebMCP (@profullstack/webmcp): site_info/open_page for the AI agent in the visitor's browser. */}
+        <script
+          type="module"
+          data-webmcp=""
+          src="https://cdn.jsdelivr.net/npm/@profullstack/webmcp@0/src/embed.js"
+          data-pages={JSON.stringify({ dashboard: '/dashboard', store: '/store', console: '/console', settings: '/settings', invites: '/invites', login: '/login', signup: '/signup' })}
+        />
+      </head>
       <body>
         <script
           type="application/ld+json"
