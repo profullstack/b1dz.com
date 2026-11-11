@@ -18,6 +18,10 @@ const PUBLIC_PATHS = [
   '/install.sh',
   // Invite landing: /i/<code> must work signed out.
   '/i',
+  // MCP OAuth consent (the page itself sends signed-out users to /login with the
+  // full query), plus the default OAuth paths an MCP client falls back to: they
+  // must answer 404, never a 200 HTML login page (breaks the client's JSON parse).
+  '/oauth', '/register', '/authorize', '/token',
 ];
 const INVITE_PATH = /^\/i\/([A-Za-z0-9-]{12,40})\/?$/;
 const INVITE_COOKIE = 'b1dz_invite'; // = INVITE_COOKIE in lib/credits.ts (kept local: the proxy stays Edge-safe)
