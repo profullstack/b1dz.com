@@ -17,13 +17,13 @@ const PRODUCT_CACHE_TTL_MS = 5 * 60_000;
 export const MAX_POSITION_USD = 100;
 export const COINBASE_TAKER_FEE = 0.006; // 0.6% taker (Advanced Trade)
 
-import { getCoinbasePem, getCoinbaseSigner } from './coinbase-pem.js';
+import { getCoinbasePem, getCoinbaseSigner, getCoinbaseKeyName } from './coinbase-pem.js';
 let productFetchedAt = 0;
 let tradableProducts = new Set<string>();
 let productMetaById = new Map<string, CoinbaseProduct>();
 
 export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid: boolean; hasPem: boolean } {
-  const keyName = process.env.COINBASE_API_KEY_NAME ?? '';
+  const keyName = getCoinbaseKeyName() ?? '';
   const pem = getCoinbasePem();
   return {
     hasKeyName: keyName.length > 0,
@@ -35,7 +35,7 @@ export function getCoinbaseAuthDebug(): { hasKeyName: boolean; keyNameLooksValid
 }
 
 function getKeys() {
-  const keyName = process.env.COINBASE_API_KEY_NAME;
+  const keyName = getCoinbaseKeyName();
   const signer = getCoinbaseSigner();
   if (!keyName || !signer) throw new Error('COINBASE_API_KEY_NAME / COINBASE_API_PRIVATE_KEY missing from env');
   return { keyName, signer };

@@ -22,9 +22,9 @@ const V = '0.3.10';
 const PLUGIN_CONFIG_SCHEMAS = Object.fromEntries(
   Object.entries({
     coinbase: {
-      strings: [{ key: 'COINBASE_API_KEY_NAME', label: 'API key ID', hint: 'The key ID Coinbase shows (or a legacy organizations/.../apiKeys/... name)' }],
+      strings: [{ key: 'COINBASE_API_KEY_NAME', label: 'API key name (optional if you paste the key file below)', hint: 'organizations/.../apiKeys/... (the "name" in the downloaded key file)' }],
       secrets: [
-        { key: 'COINBASE_API_PRIVATE_KEY', label: 'API secret', multiline: true, hint: 'The Secret Coinbase shows (Ed25519), or a legacy EC private key in PEM form' },
+        { key: 'COINBASE_API_PRIVATE_KEY', label: 'Key file or private key', multiline: true, hint: 'Paste the whole downloaded key JSON file, or just its -----BEGIN EC PRIVATE KEY----- block. Create the key with signature algorithm ECDSA: Coinbase Advanced Trade rejects Ed25519.' },
         { key: 'COINBASE_API_PRIVATE_KEY_B', label: 'EC private key B (PEM, optional)', multiline: true, hint: 'Second account key' },
         { key: 'COINBASE_EC_KEY_B', label: 'EC key B legacy (PEM, optional)', multiline: true, hint: 'Legacy secondary key' },
       ],
