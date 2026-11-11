@@ -14,6 +14,7 @@ import { AgentsSection } from './sections/agents';
 import { ProfileSection } from './sections/profile';
 import type { SettingsResponse, VaultKey } from './shared';
 import { VaultPanel } from './vault-panel';
+import { logicsrcNotice } from '@/lib/logicsrc-keys';
 
 type Tab = 'profile' | 'plugins' | 'wallets' | 'equities' | 'budget' | 'ai' | 'agents' | 'solana' | 'thresholds' | 'strategies' | 'toggles';
 
@@ -42,6 +43,12 @@ export function SettingsClient() {
   // Surface the result of an OAuth redirect (?oauth=success|<error>&plugin=…).
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
+    const logicsrc = q.get('logicsrc');
+    if (logicsrc) {
+      setOauthNotice(logicsrcNotice(logicsrc));
+      window.history.replaceState(null, '', '/settings');
+      return;
+    }
     const result = q.get('oauth');
     if (!result) return;
     const plugin = q.get('plugin') ?? 'broker';

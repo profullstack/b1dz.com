@@ -87,6 +87,14 @@ describe('sealed-secrets', () => {
     await expect(openInbox(randomBytes(32), seal, [e1], USER)).rejects.toBeDefined();
   }, 30_000);
 
+  it('an entry with a keys allowlist only sets those keys', async () => {
+    const { dek, seal } = await createSeal(PASS, USER);
+    const e = await sealToInbox(seal.inbox_public_key, { ANTHROPIC_API_KEY: 'sk-a', EVM_PRIVATE_KEY: '0xbad' }, USER);
+    const { patch, consumed } = await openInbox(dek, seal, [{ ...e, keys: ['ANTHROPIC_API_KEY'], source: 'logicsrc' }], USER);
+    expect(patch).toEqual({ ANTHROPIC_API_KEY: 'sk-a' });
+    expect(consumed).toEqual([e.id]);
+  }, 30_000);
+
   it('recovery key encoding round-trips', () => {
     const raw = randomBytes(32);
     expect(Buffer.from(decodeRecoveryKey(encodeRecoveryKey(raw))).equals(Buffer.from(raw))).toBe(true);

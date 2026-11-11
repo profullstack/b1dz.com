@@ -21,6 +21,10 @@
     "./sealed-secrets": {
       "import": "./src/sealed-secrets.ts",
       "default": "./src/sealed-secrets.ts"
+    },
+    "./settings-fields": {
+      "import": "./src/settings-fields.ts",
+      "default": "./src/settings-fields.ts"
     }
   },
   "scripts": {

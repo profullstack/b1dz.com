@@ -24,6 +24,7 @@ import {
   UNLOCK_DEFAULT_TTL_SECONDS,
 } from '@b1dz/core/sealed-secrets';
 import type { SettingsResponse, VaultKey } from './shared';
+import { DEFAULT_LOGICSRC_KEYS, LOGICSRC_GRANTABLE_KEYS } from '@/lib/logicsrc-keys';
 
 const TTL_OPTIONS: { label: string; seconds: number }[] = [
   { label: '1 hour', seconds: 3600 },
@@ -287,6 +288,8 @@ export function VaultPanel({
         </div>
       )}
 
+      <LogicsrcKeys />
+
       <div className="space-y-2 border-t border-zinc-800 pt-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm text-zinc-200">Trading session</span>
@@ -310,5 +313,35 @@ export function VaultPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Ask logicsrc for API keys instead of pasting them. The person approves on
+ * logicsrc, their browser seals each key to this vault, and it lands in the
+ * vault inbox: the next unlock applies it. Rotations arrive on their own.
+ */
+function LogicsrcKeys() {
+  const [picked, setPicked] = useState<string[]>(DEFAULT_LOGICSRC_KEYS);
+  const toggle = (k: string) => setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]));
+  const href = `/api/v1/logicsrc/grant/start?keys=${encodeURIComponent(picked.join(','))}&next=${encodeURIComponent('/settings')}`;
+  return (
+    <details className="space-y-2 border-t border-zinc-800 pt-3">
+      <summary className="cursor-pointer text-sm text-zinc-200">Get keys from logicsrc</summary>
+      <p className="text-[11px] text-zinc-500">
+        Keep your API keys in logicsrc and grant them to b1dz: they arrive sealed to this vault (b1dz cannot read them), apply on your next unlock, and follow your rotations. Wallet and signing keys are never requested.
+      </p>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
+        {LOGICSRC_GRANTABLE_KEYS.map((k) => (
+          <label key={k} className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-400">
+            <input type="checkbox" className="accent-orange-500" checked={picked.includes(k)} onChange={() => toggle(k)} />
+            {k}
+          </label>
+        ))}
+      </div>
+      {picked.length > 0
+        ? <a className={`${btnGhost} inline-block`} href={href}>Get from logicsrc</a>
+        : <span className="text-xs text-zinc-500">pick at least one key</span>}
+    </details>
   );
 }

@@ -70,6 +70,14 @@ export interface InboxEntry {
   epk: string;
   blob: CipherBlob;
   created_at: string;
+  /**
+   * The only keys this entry may set. Written by the server next to an entry
+   * someone else sealed (a logicsrc key grant), so a sealed patch can never
+   * set a key the request did not name. Absent = any key (OAuth entries).
+   */
+  keys?: string[];
+  /** Where the entry came from, e.g. "logicsrc" (informational). */
+  source?: string;
 }
 
 const subtle = (): SubtleCrypto => {
@@ -429,7 +437,9 @@ export async function openInbox(
       const key = await inboxKey(shared, epk, userId);
       wipe(shared);
       const out = await gcmDecrypt(key, e.blob, aad(userId, 'inbox'));
-      Object.assign(patch, toSecretMap(JSON.parse(dec.decode(out))));
+      const opened = toSecretMap(JSON.parse(dec.decode(out)));
+      const allow = Array.isArray(e.keys) ? new Set(e.keys) : null;
+      for (const [k, v] of Object.entries(opened)) if (!allow || allow.has(k)) patch[k] = v;
       wipe(out);
       consumed.push(e.id);
     } catch {
