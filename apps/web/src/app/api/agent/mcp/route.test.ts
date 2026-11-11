@@ -39,18 +39,27 @@ describe('MCP route (e2e)', () => {
     authenticateAgentMock.mockResolvedValue({ token: { scopes: ['read', 'trade:crypto'] }, scopes: ['read', 'trade:crypto'], tokenId: 't', userId: 'u', admin: {} });
   });
 
-  it('handles initialize without auth and advertises tool capability', async () => {
+  it('answers initialize without a credential with 401 + WWW-Authenticate (starts OAuth)', async () => {
     const { POST } = await importRoute();
     const res = await POST(rpc('initialize', {}, 1, false) as never);
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toContain('resource_metadata="https://b1dz.com/.well-known/oauth-protected-resource"');
+    expect(authenticateAgentMock).not.toHaveBeenCalled();
+  });
+
+  it('handles initialize with an agent token and advertises tool capability', async () => {
+    const { POST } = await importRoute();
+    const res = await POST(rpc('initialize', { protocolVersion: '2025-06-18' }) as never);
     const body = await res.json();
     expect(body.result.serverInfo.name).toBe('b1dz-agent');
+    expect(body.result.protocolVersion).toBe('2025-06-18');
     expect(body.result.capabilities.tools).toBeDefined();
   });
 
   it('rejects a bad JSON-RPC envelope with 400', async () => {
     const { POST } = await importRoute();
     const bad = new Request('http://test.local/api/agent/mcp', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ foo: 'bar' }),
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer b1dz_agent_test' }, body: JSON.stringify({ foo: 'bar' }),
     });
     const res = await POST(bad as never);
     expect(res.status).toBe(400);
@@ -62,6 +71,11 @@ describe('MCP route (e2e)', () => {
     const body = await res.json();
     const names = (body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
     expect(names).toEqual(['get_budget', 'get_portfolio', 'get_quote', 'place_order']);
+    expect(body.result).toMatchObject({ resultType: 'complete', cacheScope: 'public' });
+    expect(typeof body.result.ttlMs).toBe('number');
+    const order = body.result.tools.find((t: { name: string }) => t.name === 'place_order');
+    expect(order.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    for (const t of body.result.tools) expect(t.title).toBeTruthy();
   });
 
   it('401s tool calls without a valid agent token', async () => {
@@ -71,6 +85,7 @@ describe('MCP route (e2e)', () => {
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error.code).toBe(-32001);
+    expect(res.headers.get('www-authenticate')).toContain('error="invalid_token"');
   });
 
   it('routes tools/call place_order through placeAgentOrder', async () => {
