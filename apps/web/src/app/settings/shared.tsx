@@ -241,7 +241,9 @@ export function SecretRow({
   const [revealBusy, setRevealBusy] = useState(false);
   const [revealErr, setRevealErr] = useState<string | null>(null);
   const hasReveal = revealed !== undefined;
-  const placeholder = isSet
+  const placeholder = disabled
+    ? 'vault locked: unlock above to edit'
+    : isSet
     ? hasReveal && length !== undefined
       ? `set, ${length} chars — type to overwrite`
       : `••••••••• (set) — type to overwrite or click reveal`

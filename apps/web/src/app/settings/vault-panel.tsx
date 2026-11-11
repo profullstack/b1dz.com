@@ -226,7 +226,7 @@ export function VaultPanel({
         : 'locked: your strategies are paused';
 
   return (
-    <section className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5">
+    <section id="vault" className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold text-zinc-100">Vault</h2>
         <span className={`text-xs ${vault ? 'text-emerald-400' : 'text-zinc-400'}`}>{vault ? 'unlocked in this tab' : 'locked'}</span>
@@ -236,6 +236,7 @@ export function VaultPanel({
         <div className="space-y-2">
           <label className="block text-xs uppercase tracking-wider text-zinc-400">{useRecovery ? 'Recovery key' : 'Passphrase'}
             <input
+              id="vault-passphrase"
               type={useRecovery ? 'text' : 'password'}
               autoComplete={useRecovery ? 'off' : 'current-password'}
               className={input}

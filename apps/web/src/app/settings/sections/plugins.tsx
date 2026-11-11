@@ -320,6 +320,21 @@ export function PluginsSection({
           </Link>
         </div>
 
+        {!cryptoKey && (
+          <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            <span>Vault locked: API key fields are read-only until you unlock the vault with your passphrase.</span>
+            <button
+              type="button"
+              className="rounded border border-amber-500/50 px-2 py-0.5 text-amber-200 hover:bg-amber-500/20"
+              onClick={() => {
+                document.getElementById('vault')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                document.getElementById('vault-passphrase')?.focus({ preventScroll: true });
+              }}
+            >
+              Unlock vault ↑
+            </button>
+          </div>
+        )}
         {error && <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300 mb-3">{error}</p>}
         {loading && <p className="text-sm text-zinc-500">loading…</p>}
 
