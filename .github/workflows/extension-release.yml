@@ -1,0 +1,48 @@
+name: Extension release
+
+# Puts the b1dz Sync extension on a GitHub release (extension-v<version>,
+# b1dz-sync-chrome.zip) whenever apps/extension changes version on master.
+# The TronBrowser store picks the zip up from there on its own
+# (profullstack/tronbrowser.dev apps/extensions/house.json + store-sync.yml).
+#
+# The extension has no build step: the zip is apps/extension as checked in.
+# An existing release for the manifest's version is left alone, so pushes that
+# do not bump the version are no-ops. Not marked "latest", so the app's own
+# v* release series keeps that.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - apps/extension/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -r .version apps/extension/manifest.json)
+          tag="extension-v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released"
+            exit 0
+          fi
+          (cd apps/extension && zip -r -X -q "$GITHUB_WORKSPACE/b1dz-sync-chrome.zip" . -x '*.DS_Store')
+          unzip -l b1dz-sync-chrome.zip
+          gh release create "$tag" b1dz-sync-chrome.zip \
+            --target "$GITHUB_SHA" --latest=false \
+            --title "b1dz Sync extension $version" \
+            --notes "Browser extension $version. \`b1dz-sync-chrome.zip\` is the Chromium bundle, also published to https://tronbrowser.dev/store/ automatically."
