@@ -302,8 +302,8 @@ importers:
         specifier: ^0.5.0
         version: 0.5.0(@supabase/ssr@0.12.7(@supabase/supabase-js@2.119.0))(next@16.4.3(@types/node@26.6.6)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(react@19.3.1)
       '@profullstack/x402-gateway':
-        specifier: ^0.18.0
-        version: 0.18.0
+        specifier: ^0.18.1
+        version: 0.18.1
       '@supabase/ssr':
         specifier: latest
         version: 0.12.7(@supabase/supabase-js@2.119.0)
@@ -1736,8 +1736,8 @@ packages:
     engines: {node: '>=20.19'}
     hasBin: true
 
-  '@profullstack/x402-gateway@0.18.0':
-    resolution: {integrity: sha512-+vORJd17QpLycouk0wrmyOlnyv+6Q9Ttxk+iglsMH2pZpejTUD2Ak3ysKxQsb94R4m1GLSEv8DHoCS49Nf4/0A==}
+  '@profullstack/x402-gateway@0.18.1':
+    resolution: {integrity: sha512-zc2JGLXMX8eCk7Mp4X91E175enOTNcWPZncKf3LXzoGE+XEhHDJHM1LRZkkY3x2pjLYX3AB11Vx/TP3cobSQ/g==}
     engines: {node: '>=20.11'}
 
   '@puppeteer/browsers@3.2.7':
@@ -4613,7 +4613,7 @@ snapshots:
       '@noble/curves': 2.4.0
       '@noble/hashes': 2.4.0
 
-  '@profullstack/x402-gateway@0.18.0':
+  '@profullstack/x402-gateway@0.18.1':
     dependencies:
       '@profullstack/keys': 0.1.0
 
