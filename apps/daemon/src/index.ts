@@ -1,3 +1,22 @@
+#!/usr/bin/env node
+/**
+ * b1dzd — the b1dz daemon entry point.
+ *
+ * Runs identically under: a terminal, systemd, Docker, Railway. The only
+ * thing that changes between environments is how the process is supervised
+ * and how env vars are injected.
+ *
+ * Required env (loaded from monorepo .env if present):
+ *   NEXT_PUBLIC_SUPABASE_URL
+ *   SUPABASE_SECRET_KEY
+ */
+import { loadRootEnv } from '@b1dz/core';
+loadRootEnv();
+import { DaemonRuntime } from './runtime.js';
+import { refreshUserConfig, scrubOperatorCredentialEnv, verifyUnlockKey } from './user-config.js';
+import { unlockStore } from './unlock-store.js';
+import { startControlServer } from './control-server.js';
+
 // Status beacon: posts a one-shot boot marker with the runtime config
 // summary to the ops status collector, so a fresh deploy shows up in the
 // status feed before the first health check passes. Fire-and-forget; the
@@ -41,24 +60,6 @@ async function emitStatusBeacon() {
 }
 void emitStatusBeacon();
 
-#!/usr/bin/env node
-/**
- * b1dzd — the b1dz daemon entry point.
- *
- * Runs identically under: a terminal, systemd, Docker, Railway. The only
- * thing that changes between environments is how the process is supervised
- * and how env vars are injected.
- *
- * Required env (loaded from monorepo .env if present):
- *   NEXT_PUBLIC_SUPABASE_URL
- *   SUPABASE_SECRET_KEY
- */
-import { loadRootEnv } from '@b1dz/core';
-loadRootEnv();
-import { DaemonRuntime } from './runtime.js';
-import { refreshUserConfig, scrubOperatorCredentialEnv, verifyUnlockKey } from './user-config.js';
-import { unlockStore } from './unlock-store.js';
-import { startControlServer } from './control-server.js';
 
 // No operator wallet keys or exchange secrets in this process: user
 // operations never fall back to them (the operator unlocks like any user).
