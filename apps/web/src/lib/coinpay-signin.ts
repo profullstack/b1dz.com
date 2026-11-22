@@ -22,6 +22,7 @@
 import { randomBytes } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { authorizeUrl, finishSignIn, pkce, randomToken, sameState, SIGN_IN_SCOPES } from '@profullstack/coinpay-onboard/oauth';
+import { coinpayFetch } from './coinpay-client';
 
 export const CALLBACK_PATH = '/api/v1/coinpay/oauth/callback';
 export const OAUTH_COOKIE = 'b1dz_coinpay_oauth';
@@ -111,7 +112,7 @@ export async function fetchCoinpayClaims(
       clientSecret: cfg.clientSecret,
       redirectUri: redirectUri(cfg),
       base: cfg.base,
-      fetch: doFetch,
+      fetch: doFetch ?? coinpayFetch,
     });
     return {
       ok: true,

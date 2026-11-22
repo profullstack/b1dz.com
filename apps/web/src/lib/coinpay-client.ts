@@ -13,6 +13,9 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+/** Who CoinPay sees calling: every fleet app shares one host and one IP. */
+export const COINPAY_UA = `b1dz.com${process.env.npm_package_version ? `/${process.env.npm_package_version}` : ''} (+https://b1dz.com)`;
+
 export interface CipherInvoice {
   id: string;
   user_id: string;
@@ -172,6 +175,7 @@ export async function createCheckoutSession(
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${process.env.COINPAY_API_KEY!}`,
+      'user-agent': COINPAY_UA,
       'idempotency-key': `b1dz-invoice-${input.invoiceId}`,
     },
     body: JSON.stringify(buildCheckoutSessionBody(input)),
@@ -198,7 +202,7 @@ export async function fetchCheckoutSession(sessionId: string, fetchImpl: typeof 
   if (!coinpayConfigured()) return null;
   const baseUrl = coinpayBaseUrl().replace(/\/+$/, '');
   const res = await fetchImpl(`${baseUrl}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
-    headers: { authorization: `Bearer ${process.env.COINPAY_API_KEY!}` },
+    headers: { authorization: `Bearer ${process.env.COINPAY_API_KEY!}`, 'user-agent': COINPAY_UA },
     cache: 'no-store',
   });
   if (!res.ok) return null;
@@ -309,9 +313,16 @@ export async function fetchCoinPayPaymentStatus(coinpayPaymentId: string): Promi
   const apiKey = process.env.COINPAY_API_KEY!;
   const baseUrl = coinpayBaseUrl();
   const res = await fetch(`${baseUrl}/payments/${encodeURIComponent(coinpayPaymentId)}`, {
-    headers: { authorization: `Bearer ${apiKey}` },
+    headers: { authorization: `Bearer ${apiKey}`, 'user-agent': COINPAY_UA },
   });
   if (!res.ok) return { status: 'unknown', raw: null };
   const body = (await res.json()) as CoinPayPaymentResponse;
   return { status: body.payment?.status ?? 'unknown', raw: body.payment ?? null };
 }
+
+/** fetch for library calls to CoinPay (the OAuth code exchange and userinfo), naming this site. */
+export const coinpayFetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set('user-agent', COINPAY_UA);
+  return fetch(input, { ...init, headers });
+}) as typeof fetch;
