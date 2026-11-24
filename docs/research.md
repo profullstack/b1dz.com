@@ -87,7 +87,7 @@ the session.
 | Key | Env | Adds |
 |---|---|---|
 | FRED | `FRED_API_KEY` | series search; FRED series themselves plot without a key |
-| EIA | `EIA_API_KEY` | your own limits (cards otherwise use EIA's shared, rate-limited demo key) |
+| EIA | `EIA_API_KEY` | in practice required for the Energy dashboard: without it cards use EIA's shared demo key, which allows about ten requests and a small daily cap per network, and a cold load of Energy needs about twelve |
 | BLS | `BLS_API_KEY` | higher limits and longer history |
 | CONGRESS | `CONGRESS_API_KEY` | your own limits (otherwise the shared demo key, about 10 requests an hour) |
 
@@ -106,6 +106,10 @@ environment variables.
   office connection and report "unavailable" through the hosted API and MCP.
   Their Yahoo parser is covered by a fixture test but has not been run live
   from the build server.
+- **Four EIA cards are unconfirmed**: `energy.steo`, `energy.intl-crude-production`,
+  `energy.intl-crude-exports` and `commodities.wti-nearby-curve` were written
+  from the EIA documentation but the demo key ran out before they could be run
+  once. Each throws a clear source error if a series id is wrong.
 - **Option implied volatility is computed here.** Nasdaq chains carry no IV, so
   it is solved from bid/ask mids against the forward implied by put-call
   parity, with SOFR as the rate. Dealer gamma exposure uses the usual
