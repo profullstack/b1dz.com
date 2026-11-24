@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/research",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Market research cards for b1dz: equities, options, rates, credit, FX, futures, energy, shipping, macro, filings and news from public and official sources. One registry, rendered by the TUI, CLI, API and MCP.",
@@ -11,9 +11,18 @@
       "import": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./types": { "import": "./src/types.ts", "default": "./src/types.ts" },
-    "./format": { "import": "./src/format.ts", "default": "./src/format.ts" },
-    "./transform": { "import": "./src/transform.ts", "default": "./src/transform.ts" }
+    "./types": {
+      "import": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./format": {
+      "import": "./src/format.ts",
+      "default": "./src/format.ts"
+    },
+    "./transform": {
+      "import": "./src/transform.ts",
+      "default": "./src/transform.ts"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
