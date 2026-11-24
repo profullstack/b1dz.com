@@ -77,6 +77,7 @@ const config: NextConfig = {
   transpilePackages: [
     '@b1dz/ai-analyzer',
     '@b1dz/core',
+    '@b1dz/research',
     '@b1dz/sdk',
     '@b1dz/source-nichedb',
     '@b1dz/source-strategies',

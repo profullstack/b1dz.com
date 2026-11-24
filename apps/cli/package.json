@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/b1dz",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "b1dz CLI and TUI: crypto arbitrage terminal for b1dz.com (dashboard, backtests, quote observer, account setup).",
   "type": "module",
   "bin": {
@@ -64,6 +64,7 @@
     "@b1dz/event-channel": "workspace:*",
     "@b1dz/observe-engine": "workspace:*",
     "@b1dz/profitability": "workspace:*",
+    "@b1dz/research": "workspace:*",
     "@b1dz/projection-engine": "workspace:*",
     "@b1dz/sdk": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",

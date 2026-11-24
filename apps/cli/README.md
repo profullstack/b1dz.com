@@ -29,6 +29,22 @@ b1dz tui           # live dashboard
 b1dz --help        # every command
 ```
 
+## Market research
+
+```sh
+b1dz research                        # TUI: 28 dashboards, 221 cards
+b1dz research company symbol=NVDA    # open on a dashboard
+b1dz research card rates.curve country=JP --json
+b1dz research help
+```
+
+Equities, options, sovereign curves, credit, FX, futures, energy, shipping,
+macro, SEC filings and news from public and official sources. No account and,
+for all but one card, no API key. Press `?` in the TUI for keys, `/` to search.
+Watchlists and optional free keys (FRED, EIA, BLS, Congress.gov) stay in
+`~/.config/b1dz/research.json`. Research only: quotes can be delayed and
+nothing here is investment advice.
+
 `b1dz setup` stores your settings in your b1dz.com account over HTTPS. Use
 read/trade-only exchange keys with withdrawals disabled. Your session is kept in
 `~/.config/b1dz/credentials.json` (mode 600).

@@ -18,6 +18,15 @@ b1dz connects to centralized exchanges (Kraken, Coinbase, Binance.US, Gemini) an
 - Then `b1dz signup` (or `b1dz login`), `b1dz setup` to enter your own exchange keys, `b1dz tui` for the live dashboard.
 - Package: [npm @profullstack/b1dz](https://www.npmjs.com/package/@profullstack/b1dz)
 
+## Market research
+
+- `b1dz research`: a market research TUI with 28 dashboards and 221 cards (equities, options, sovereign yield curves, credit, FX, futures, energy, shipping, macro, SEC filings, news) from public and official sources. No account needed; all but one card need no API key.
+- [Terminal](https://b1dz.com/terminal): the same dashboards in the browser, keyboard driven (`/` search, `[` `]` tabs). Public to browse; sign in to load live data. Shareable links such as `https://b1dz.com/terminal?d=company&symbol=NVDA`.
+- CLI for scripts: `b1dz research card <id> [name=value ...] --json` (ids: `b1dz research list`).
+- HTTP API: `GET https://b1dz.com/api/research` (public catalog), `GET /api/research/card/{id}?symbol=NVDA&format=json|text|csv` and `GET /api/research/search?q=` (signed-in user or `Authorization: Bearer b1dz_agent_...`).
+- MCP (`https://b1dz.com/api/agent/mcp`): `research_catalog`, `research_search`, `research_card`, all read-only.
+- Research only: quotes can be delayed; not investment advice.
+
 ## Features
 
 - Realtime Multi-Exchange Data: Persistent WebSocket feeds for prices, balances, spreads, and activity logs.
