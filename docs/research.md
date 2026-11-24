@@ -1,6 +1,6 @@
 # b1dz research
 
-A market research TUI: 28 dashboards, 116 tabs and 221 cards covering equities,
+A market research TUI: 28 dashboards, 116 tabs and 219 cards covering equities,
 options, sovereign curves, credit, FX, futures, energy, shipping, macro, SEC
 filings and news. Every card reads a public or official source and names it.
 No b1dz account is needed, and all but one card work with no API key.
@@ -107,10 +107,6 @@ environment variables.
   office connection and report "unavailable" through the hosted API and MCP.
   Their Yahoo parser is covered by a fixture test but has not been run live
   from the build server.
-- **Four EIA cards are unconfirmed**: `energy.steo`, `energy.intl-crude-production`,
-  `energy.intl-crude-exports` and `commodities.wti-nearby-curve` were written
-  from the EIA documentation but the demo key ran out before they could be run
-  once. Each throws a clear source error if a series id is wrong.
 - **Option implied volatility is computed here.** Nasdaq chains carry no IV, so
   it is solved from bid/ask mids against the forward implied by put-call
   parity, with SOFR as the rate. Dealer gamma exposure uses the usual
@@ -122,7 +118,8 @@ environment variables.
   bond lookup (a bond pricer and the 10-K debt maturity wall stand in), a
   market-implied policy path from OIS, single-name CDS, Shiller CAPE,
   Fama-French factors, the Caldara-Iacoviello geopolitical risk index,
-  tariffs, and earnings call transcripts.
+  tariffs, crude exports by country (the EIA series is complete only through
+  2018), and earnings call transcripts.
 - **Macro shows official releases and IMF forecasts**, not survey consensus.
 
 ## Adding a card

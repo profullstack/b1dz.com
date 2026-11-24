@@ -42,18 +42,6 @@ export function gasPrices(ctx: Ctx): Promise<EiaRow[]> {
   });
 }
 
-/** The four nearest NYMEX WTI contracts, petroleum/pri/fut. */
-export const WTI_CONTRACTS = ['RCLC1', 'RCLC2', 'RCLC3', 'RCLC4'];
-
-export function crudeFutures(ctx: Ctx): Promise<EiaRow[]> {
-  return eiaData(ctx, 'petroleum/pri/fut', {
-    frequency: 'daily',
-    facets: { series: WTI_CONTRACTS },
-    start: monthStartBack(ctx.now(), 3),
-    ttl: 3600,
-  });
-}
-
 /** Weekly Petroleum Status Report series, petroleum/sum/sndw: six years so a five-year band can be computed. */
 export const WEEKLY = {
   crude: { id: 'WCESTUS1', label: 'Commercial crude stocks', unit: 'mb', scale: 0.001, digits: 1 },

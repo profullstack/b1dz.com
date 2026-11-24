@@ -18,7 +18,7 @@ signal-only plugins keep your exchange keys private.
 
 ## Market research
 
-`b1dz research` opens a market research TUI: 28 dashboards and 221 cards over
+`b1dz research` opens a market research TUI: 28 dashboards and 219 cards over
 equities, options, yield curves, credit, FX, futures, energy, shipping, macro,
 SEC filings and news, each naming its public source. Agents use the same cards:
 

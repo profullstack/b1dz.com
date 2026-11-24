@@ -1,7 +1,7 @@
 /** Commodities > Boards and Curves; Agriculture > Boards. Official and reachable sources first. */
 import { SourceError, type Block, type CardDef, type Row } from '../../types.js';
 import { EIA, eiaNotes, eiaPoints } from './eia.js';
-import { crudeFutures, GAS, gasPrices, petroleumSpot, SPOT, WTI_CONTRACTS } from './energy-data.js';
+import { GAS, gasPrices, petroleumSpot, SPOT } from './energy-data.js';
 import { curveCard, futuresBoardCard } from './futures.js';
 import { IMF, PCPS, PCPS_URL, pcpsSeries } from './imf.js';
 import { monthStartBack, pointReturns, rangeParam, RETURN_COLUMNS_DAILY, RETURN_COLUMNS_MONTHLY, toRange, ymd, type Point } from './util.js';
@@ -228,51 +228,5 @@ export const agriFuturesCurve = curveCard({
   count: 8,
 });
 
-const wtiCurve: CardDef = {
-  id: 'commodities.wti-nearby-curve',
-  title: 'WTI futures: the four nearest contracts',
-  source: EIA,
-  description: 'Settlement prices of the four nearest NYMEX WTI contracts as published by the EIA: the front of the forward curve.',
-  async run(ctx) {
-    const rows = await crudeFutures(ctx);
-    const series = WTI_CONTRACTS.map((id, i) => ({ n: i + 1, pts: eiaPoints(rows, 'series', id) })).filter((s) => s.pts.length);
-    if (series.length < 2) throw new SourceError(EIA, 'the EIA returned no NYMEX contract prices');
-    const end = Math.max(...series.map((s) => s.pts[s.pts.length - 1][0]));
-    const curve = series.flatMap((s) => {
-      const last = s.pts[s.pts.length - 1];
-      return last[0] === end ? [{ n: s.n, price: last[1], prev: s.pts.length > 1 ? s.pts[s.pts.length - 2][1] : null }] : [];
-    });
-    if (curve.length < 2) throw new SourceError(EIA, 'contract prices are not available for one common date');
-    const front = curve[0].price;
-    return {
-      blocks: [
-        {
-          kind: 'chart',
-          title: 'NYMEX WTI, USD per barrel, by contract month',
-          xType: 'number',
-          xLabel: 'Contract (1 = front month)',
-          yFormat: 'num',
-          yDigits: 2,
-          series: [{ name: ymd(end), points: curve.map((c) => [c.n, c.price] as [number, number]) }],
-        },
-        {
-          kind: 'table',
-          columns: [
-            { key: 'name', label: 'Contract' },
-            { key: 'price', label: 'Settle', format: 'num', digits: 2 },
-            { key: 'day', label: 'Day', format: 'signed', digits: 2 },
-            { key: 'vsFront', label: 'vs front', format: 'signed', digits: 2 },
-          ],
-          rows: curve.map((c) => ({ name: `Contract ${c.n}`, price: c.price, day: c.prev === null ? null : c.price - c.prev, vsFront: c.price - front })),
-          footnote: curve[curve.length - 1].price < front ? 'Backwardation: later months are cheaper than the front.' : 'Contango: later months are dearer than the front.',
-        },
-      ],
-      sourceUrl: 'https://www.eia.gov/dnav/pet/pet_pri_fut_s1_d.htm',
-      asOf: ymd(end),
-      notes: ['NYMEX settlement prices republished by the EIA, several days in arrears; only the four nearest contracts are published.', ...eiaNotes(ctx)],
-    };
-  },
-};
-
 export const commodityBoardCards: CardDef[] = [metalsBoard, energyMonthly, commodityHistory, energyBoard, futuresBoard];
-export const commodityCurveCards: CardDef[] = [wtiCurve, futuresCurve];
+export const commodityCurveCards: CardDef[] = [futuresCurve];
