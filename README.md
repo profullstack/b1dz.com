@@ -54,7 +54,14 @@ is not writable. It never asks for or writes keys. Then:
 b1dz signup        # or: b1dz login
 b1dz setup         # guided walkthrough; you enter your own exchange keys
 b1dz tui           # live dashboard
+b1dz research      # market research TUI (no account needed)
 ```
+
+`b1dz research` is a market research TUI: 28 dashboards over equities, options,
+rates, credit, FX, futures, energy, shipping, macro, SEC filings and news, from
+public and official sources. The same cards are served by the CLI
+(`b1dz research card <id> --json`), the HTTP API (`/api/research`) and the MCP
+server (`research_*` tools). See [docs/research.md](docs/research.md).
 
 The trading daemon `b1dzd` is not on npm; run it from this repo
 (`apps/daemon/README.md`). The CLI is published with `pnpm --filter @profullstack/b1dz publish`

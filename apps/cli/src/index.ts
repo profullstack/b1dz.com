@@ -99,6 +99,7 @@ function help() {
 
 At a glance:
   Dashboard:          b1dz tui
+  Market research:    b1dz research       (TUI: equities, options, rates, macro, filings)
   Backtesting:        b1dz backtest <tf>
   Spread/edge audit:  b1dz audit-arb
   Live quotes:        b1dz observe        (CEX + DEX multi-venue)
@@ -126,6 +127,12 @@ Auth:
 Dashboard:
   b1dz tui                 live crypto dashboard (production API)
   b1dz tui --dev           live crypto dashboard (local API)
+
+Research (no account needed):
+  b1dz research            market research TUI: 28+ dashboards from public sources
+  b1dz research company symbol=NVDA   open on a dashboard
+  b1dz research card <id> [name=value ...] [--json|--csv]   one card for scripts
+  b1dz research help       every research command
 
 Daemon:
   b1dz status              show b1dzd status (user systemd, then system-wide)
@@ -345,6 +352,14 @@ if (!source || source === 'help' || source === '--help' || source === '-h') {
 }
 
 // Auth commands run before requireAuth so unauthenticated users can sign up
+// Market research reads public sources only: no account needed.
+if (source === 'research') {
+  const { runResearchCli } = await import('./research/cli.js');
+  const code = await runResearchCli(process.argv.slice(3));
+  // Exit only after stdout has drained: a large --json piped to another program is cut short otherwise.
+  await new Promise<void>((resolve) => process.stdout.write('', () => resolve()));
+  process.exit(code);
+}
 if (source === 'signup') { await signup(); process.exit(0); }
 if (source === 'login') { await login(); process.exit(0); }
 if (source === 'logout') { logout(); process.exit(0); }

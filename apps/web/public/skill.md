@@ -16,6 +16,20 @@ signal-only plugins keep your exchange keys private.
 - Apply risk controls: trailing stops and one position per exchange.
 - Extend the platform through the Plugin Store (DEX connectors and strategies).
 
+## Market research
+
+`b1dz research` opens a market research TUI: 28 dashboards and 221 cards over
+equities, options, yield curves, credit, FX, futures, energy, shipping, macro,
+SEC filings and news, each naming its public source. Agents use the same cards:
+
+- MCP at `https://b1dz.com/api/agent/mcp`: `research_catalog` (list cards),
+  `research_search` (ticker, company, dataset), `research_card` (run one, e.g.
+  `{"id":"rates.curve","params":{"country":"JP"}}`). All read-only.
+- HTTP: `GET /api/research` (public catalog), `GET /api/research/card/{id}`.
+- CLI: `b1dz research card <id> [name=value ...] --json`.
+
+Quotes can be delayed. Research only, not investment advice.
+
 ## Install the CLI
 
 ```sh

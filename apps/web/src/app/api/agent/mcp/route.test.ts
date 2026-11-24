@@ -18,6 +18,16 @@ vi.mock('@/lib/agent-trade', () => ({
   getAgentQuote: (...a: unknown[]) => getAgentQuoteMock(...a),
 }));
 
+const researchCatalogMock = vi.fn();
+const researchSearchMock = vi.fn();
+const runResearchCardMock = vi.fn();
+vi.mock('@/lib/research-api', () => ({
+  researchCatalog: (...a: unknown[]) => researchCatalogMock(...a),
+  researchSearch: (...a: unknown[]) => researchSearchMock(...a),
+  runResearchCard: (...a: unknown[]) => runResearchCardMock(...a),
+  cardAsText: (run: { title: string }) => `${run.title} as text`,
+}));
+
 async function importRoute() {
   return (await import('./route.js')) as typeof import('./route.js');
 }
@@ -65,12 +75,15 @@ describe('MCP route (e2e)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('lists the four tools (requires auth)', async () => {
+  it('lists the trading and research tools (requires auth)', async () => {
     const { POST } = await importRoute();
     const res = await POST(rpc('tools/list') as never);
     const body = await res.json();
     const names = (body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
-    expect(names).toEqual(['get_budget', 'get_portfolio', 'get_quote', 'place_order']);
+    expect(names).toEqual(['get_budget', 'get_portfolio', 'get_quote', 'place_order', 'research_card', 'research_catalog', 'research_search']);
+    for (const t of body.result.tools.filter((x: { name: string }) => x.name.startsWith('research_'))) {
+      expect(t.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    }
     expect(body.result).toMatchObject({ resultType: 'complete', cacheScope: 'public' });
     expect(typeof body.result.ttlMs).toBe('number');
     const order = body.result.tools.find((t: { name: string }) => t.name === 'place_order');
@@ -99,6 +112,42 @@ describe('MCP route (e2e)', () => {
     const text = JSON.parse(body.result.content[0].text);
     expect(text.status).toBe('accepted');
     expect(body.result.isError).toBe(false);
+  });
+
+  it('research_catalog returns compact dashboards and cards, narrowed by query', async () => {
+    researchCatalogMock.mockReturnValue({
+      dashboards: [{ id: 'rates', title: 'Rates & Curves', group: 'Rates & Credit', tabs: [{ id: 'us', title: 'U.S.', cards: ['rates.us-curve'] }] }],
+      cards: [{ id: 'rates.us-curve', title: 'U.S. Treasury curve', source: 'U.S. Treasury', params: [{ name: 'range', label: 'Range', default: '1Y' }, { name: 'query', label: 'Query' }] }],
+    });
+    const { POST } = await importRoute();
+    const res = await POST(rpc('tools/call', { name: 'research_catalog', arguments: { query: 'curve' } }) as never);
+    const out = JSON.parse((await res.json()).result.content[0].text);
+    expect(researchCatalogMock).toHaveBeenCalledWith('curve');
+    expect(out.cards[0]).toEqual({ id: 'rates.us-curve', title: 'U.S. Treasury curve', source: 'U.S. Treasury', params: ['range=1Y', 'query'] });
+    expect(out.dashboards[0].tabs[0]).toEqual({ title: 'U.S.', cards: ['rates.us-curve'] });
+  });
+
+  it('research_card returns rendered text by default and raw blocks for format json', async () => {
+    const run = { id: 'rates.us-curve', title: 'U.S. Treasury curve', source: 'U.S. Treasury', params: {}, blocks: [] };
+    runResearchCardMock.mockResolvedValue({ status: 200, body: run });
+    const { POST } = await importRoute();
+    const text = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'rates.us-curve', params: { country: 'US' } } }) as never)).json();
+    expect(runResearchCardMock).toHaveBeenCalledWith('rates.us-curve', { country: 'US' });
+    expect(text.result.content[0].text).toBe('U.S. Treasury curve as text');
+    expect(text.result.isError).toBe(false);
+    const json = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'rates.us-curve', format: 'json' } }) as never)).json();
+    expect(JSON.parse(json.result.content[0].text)).toMatchObject({ id: 'rates.us-curve', source: 'U.S. Treasury' });
+  });
+
+  it('research_card reports a failed source as a tool error, and research_search returns hits', async () => {
+    runResearchCardMock.mockResolvedValue({ status: 502, body: { error: 'Nasdaq: HTTP 503' } });
+    researchSearchMock.mockResolvedValue([{ kind: 'security', label: 'AAPL', dashboard: 'company', params: { symbol: 'AAPL' } }]);
+    const { POST } = await importRoute();
+    const failed = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'x.y' } }) as never)).json();
+    expect(failed.result.isError).toBe(true);
+    expect(JSON.parse(failed.result.content[0].text).error).toBe('Nasdaq: HTTP 503');
+    const found = await (await POST(rpc('tools/call', { name: 'research_search', arguments: { query: 'apple' } }) as never)).json();
+    expect(JSON.parse(found.result.content[0].text).hits[0].params).toEqual({ symbol: 'AAPL' });
   });
 
   it('returns an isError tool result for an unknown tool', async () => {

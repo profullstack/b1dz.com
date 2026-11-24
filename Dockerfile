@@ -49,6 +49,7 @@ COPY packages/wallet-provider/package.json packages/wallet-provider/
 COPY packages/wallet-direct/package.json packages/wallet-direct/
 COPY packages/wallet-coinpay/package.json packages/wallet-coinpay/
 COPY packages/inventory/package.json packages/inventory/
+COPY packages/research/package.json packages/research/
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # ---- build ----

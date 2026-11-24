@@ -3,6 +3,7 @@ import { authenticateAgent, type AuthedAgent } from '@/lib/api-auth';
 import { ACCESS_PREFIX, CORS_HEADERS, resolveAccessToken, resourceMetadataUrl, SCOPE } from '@/lib/mcp-oauth';
 import { createAdminSupabase } from '@/lib/supabase';
 import { getAgentBudget, getAgentPortfolio, getAgentQuote, placeAgentOrder } from '@/lib/agent-trade';
+import { cardAsText, researchCatalog, researchSearch, runResearchCard } from '@/lib/research-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,8 @@ export const dynamic = 'force-dynamic';
 const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+/** Research tools read public market data from outside b1dz. */
+const READ_WORLD = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 
 const TOOLS = [
   {
@@ -68,6 +71,46 @@ const TOOLS = [
     // Spends real money on an exchange: not read-only, not undoable, reaches outside b1dz.
     annotations: { title: 'Place crypto buy', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
+  {
+    name: 'research_catalog',
+    title: 'List research cards',
+    description:
+      'List the market research cards (equities, options, rates, credit, FX, futures, energy, shipping, macro, SEC filings, news) with their ids, sources and params. Pass query to narrow by id or title, e.g. "yield curve", "options", "company".',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Optional filter on card id, title or description' } },
+      additionalProperties: false,
+    },
+    annotations: { title: 'List research cards', ...READ },
+  },
+  {
+    name: 'research_search',
+    title: 'Search research',
+    description:
+      'Find a security or dataset: ticker, company name, SEC CIK, or a dataset word (cpi, sofr, payrolls). Each hit names the dashboard to use and the params (e.g. symbol) to pass to that dashboard\'s cards.',
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'Ticker, company name, CIK, dataset or dashboard name' } },
+      required: ['query'],
+    },
+    annotations: { title: 'Search research', ...READ_WORLD },
+  },
+  {
+    name: 'research_card',
+    title: 'Run a research card',
+    description:
+      'Run one research card and get its data with the source and data date. Ids come from research_catalog. params are the card\'s inputs, e.g. {"symbol":"NVDA","range":"1Y"} or {"country":"DE"}; omitted params take the card default. format "text" (default) returns aligned tables; "json" returns the raw blocks. Quotes can be delayed; research only, not investment advice.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Card id, e.g. rates.us-curve' },
+        params: { type: 'object', description: 'Card inputs by name', additionalProperties: { type: 'string' } },
+        format: { type: 'string', enum: ['text', 'json'], description: 'text (default) or json' },
+      },
+      required: ['id'],
+    },
+    annotations: { title: 'Run a research card', ...READ_WORLD },
+  },
 ] as const;
 
 function rpcResult(id: unknown, result: unknown) {
@@ -98,7 +141,8 @@ async function principal(req: NextRequest, token: string): Promise<AuthedAgent |
   return authenticateAgent(req);
 }
 function toolText(payload: unknown, isError = false) {
-  return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError };
+  // A string is already the answer (a rendered research card); everything else is JSON.
+  return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload) }], isError };
 }
 
 async function runTool(agent: AuthedAgent, name: string, args: Record<string, unknown>) {
@@ -113,6 +157,21 @@ async function runTool(agent: AuthedAgent, name: string, args: Record<string, un
         exchange: typeof args.exchange === 'string' ? args.exchange : undefined,
         idempotencyKey: typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined,
       })).body;
+    case 'research_catalog': {
+      const { dashboards, cards } = researchCatalog(typeof args.query === 'string' ? args.query : undefined);
+      return {
+        dashboards: dashboards.map((d) => ({ id: d.id, title: d.title, group: d.group, tabs: d.tabs.map((t) => ({ title: t.title, cards: t.cards })) })),
+        cards: cards.map((c) => ({ id: c.id, title: c.title, source: c.source, needsKey: c.needsKey, params: c.params.map((p) => `${p.name}${p.default ? `=${p.default}` : ''}`) })),
+      };
+    }
+    case 'research_search':
+      return { hits: await researchSearch(String(args.query ?? '')) };
+    case 'research_card': {
+      const params = args.params && typeof args.params === 'object' ? (args.params as Record<string, unknown>) : {};
+      const { body } = await runResearchCard(String(args.id ?? ''), params);
+      if ('error' in body) throw new Error(body.error);
+      return args.format === 'json' ? body : cardAsText(body);
+    }
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -132,9 +191,9 @@ export async function POST(req: NextRequest) {
     return rpcResult(msg.id, {
       protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.1.0' },
+      serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.2.0' },
       instructions:
-        'b1dz crypto trading for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget.',
+        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source.',
     });
   }
   if (msg.method.startsWith('notifications/')) return new Response(null, { status: 202, headers: CORS_HEADERS });

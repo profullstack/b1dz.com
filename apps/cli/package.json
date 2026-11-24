@@ -64,6 +64,7 @@
     "@b1dz/event-channel": "workspace:*",
     "@b1dz/observe-engine": "workspace:*",
     "@b1dz/profitability": "workspace:*",
+    "@b1dz/research": "workspace:*",
     "@b1dz/projection-engine": "workspace:*",
     "@b1dz/sdk": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",

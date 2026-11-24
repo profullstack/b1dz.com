@@ -15,6 +15,7 @@
     "@b1dz/ai-analyzer": "workspace:*",
     "@b1dz/core": "workspace:*",
     "@b1dz/projection-engine": "workspace:*",
+    "@b1dz/research": "workspace:*",
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/source-nichedb": "workspace:*",
