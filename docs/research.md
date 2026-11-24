@@ -14,16 +14,17 @@ b1dz research help                   # every command
 Research only. Quotes can be delayed, data can be revised, there is no order
 entry, and nothing here is investment advice.
 
-## One registry, four surfaces
+## One registry, five surfaces
 
 Cards live in `packages/research` (`@b1dz/research`, no dependencies). A card
 fetches from its source and returns neutral blocks (table, chart, stats, text)
-with the source that answered and the data date. Four surfaces run the same
+with the source that answered and the data date. Five surfaces run the same
 cards:
 
 | Surface | Where | Notes |
 |---|---|---|
 | TUI | `b1dz research` | `apps/cli/src/research/tui.ts` |
+| Web | `https://b1dz.com/terminal` | `apps/web/src/app/terminal/`: the same dashboards in the browser, keyboard driven, installable with the PWA. Public to browse; live data needs a signed-in user. Links are shareable (`/terminal?d=company&symbol=NVDA`) |
 | CLI | `b1dz research card <id> [name=value ...] [--json\|--csv]` | text, JSON or CSV for scripts |
 | HTTP API | `GET /api/research`, `/api/research/card/<id>`, `/api/research/search` | catalog is public; cards need a session or a `b1dz_agent_` token |
 | MCP | `research_catalog`, `research_search`, `research_card` on `/api/agent/mcp` | read-only tools beside the trading tools |

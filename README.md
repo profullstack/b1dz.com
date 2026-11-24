@@ -59,7 +59,8 @@ b1dz research      # market research TUI (no account needed)
 
 `b1dz research` is a market research TUI: 28 dashboards over equities, options,
 rates, credit, FX, futures, energy, shipping, macro, SEC filings and news, from
-public and official sources. The same cards are served by the CLI
+public and official sources. The same cards are served in the browser at
+`/terminal`, by the CLI
 (`b1dz research card <id> --json`), the HTTP API (`/api/research`) and the MCP
 server (`research_*` tools). See [docs/research.md](docs/research.md).
 

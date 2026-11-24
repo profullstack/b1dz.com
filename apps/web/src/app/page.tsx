@@ -161,6 +161,7 @@ export default async function LandingPage() {
           <Image src="/logo.svg" alt="b1dz" width={256} height={80} />
         </div>
         <div className="flex items-center gap-4">
+          <Link href="/terminal" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Terminal</Link>
           <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200 transition">Store</Link>
           {user ? (
             <>

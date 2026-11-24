@@ -22,6 +22,7 @@ signal-only plugins keep your exchange keys private.
 equities, options, yield curves, credit, FX, futures, energy, shipping, macro,
 SEC filings and news, each naming its public source. Agents use the same cards:
 
+- Web: https://b1dz.com/terminal (public to browse, sign in for live data).
 - MCP at `https://b1dz.com/api/agent/mcp`: `research_catalog` (list cards),
   `research_search` (ticker, company, dataset), `research_card` (run one, e.g.
   `{"id":"rates.curve","params":{"country":"JP"}}`). All read-only.

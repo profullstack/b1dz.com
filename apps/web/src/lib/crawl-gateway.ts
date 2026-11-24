@@ -21,6 +21,12 @@ export const gateway = createGateway({
   coinpay: { apiKey: env("COINPAY_X402_KEY") },
   payTo: env("CRAWL_PAY_TO"),
   contact: "mailto:support@b1dz.com",
+  // Every /api route checks its own credential (session, bearer or agent
+  // token) and answers 401 without one, so there is nothing there to sell a
+  // crawler. Leaving /api metered cut a signed-in person off after 20 calls an
+  // hour when their browser string looked stale; one /terminal dashboard is up
+  // to 14 card calls.
+  appPaths: ["/api"],
 });
 
 /** Resolves to a Response for a refused crawler, or undefined to carry on. */

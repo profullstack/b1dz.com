@@ -10,7 +10,10 @@
     ".": {
       "import": "./src/index.ts",
       "default": "./src/index.ts"
-    }
+    },
+    "./types": { "import": "./src/types.ts", "default": "./src/types.ts" },
+    "./format": { "import": "./src/format.ts", "default": "./src/format.ts" },
+    "./transform": { "import": "./src/transform.ts", "default": "./src/transform.ts" }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

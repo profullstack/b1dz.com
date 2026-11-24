@@ -25,6 +25,7 @@ export default async function DashboardPage() {
           <span className="text-base leading-none pb-1 text-zinc-300">&gt; dashboard</span>
         </div>
         <div className="flex items-center gap-4">
+          <Link href="/terminal" className="text-sm text-zinc-400 hover:text-zinc-200">Terminal</Link>
           <Link href="/store" className="text-sm text-zinc-400 hover:text-zinc-200">Store</Link>
           <Link href="/dashboard/projections" className="text-sm text-zinc-400 hover:text-zinc-200">Projections</Link>
           <Link href="/console" className="text-sm text-orange-300 hover:text-orange-200">Console →</Link>
