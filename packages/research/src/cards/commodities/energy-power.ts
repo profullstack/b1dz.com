@@ -358,15 +358,6 @@ const intlProduction = intlCard({
   what: 'Crude oil production',
 });
 
-const intlExports = intlCard({
-  id: 'energy.intl-crude-exports',
-  title: 'Crude oil exports by country',
-  description: 'The largest crude oil exporters, latest year available, with share and change on the year before.',
-  activity: '4',
-  frequency: 'annual',
-  what: 'Crude oil exports',
-});
-
 export const energyPowerCards: CardDef[] = [gridDemand, fuelMix, nuclear];
 export const energyOutlookCards: CardDef[] = [steo];
-export const energyIntlCards: CardDef[] = [intlProduction, intlExports];
+export const energyIntlCards: CardDef[] = [intlProduction];

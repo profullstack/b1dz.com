@@ -32,7 +32,7 @@ b1dz --help        # every command
 ## Market research
 
 ```sh
-b1dz research                        # TUI: 28 dashboards, 221 cards
+b1dz research                        # TUI: 28 dashboards, 219 cards
 b1dz research company symbol=NVDA    # open on a dashboard
 b1dz research card rates.curve country=JP --json
 b1dz research help
