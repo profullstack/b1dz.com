@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { billLabel, billRows, billUrl, clockMinutes, congressOf, lastCompleteFiscalYear, memberRows, parseSenateSchedule, sessionOf, voteRows } from './government.js';
-import { describe8kItems, parseNasdaqNews, splitPublisher } from './news.js';
+import { describe8kItems, splitPublisher } from './news.js';
 import { isTransient } from './portwatch.js';
 import { foldPartners } from './trade.js';
 import { parseGdpNow, parseMonYy, parseNowcastQuarter, parsePmms, parseSurvey } from './us-activity.js';
@@ -174,11 +174,6 @@ describe('spending and trade helpers', () => {
 });
 
 describe('news helpers', () => {
-  it('reads Nasdaq symbol news rows', () => {
-    const rows = parseNasdaqNews({ data: { rows: [{ title: ' Chip stocks slide ', created: 'Nov 24, 2026', ago: '1 hour ago', publisher: 'Example Wire', url: '/articles/chip-stocks-slide' }, { created: 'Nov 23, 2026' }] } });
-    expect(rows).toEqual([{ date: '2026-11-24', age: '1 hour ago', title: 'Chip stocks slide', source: 'Example Wire', link: 'https://www.nasdaq.com/articles/chip-stocks-slide' }]);
-    expect(parseNasdaqNews({ data: null })).toEqual([]);
-  });
   it('names the items of a Form 8-K', () => {
     expect(describe8kItems('2.02,9.01')).toBe('Results of operations; Exhibits');
     expect(describe8kItems('5.02, 6.66')).toBe('Director or officer change; Item 6.66');

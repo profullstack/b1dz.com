@@ -1,4 +1,5 @@
 /** News: market headlines, official releases, company headlines and country news, all from published feeds. */
+import { NICHEDB_NEWS, nichedbNews } from '../../lib/nichedb.js';
 import { isoDate } from '../../format.js';
 import { cikFor, filingIndexUrl, submissions } from '../../lib/sec.js';
 import { SourceError, type Block, type CardDef, type Column, type Ctx, type DashboardDef, type Row } from '../../types.js';
@@ -23,7 +24,6 @@ const MARKET_FEEDS: FeedDef[] = [
   { name: 'CNBC', url: 'https://www.cnbc.com/id/20910258/device/rss/rss.html' },
   { name: 'BBC', url: 'https://feeds.bbci.co.uk/news/business/rss.xml' },
   { name: 'Financial Times', url: 'https://www.ft.com/markets?format=rss' },
-  { name: 'Nasdaq', url: 'https://www.nasdaq.com/feed/rssoutbound?category=Markets' },
   { name: 'Nikkei Asia', url: 'https://asia.nikkei.com/rss/feed/nar' },
   { name: 'France 24', url: 'https://www.france24.com/en/business/rss' },
   { name: 'NPR', url: 'https://feeds.npr.org/1006/rss.xml' },
@@ -127,28 +127,6 @@ const official: CardDef = {
   },
 };
 
-interface NasdaqNews {
-  data?: { rows?: { title?: string; created?: string; ago?: string; publisher?: string; url?: string }[] | null } | null;
-  status?: { rCode?: number; bCodeMessage?: { errorMessage?: string }[] | null };
-}
-
-/** Rows of Nasdaq's per-symbol news response. Dates are day-precision ("Nov 24, 2026"). */
-export function parseNasdaqNews(body: NasdaqNews): Row[] {
-  const rows: Row[] = [];
-  for (const r of body.data?.rows ?? []) {
-    if (!r.title) continue;
-    const t = r.created ? Date.parse(`${r.created} UTC`) : NaN;
-    rows.push({
-      date: Number.isNaN(t) ? (r.created ?? null) : isoDate(t),
-      age: r.ago ?? null,
-      title: r.title.trim(),
-      source: r.publisher ?? null,
-      link: r.url ? (r.url.startsWith('http') ? r.url : `https://www.nasdaq.com${r.url}`) : null,
-    });
-  }
-  return rows;
-}
-
 /** What the numbered items of a Form 8-K report. */
 const ITEMS_8K: Record<string, string> = {
   '1.01': 'Material agreement', '1.02': 'Agreement terminated', '1.03': 'Bankruptcy', '1.05': 'Cybersecurity incident',
@@ -172,13 +150,12 @@ export function describe8kItems(items: string): string {
 const company: CardDef = {
   id: 'macro.news-company',
   title: 'Company News',
-  source: 'Nasdaq, SEC EDGAR',
-  description: 'Recent headlines for a U.S.-listed company, and its latest 8-K current reports.',
+  source: 'NicheDB market news, SEC EDGAR',
+  description: 'Recent headlines for a U.S.-listed company with links to the original publisher, and its latest 8-K current reports.',
   params: [{ name: 'symbol', label: 'Symbol', default: 'AAPL', hint: 'U.S. ticker, e.g. AAPL' }],
   async run(ctx, p) {
     const symbol = (p.symbol ?? 'AAPL').trim().toUpperCase();
-    if (!/^[A-Z0-9.\-]{1,10}$/.test(symbol)) throw new SourceError('Nasdaq', `not a ticker: ${p.symbol}`);
-    const nasdaqUrl = `https://api.nasdaq.com/api/news/topic/articlebysymbol?q=${encodeURIComponent(`${symbol.toLowerCase()}|stocks`)}&offset=0&limit=25&fallback=false`;
+    if (!/^[A-Z0-9.\-]{1,10}$/.test(symbol)) throw new SourceError(NICHEDB_NEWS, `not a ticker: ${p.symbol}`);
     const eightK = async (): Promise<Row[]> => {
       const reg = await cikFor(ctx, symbol);
       const sub = await submissions(ctx, reg.cik);
@@ -187,19 +164,19 @@ const company: CardDef = {
         .slice(0, 15)
         .map((f) => ({ date: f.filingDate, form: f.form, items: describe8kItems(f.items), link: filingIndexUrl(reg.cik, f.accession) }));
     };
-    const [news, filings] = await Promise.allSettled([ctx.http.json<NasdaqNews>(nasdaqUrl, { source: 'Nasdaq', ttl: 300 }).then(parseNasdaqNews), eightK()]);
+    const [news, filings] = await Promise.allSettled([nichedbNews(ctx, symbol, 25).then((list) => list.map((h): Row => ({ date: h.t, title: h.title, source: h.publisher, link: h.url }))), eightK()]);
     const blocks: Block[] = [];
     const notes: string[] = [];
     const sources: string[] = [];
     if (news.status === 'fulfilled' && news.value.length) {
-      sources.push('Nasdaq');
+      sources.push(NICHEDB_NEWS);
       blocks.push({
         kind: 'table',
         title: `${symbol}: headlines`,
-        columns: [{ key: 'date', label: 'Date' }, { key: 'age', label: 'Age' }, { key: 'title', label: 'Headline', maxWidth: 90 }, { key: 'source', label: 'Publisher', maxWidth: 24 }, { key: 'link', label: 'Link', maxWidth: 40 }],
+        columns: [{ key: 'date', label: 'Published (UTC)', format: 'datetime' }, { key: 'title', label: 'Headline', maxWidth: 90 }, { key: 'source', label: 'Publisher', maxWidth: 24 }, { key: 'link', label: 'Link', maxWidth: 40 }],
         rows: news.value,
       });
-    } else notes.push(`Nasdaq headlines unavailable (${news.status === 'rejected' ? (news.reason as Error).message : 'none for this symbol'}).`);
+    } else notes.push(`Headlines unavailable (${news.status === 'rejected' ? (news.reason as Error).message : 'none for this symbol'}).`);
     if (filings.status === 'fulfilled' && filings.value.length) {
       sources.push('SEC EDGAR');
       blocks.push({
@@ -209,9 +186,9 @@ const company: CardDef = {
         rows: filings.value,
       });
     } else notes.push(`SEC 8-K filings unavailable (${filings.status === 'rejected' ? (filings.reason as Error).message : 'none for this symbol'}).`);
-    if (!blocks.length) throw new SourceError('Nasdaq', `no headlines or filings for ${symbol}`);
-    notes.push('Nasdaq dates are day-precision. 8-K reports are the filings companies must make for material events.');
-    return { blocks, source: sources.join(', '), sourceUrl: `https://www.nasdaq.com/market-activity/stocks/${symbol.toLowerCase()}/news-headlines`, notes };
+    if (!blocks.length) throw new SourceError(NICHEDB_NEWS, `no headlines or filings for ${symbol}`);
+    notes.push('Headlines link to the original publisher; some publishers ask for a subscription. 8-K reports are the filings companies must make for material events.');
+    return { blocks, source: sources.join(', '), notes };
   },
 };
 
