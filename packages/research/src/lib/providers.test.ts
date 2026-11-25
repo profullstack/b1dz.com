@@ -3,7 +3,7 @@ import { Http } from '../http.js';
 import { createContext } from '../registry.js';
 import { CDE, CDE_NOTE, cdeBars, cdeChain, cdeContract, cdeCovers, futuresNotes, futuresRoot, parseCdeCandles, parseCdeProducts } from './exchange-futures.js';
 import { getHistory, getQuote } from './market.js';
-import { NICHEDB, nichedbBars, nichedbTag, parseNichedbHistory } from './nichedb.js';
+import { NICHEDB, nichedbBars, nichedbNews, nichedbTag, parseNichedbHistory, parseNichedbNews } from './nichedb.js';
 
 const NOW = new Date('2026-11-25T00:30:00Z');
 
@@ -155,6 +155,38 @@ describe('NicheDB history', () => {
     const { ctx, calls } = ctxWith({ 'nichedb.dev': { body: HISTORY } });
     expect(await nichedbBars(ctx, 'AAPL')).toHaveLength(3);
     expect(calls[0]).toContain('collection=markets&kind=history&tags=symbol%3Aaapl&limit=1');
+  });
+});
+
+describe('NicheDB market news', () => {
+  const NEWS = {
+    items: [
+      { title: ' Older story ', url: 'https://www.prnewswire.com/news-releases/a.html', published_at: '2026-11-20T16:01:00Z', data: { symbols: ['NVDA', 7] } },
+      { title: 'Newer story', url: 'https://www.morningstar.com/news/b', published_at: '2026-11-23T11:31:00Z', data: { symbols: ['NVDA', 'AMD'] } },
+      { title: 'No link', url: null, published_at: '2026-11-24T00:00:00Z' },
+      { title: 'Script link', url: 'javascript:alert(1)', published_at: '2026-11-24T00:00:00Z' },
+      { title: '', url: 'https://example.com/x', published_at: '2026-11-24T00:00:00Z' },
+      { title: 'Undated', url: 'http://example.org/y' },
+    ],
+  };
+
+  it('keeps only items with a title and an http(s) link, newest first, naming the publisher by host', () => {
+    expect(parseNichedbNews(NEWS)).toEqual([
+      { t: Date.parse('2026-11-23T11:31:00Z'), title: 'Newer story', publisher: 'morningstar.com', url: 'https://www.morningstar.com/news/b', symbols: ['NVDA', 'AMD'] },
+      { t: Date.parse('2026-11-20T16:01:00Z'), title: 'Older story', publisher: 'prnewswire.com', url: 'https://www.prnewswire.com/news-releases/a.html', symbols: ['NVDA'] },
+      { t: null, title: 'Undated', publisher: 'example.org', url: 'http://example.org/y', symbols: [] },
+    ]);
+    expect(parseNichedbNews({})).toEqual([]);
+    expect(parseNichedbNews(null)).toEqual([]);
+  });
+
+  it('asks for a symbol by its lower-case tag and caps the page size', async () => {
+    const { ctx, calls } = ctxWith({ 'nichedb.dev': { body: NEWS } });
+    expect(await nichedbNews(ctx, 'BRK-B', 500)).toHaveLength(3);
+    expect(calls[0]).toContain('collection=markets&kind=market-news&tags=brk.b&sort=published&order=desc&limit=100');
+    await nichedbNews(ctx);
+    expect(calls[1]).toContain('kind=market-news&sort=published');
+    expect(calls[1]).not.toContain('tags=');
   });
 });
 

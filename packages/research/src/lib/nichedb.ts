@@ -53,3 +53,49 @@ export async function nichedbBars(ctx: Ctx, symbol: string): Promise<NichedbBar[
   if (ctx.now().getTime() - bars[bars.length - 1].t > MAX_AGE_DAYS * DAY) throw new SourceError(NICHEDB, `history for ${symbol} is stale`);
   return bars;
 }
+
+export const NICHEDB_NEWS = 'NicheDB market news';
+
+export interface NichedbHeadline {
+  /** Published time, ms since epoch; null when the item has none. */
+  t: number | null;
+  title: string;
+  /** Site the story is on, without "www." */
+  publisher: string;
+  url: string;
+  symbols: string[];
+}
+
+/** `kind=market-news` items -> headlines, newest first. Items without a usable http(s) link are dropped. */
+export function parseNichedbNews(body: unknown): NichedbHeadline[] {
+  const items = (body as { items?: { title?: string; url?: string | null; published_at?: string | null; data?: { symbols?: unknown } }[] } | null)?.items;
+  const out: NichedbHeadline[] = [];
+  for (const it of Array.isArray(items) ? items : []) {
+    const title = (it.title ?? '').trim();
+    let host = '';
+    try {
+      const u = new URL(it.url ?? '');
+      if (u.protocol === 'https:' || u.protocol === 'http:') host = u.hostname.replace(/^www\./, '');
+    } catch {
+      /* not a link */
+    }
+    if (!title || !host) continue;
+    const t = Date.parse(it.published_at ?? '');
+    const symbols = Array.isArray(it.data?.symbols) ? (it.data?.symbols as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+    out.push({ t: Number.isNaN(t) ? null : t, title, publisher: host, url: it.url as string, symbols });
+  }
+  return out.sort((a, b) => (b.t ?? 0) - (a.t ?? 0));
+}
+
+/**
+ * Headlines tagged to a symbol (or the latest for the whole market when no
+ * symbol is given), with links to the original publisher. It comes from the
+ * same NicheDB `markets` collection the b1dz console reads for prices, and
+ * replaced Nasdaq's article pages, which Nasdaq's edge refuses to serve to
+ * many networks.
+ */
+export async function nichedbNews(ctx: Ctx, symbol?: string, limit = 25): Promise<NichedbHeadline[]> {
+  const tag = symbol ? `&tags=${encodeURIComponent(symbol.trim().toLowerCase().replace(/-/g, '.'))}` : '';
+  const url = `${BASE}?collection=markets&kind=market-news${tag}&sort=published&order=desc&limit=${Math.min(100, Math.max(1, limit))}`;
+  return parseNichedbNews(await ctx.http.json<unknown>(url, { source: NICHEDB_NEWS, ttl: 300 }));
+}

@@ -1,4 +1,5 @@
 /** Company > Overview: price chart, business snapshot, analyst targets, consensus history, news. */
+import { NICHEDB_NEWS, nichedbNews } from '../../lib/nichedb.js';
 import { pctChange } from '../../format.js';
 import { num } from '../../http.js';
 import { getHistory, getQuote, RANGES, type Range } from '../../lib/market.js';
@@ -218,42 +219,31 @@ const ratingChanges: CardDef = {
   },
 };
 
-interface News {
-  rows?: { title?: string; created?: string; publisher?: string; url?: string; ago?: string }[] | null;
-}
-
 const news: CardDef = {
   id: 'equities.news',
   title: 'Company news',
-  source: NASDAQ,
-  description: 'Latest headlines tagged to the symbol.',
+  source: NICHEDB_NEWS,
+  description: 'Latest headlines tagged to the symbol, linking to the original publisher.',
   params: [SYMBOL],
   async run(ctx, params) {
     const symbol = symbolOf(params);
-    const { cls } = await nasdaqInfo(ctx, symbol);
-    const data = await nasdaqGet<News>(ctx, `/api/news/topic/articlebysymbol?q=${encodeURIComponent(`${nasdaqSymbol(symbol)}|${cls}`)}&offset=0&limit=25&fallback=false`, 600);
-    const rows: Row[] = (data.rows ?? []).filter((r) => r.title).map((r) => ({
-      date: longDate(r.created),
-      title: r.title!.trim(),
-      publisher: r.publisher,
-      url: r.url ? `https://www.nasdaq.com${r.url}` : '',
-    }));
-    if (!rows.length) throw new SourceError(NASDAQ, `no news for ${symbol}`);
+    const list = await nichedbNews(ctx, symbol, 25);
+    if (!list.length) throw new SourceError(NICHEDB_NEWS, `no news for ${symbol}`);
     return {
       blocks: [
         {
           kind: 'table',
           columns: [
-            { key: 'date', label: 'Date' },
+            { key: 'date', label: 'Published (UTC)', format: 'datetime' },
             { key: 'title', label: 'Headline', maxWidth: 90 },
             { key: 'publisher', label: 'Publisher', maxWidth: 22 },
             { key: 'url', label: 'Link', maxWidth: 60 },
           ],
-          rows,
+          rows: list.map((h): Row => ({ date: h.t, title: h.title, publisher: h.publisher, url: h.url })),
         },
       ],
-      sourceUrl: stockUrl(symbol, cls, '/news-headlines'),
-      asOf: String(rows[0].date),
+      asOf: list[0].t ? new Date(list[0].t).toISOString().slice(0, 16).replace('T', ' ') : undefined,
+      notes: ['Headlines link to the original publisher; some publishers ask for a subscription.'],
     };
   },
 };
