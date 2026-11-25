@@ -3,7 +3,9 @@ import { authenticateAgent, type AuthedAgent } from '@/lib/api-auth';
 import { ACCESS_PREFIX, CORS_HEADERS, resolveAccessToken, resourceMetadataUrl, SCOPE } from '@/lib/mcp-oauth';
 import { createAdminSupabase } from '@/lib/supabase';
 import { getAgentBudget, getAgentPortfolio, getAgentQuote, placeAgentOrder } from '@/lib/agent-trade';
-import { cardAsText, researchCatalog, researchSearch, runResearchCard } from '@/lib/research-api';
+import { cardAsText, researchCatalog, researchSearch } from '@/lib/research-api';
+import { askAnalystFor, runCardFor, type Outcome } from '@/lib/research-billing';
+import { monetizationConfig } from '@/lib/monetization';
 import { changeWatchlist, readWatchlist } from '@/lib/terminal-api';
 import { cancelAgentStockOrder, getAgentBrokerAccount, placeAgentStockOrder, type AgentEquityResult } from '@/lib/agent-equity';
 
@@ -101,7 +103,7 @@ const TOOLS = [
     name: 'research_card',
     title: 'Run a research card',
     description:
-      'Run one research card and get its data with the source and data date. Ids come from research_catalog. params are the card\'s inputs, e.g. {"symbol":"NVDA","range":"1Y"} or {"country":"DE"}; omitted params take the card default. format "text" (default) returns aligned tables; "json" returns the raw blocks. Quotes can be delayed; research only, not investment advice.',
+      'Run one research card and get its data with the source and data date. Ids come from research_catalog. params are the card\'s inputs, e.g. {"symbol":"NVDA","range":"1Y"} or {"country":"DE"}; omitted params take the card default. format "text" (default) returns aligned tables; "json" returns the raw blocks. Quotes can be delayed; research only, not investment advice. Cards marked metered in research_catalog (derived analytics, FRED, EIA) cost $0.03 USDC per call, drawn from the account\'s prepaid agent credit or paid by x402 (HTTP 402 with an offer otherwise); quote cards are always free.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,6 +114,25 @@ const TOOLS = [
       required: ['id'],
     },
     annotations: { title: 'Run a research card', ...READ_WORLD },
+  },
+  {
+    name: 'research_analyst',
+    title: 'Ask the AI analyst',
+    description:
+      'Ask the b1dz AI analyst (latest Claude Opus) a market question. It answers from research cards: pass cards [{id, params}] (at most 4) or let it pick them. Returns the answer and the cards and sources it used. Costs $0.35 USDC per query, drawn from the account\'s prepaid agent credit or paid by x402 (HTTP 402 with an offer otherwise). Research only, not investment advice.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question, e.g. "Is the 2s10s curve still inverted and what does credit say?"' },
+        cards: {
+          type: 'array',
+          description: 'Optional cards to answer from',
+          items: { type: 'object', properties: { id: { type: 'string' }, params: { type: 'object', additionalProperties: { type: 'string' } } }, required: ['id'] },
+        },
+      },
+      required: ['question'],
+    },
+    annotations: { title: 'Ask the AI analyst', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: 'watchlist_get',
@@ -223,7 +244,14 @@ function equity(r: AgentEquityResult): Record<string, unknown> {
   return r.body;
 }
 
-async function runTool(agent: AuthedAgent, name: string, args: Record<string, unknown>) {
+/** A paid tool that was not paid: the HTTP layer answers 402 with the x402 offer. */
+class PaymentNeeded extends Error {
+  constructor(public outcome: Outcome<unknown>) {
+    super(String((outcome.body as { error?: unknown }).error ?? 'payment required'));
+  }
+}
+
+async function runTool(agent: AuthedAgent, name: string, args: Record<string, unknown>, req: NextRequest) {
   switch (name) {
     case 'get_budget': return (await getAgentBudget(agent)).body;
     case 'get_portfolio': return (await getAgentPortfolio(agent)).body;
@@ -239,16 +267,27 @@ async function runTool(agent: AuthedAgent, name: string, args: Record<string, un
       const { dashboards, cards } = researchCatalog(typeof args.query === 'string' ? args.query : undefined);
       return {
         dashboards: dashboards.map((d) => ({ id: d.id, title: d.title, group: d.group, tabs: d.tabs.map((t) => ({ title: t.title, cards: t.cards })) })),
-        cards: cards.map((c) => ({ id: c.id, title: c.title, source: c.source, needsKey: c.needsKey, params: c.params.map((p) => `${p.name}${p.default ? `=${p.default}` : ''}`) })),
+        cards: cards.map((c) => ({ id: c.id, title: c.title, source: c.source, needsKey: c.needsKey, ...(c.metered ? { metered: true, priceUsd: monetizationConfig().cardPriceUsd } : {}), params: c.params.map((p) => `${p.name}${p.default ? `=${p.default}` : ''}`) })),
+        pricing: 'metered cards cost USDC per call (prepaid agent credit or x402); all others are free. https://b1dz.com/pricing',
       };
     }
     case 'research_search':
       return { hits: await researchSearch(String(args.query ?? '')) };
     case 'research_card': {
       const params = args.params && typeof args.params === 'object' ? (args.params as Record<string, unknown>) : {};
-      const { body } = await runResearchCard(String(args.id ?? ''), params);
-      if ('error' in body) throw new Error(body.error);
+      const out = await runCardFor({ kind: 'agent', userId: agent.userId, agentTokenId: agent.tokenId }, req, String(args.id ?? ''), params);
+      if (out.status === 402) throw new PaymentNeeded(out);
+      const body = out.body as Parameters<typeof cardAsText>[0] | { error: string };
+      if ('error' in body) throw new Error(String(body.error));
       return args.format === 'json' ? body : cardAsText(body);
+    }
+    case 'research_analyst': {
+      const out = await askAnalystFor({ kind: 'agent', userId: agent.userId, agentTokenId: agent.tokenId }, req, { question: args.question, cards: args.cards });
+      if (out.status === 402) throw new PaymentNeeded(out);
+      const body = out.body as { error?: string; answer?: string; sources?: { id: string; title: string; source: string; asOf?: string }[] };
+      if (out.status !== 200 || body.error) throw new Error(String(body.error ?? `analyst failed (${out.status})`));
+      const srcs = (body.sources ?? []).map((s) => `- ${s.title} (${s.id}), ${s.source}${s.asOf ? `, as of ${s.asOf}` : ''}`).join('\n');
+      return `${body.answer}\n\nCards used:\n${srcs || '- none'}`;
     }
     case 'broker_account':
       return equity(await getAgentBrokerAccount(agent, args.broker));
@@ -281,7 +320,7 @@ export async function POST(req: NextRequest) {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.4.0' },
       instructions:
-        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source. watchlist_get and watchlist_edit read and change the user\'s research watchlist; a watchlist never trades. Stocks through the user\'s own broker: broker_account reads it; place_stock_order and cancel_stock_order need the trade:equity scope, charge buys to this connection\'s budget, and can be real money when the account is live, so confirm with the user first.',
+        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source; quote cards are free, metered cards (derived analytics, FRED, EIA) cost $0.03 USDC each. research_analyst asks the AI analyst ($0.35 per query). Paid calls draw on the account\'s prepaid agent credit (b1dz.com/pricing) or answer HTTP 402 with an x402 offer. watchlist_get and watchlist_edit read and change the user\'s research watchlist; a watchlist never trades. Stocks through the user\'s own broker: broker_account reads it; place_stock_order and cancel_stock_order need the trade:equity scope, charge buys to this connection\'s budget, and can be real money when the account is live, so confirm with the user first.',
     });
   }
   if (msg.method.startsWith('notifications/')) return new Response(null, { status: 202, headers: CORS_HEADERS });
@@ -295,9 +334,16 @@ export async function POST(req: NextRequest) {
     const name = String(msg.params?.name ?? '');
     const args = (msg.params?.arguments as Record<string, unknown>) ?? {};
     try {
-      const out = await runTool(agent, name, args);
+      const out = await runTool(agent, name, args, req);
       return rpcResult(msg.id, toolText(out));
     } catch (e) {
+      if (e instanceof PaymentNeeded) {
+        // HTTP 402 with the x402 offer, so an x402-aware client can pay and retry.
+        return Response.json(
+          { jsonrpc: '2.0', id: msg.id, error: { code: 402, message: e.message, data: e.outcome.body } },
+          { status: 402, headers: { ...CORS_HEADERS, ...e.outcome.headers } },
+        );
+      }
       return rpcResult(msg.id, toolText({ error: (e as Error).message }, true));
     }
   }

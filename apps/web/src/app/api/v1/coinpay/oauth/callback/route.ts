@@ -3,6 +3,7 @@ import { saveOpenProfileContact } from '@profullstack/profile';
 import { profileStore } from '@/lib/profile';
 import { createServerClient } from '@supabase/ssr';
 import { createAdminSupabase } from '@/lib/supabase';
+import { savePass } from '@/lib/entitlements';
 import {
   OAUTH_COOKIE,
   OAUTH_COOKIE_PATH,
@@ -75,6 +76,13 @@ export async function GET(req: NextRequest) {
     return back(failPath, 'CoinPay sign-in failed. Try again.');
   }
   if (!resolved.ok) return back(failPath, resolved.error);
+  // Profullstack Pass: re-read at every CoinPay sign-in and connect, stored on
+  // the identity row (bound by sub, never by email) and honoured as Pro until
+  // its expires_at.
+  if (claims.claims.pass) {
+    try { await savePass(admin, resolved.userId, claims.claims.pass); }
+    catch (e) { console.warn('[coinpay-signin] pass not saved', e instanceof Error ? e.message : e); }
+  }
   if (pending.mode === 'connect' && claims.claims.openprofile_url) {
     try { await saveOpenProfileContact(profileStore(), resolved.userId, claims.claims.openprofile_url); }
     catch { console.warn('[coinpay-signin] OpenProfile import skipped'); }

@@ -128,6 +128,8 @@ export interface CheckoutSessionInput {
   description: string;
   kind: 'install' | 'renew';
   siteUrl?: string;
+  /** b1dz products (Pro passes, agent credit): replaces the plugin metadata kind and the return pages. */
+  product?: { kind: string; successPath: string; cancelPath: string };
 }
 
 /**
@@ -148,11 +150,11 @@ export function buildCheckoutSessionBody(input: CheckoutSessionInput): Record<st
       invoice_id: input.invoiceId,
       user_id: input.userId,
       plugin_id: input.pluginId,
-      b1dz_kind: 'plugin_subscription',
+      b1dz_kind: input.product?.kind ?? 'plugin_subscription',
       b1dz_action: input.kind,
     },
-    success_url: `${base}/store/invoice/${input.invoiceId}?session={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${base}/store`,
+    success_url: input.product ? `${base}${input.product.successPath}` : `${base}/store/invoice/${input.invoiceId}?session={CHECKOUT_SESSION_ID}`,
+    cancel_url: input.product ? `${base}${input.product.cancelPath}` : `${base}/store`,
     expires_in_minutes: CHECKOUT_WINDOW_MINUTES,
   };
 }
@@ -252,6 +254,8 @@ export async function createCheckoutForPlugin(opts: {
   description: string;
   kind: 'install' | 'renew';
   client: unknown;
+  /** Sell a b1dz product rather than a plugin subscription. */
+  productKind?: string;
 }, fetchImpl: typeof fetch = fetch): Promise<CreateInvoiceResult> {
   if (!coinpayConfigured()) {
     throw new Error('Coinpay not configured (COINPAY_API_KEY / COINPAY_BUSINESS_ID missing)');
@@ -260,7 +264,7 @@ export async function createCheckoutForPlugin(opts: {
   const baseMeta = {
     user_id: opts.userId,
     plugin_id: opts.pluginId,
-    b1dz_kind: 'plugin_subscription' as const,
+    b1dz_kind: opts.productKind ?? 'plugin_subscription',
     b1dz_action: opts.kind,
   };
   const { data, error } = await db.from('plugin_invoices').insert({
@@ -283,6 +287,9 @@ export async function createCheckoutForPlugin(opts: {
       amountUsd: opts.amountUsd,
       description: opts.description,
       kind: opts.kind,
+      ...(opts.productKind
+        ? { product: { kind: opts.productKind, successPath: `/store/invoice/${data.id}?session={CHECKOUT_SESSION_ID}`, cancelPath: '/pricing' } }
+        : {}),
     }, fetchImpl);
   } catch (e) {
     await db.from('plugin_invoices').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', data.id);

@@ -6,6 +6,8 @@ import { SettingsClient } from './settings-client';
 import { SignOutForm } from '@/components/sign-out-form';
 import { RedeemCodeCard } from '@/components/redeem-code-card';
 import { CoinpayCard } from '@/components/coinpay-card';
+import { ProCard } from '@/components/pro-card';
+import { isAdminUser } from '@/lib/monetization';
 import { createAdminSupabase } from '@/lib/supabase';
 import { isPlaceholderEmail } from '@/lib/coinpay-signin';
 
@@ -34,6 +36,8 @@ export default async function SettingsPage() {
           <Link href="/dashboard" className="text-xs text-zinc-500 hover:text-zinc-300">summary</Link>
           <Link href="/console" className="text-xs text-zinc-500 hover:text-zinc-300">console</Link>
           <Link href="/invites" className="text-xs text-zinc-500 hover:text-zinc-300">invites</Link>
+          <Link href="/pricing" className="text-xs text-zinc-500 hover:text-zinc-300">pricing</Link>
+          {isAdminUser(user.id) && <Link href="/admin" className="text-xs text-zinc-500 hover:text-zinc-300">admin</Link>}
         </div>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-zinc-400">{coinpayOnly ? 'Signed in with CoinPay' : user.email}</span>
@@ -41,6 +45,9 @@ export default async function SettingsPage() {
         </div>
       </nav>
       <div className="mx-auto max-w-4xl px-6 pt-6">
+        <ProCard />
+      </div>
+      <div className="mx-auto max-w-4xl px-6 pt-4">
         <RedeemCodeCard />
       </div>
       <div className="mx-auto max-w-4xl px-6 pt-4">

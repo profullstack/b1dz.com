@@ -8,6 +8,8 @@
  * payment.forwarded following payment.confirmed, never extends twice.
  */
 
+import { PRODUCT_KIND, productByInvoiceKey } from './monetization';
+
 export const SUBSCRIPTION_DAYS = 30;
 
 export interface InvoiceRow {
@@ -28,6 +30,11 @@ export interface InvoiceStore {
   update(invoiceId: string, updates: Record<string, unknown>): Promise<void>;
   getInstall(userId: string, pluginId: string): Promise<{ paid_until: string | null; version: string } | null>;
   upsertInstall(row: Record<string, unknown>): Promise<void>;
+  /**
+   * Credit a b1dz product (Pro days, agent credit) to the ledger, once per
+   * source. False when that source was already granted.
+   */
+  grantCredit?(userId: string, unit: string, amount: number, source: string): Promise<boolean>;
 }
 
 export interface CoinPayEvent {
@@ -118,6 +125,14 @@ export async function settleInvoice(
     return { settled: false, reason: 'already paid', invoiceId: invoice.id };
   }
 
+  // A b1dz product (Pro pass, agent credit): credit the ledger instead of an install.
+  const product = invoice.metadata?.b1dz_kind === PRODUCT_KIND ? productByInvoiceKey(invoice.plugin_id) : null;
+  if (product) {
+    if (!store.grantCredit) throw new Error('invoice store cannot grant credit');
+    const granted = await store.grantCredit(invoice.user_id, product.grant.unit, product.grant.amount, `coinpay:${invoice.id}`);
+    return { settled: true, reason: granted ? `granted ${product.grant.amount} ${product.grant.unit}` : 'already granted', invoiceId: invoice.id };
+  }
+
   const existing = await store.getInstall(invoice.user_id, invoice.plugin_id);
   const currentMs = existing?.paid_until ? new Date(existing.paid_until).getTime() : 0;
   const baseMs = currentMs > now.getTime() ? currentMs : now.getTime();
@@ -195,6 +210,19 @@ export function supabaseInvoiceStore(admin: unknown): InvoiceStore {
     async upsertInstall(row) {
       const { error } = await db.from('user_installed_plugins').upsert(row, { onConflict: 'user_id,plugin_id' });
       if (error) throw new Error(`install upsert: ${error.message}`);
+    },
+    async grantCredit(userId, unit, amount, source) {
+      const { getCreditDeps } = await import('./credits');
+      const { credits } = await getCreditDeps();
+      if ((await credits.history(userId, unit)).some((e) => e.kind === 'grant' && e.source === source)) return false;
+      try {
+        await credits.grant(userId, { unit, amount }, source);
+        return true;
+      } catch (e) {
+        // credit_ledger_coinpay_grant_once: a racing settle already granted it.
+        if (/duplicate key|unique|23505/i.test(String((e as Error)?.message ?? e))) return false;
+        throw e;
+      }
     },
   };
 }

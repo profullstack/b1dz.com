@@ -95,7 +95,14 @@ export function decodePending(raw: string | null | undefined): PendingAuth | nul
 
 export { sameState };
 
-export type CoinpayClaims = { sub: string; email: string | null; name: string | null; openprofile_url?: string };
+export type CoinpayClaims = {
+  sub: string;
+  email: string | null;
+  name: string | null;
+  openprofile_url?: string;
+  /** Profullstack Pass from userinfo, clamped by coinpay-onboard (stale or malformed = inactive). */
+  pass?: { active: boolean; expiresAt: Date | null };
+};
 
 /** Code -> tokens -> id_token checks -> userinfo (sub must match). */
 export async function fetchCoinpayClaims(
@@ -121,6 +128,7 @@ export async function fetchCoinpayClaims(
         email: r.email && r.email.includes('@') ? r.email.slice(0, 320) : null,
         name: r.name ? r.name.trim().slice(0, 200) : null,
         ...(typeof r.userinfo?.openprofile_url === 'string' ? { openprofile_url: r.userinfo.openprofile_url } : {}),
+        ...(r.pass ? { pass: { active: !!r.pass.active, expiresAt: r.pass.expiresAt ?? null } } : {}),
       },
     };
   } catch (e) {

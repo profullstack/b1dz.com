@@ -333,6 +333,42 @@ Limits that shape the cards:
 A card never returns sample data. If its source is down it throws, and the
 surface shows the source's own error.
 
+5. Decide whether agents pay for it (`packages/research/src/billing.ts`). A
+   card from FRED or EIA is metered automatically; a card b1dz computes
+   (ratios, risk statistics, a payoff) is metered only if you add it to
+   `DERIVED_CARDS`. Never meter a card that shows quotes: `billing.test.ts`
+   fails if a raw-quote card (chart, board, chain, book, price history) is
+   marked billable.
+
+## Pricing, the AI analyst and agents
+
+Plan approved 2026-11-25 as a 60-day test (to 2027-01-24); prices and caps are
+env (see `apps/web/src/lib/monetization.ts`).
+
+- **People** use `/terminal`, the TUI and the CLI free, every card included.
+- **AI analyst** (`POST /api/research/analyst`, the "ask the AI analyst" box on
+  `/terminal`, `b1dz analyst <question>`, MCP `research_analyst`): latest Opus,
+  answering from up to 4 cards. Free accounts: `FREE_ANALYST_DAILY_QUERIES` (5)
+  a day under `FREE_ANALYST_MONTHLY_CAP_USD` per user and
+  `FREE_ANALYST_GLOBAL_MONTHLY_CAP_USD` for all free users, answers watermarked.
+  Pro: until this calendar month's real Anthropic cost (from the usage block,
+  table `ai_usage`) would pass `PRO_AI_MONTHLY_CAP_USD` ($8).
+- **Pro** = prepaid passes on `/pricing` (CoinPay checkout, 30 days $25, 365
+  days $199) adding `pro_days` to the credit ledger, plus credit codes, invite
+  days and an active Profullstack Pass (read from CoinPay userinfo at CoinPay
+  sign-in or connect; Settings has "Refresh Profullstack Pass").
+- **Agents** (b1dz_agent_ token, MCP OAuth, or no credential): metered cards
+  cost `AGENT_CARD_PRICE_USD` ($0.03), analyst queries `AGENT_ANALYST_PRICE_USD`
+  ($0.35), paid by x402 (`PAYMENT-SIGNATURE`/`X-PAYMENT`, USDC via CoinPay to
+  `CRAWL_PAY_TO`) or from prepaid agent credit (`agent_cents`). Otherwise HTTP
+  402 with the x402 offer. Quote cards are always free. Charges: `agent_charges`.
+- **Admin** (`/admin`, users in `B1DZ_ADMIN_USER_IDS`): trailing-30-day AI cost
+  per non-paying user, total AI cost, Pro revenue vs Anthropic + server cost
+  (`B1DZ_SERVER_MONTHLY_USD`), renewals, agent revenue, founder-time notes.
+- **Referral links** (`apps/web/src/data/broker-referrals.json`, or
+  `BROKER_REFERRAL_URLS` JSON in app.env) show where people link a broker;
+  without a referral URL the plain signup link is shown.
+
 ## Origin
 
 The feature set follows the public description of an existing open-source

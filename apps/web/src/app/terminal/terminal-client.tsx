@@ -19,6 +19,7 @@ import { isOrderSymbol } from '@b1dz/core/terminal';
 import { BlockView } from './blocks';
 import { WatchPanel, type WatchPanelHandle } from './watch-panel';
 import { TvTile, type TvTileHandle } from './tv-tile';
+import { AnalystBox } from './analyst-box';
 import {
   PRIMARY_PARAMS,
   RANGES,
@@ -544,6 +545,7 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
               to load live data. Prefer a real terminal? Install the CLI and run <code className="text-amber-100">b1dz</code>: the same terminal, no account needed for research.
             </div>
           )}
+          <AnalystBox cards={shown.map(({ card, params }) => ({ id: card.id, params }))} signedIn={signedIn} loginHref={loginHref} />
           <div className={maximized === null ? 'grid grid-cols-1 gap-3 2xl:grid-cols-2' : ''}>
             {visible.map(({ card, params, index }) => (
               <CardView

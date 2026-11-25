@@ -49,7 +49,7 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
 
   useEffect(() => {
     if (TERMINAL_OK.has(invoice.status)) {
-      const t = window.setTimeout(() => router.push(`/store?installed=${invoice.plugin_id}`), 2500);
+      const t = window.setTimeout(() => router.push(invoice.plugin_id.startsWith('b1dz:') ? '/pricing?paid=1' : `/store?installed=${invoice.plugin_id}`), 2500);
       return () => window.clearTimeout(t);
     }
   }, [invoice.status, invoice.plugin_id, router]);
@@ -76,7 +76,7 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
 
       <div className="max-w-2xl mx-auto px-6 py-10">
         <h1 className="text-2xl font-bold mb-1">{isCheckout ? `Pay ${invoice.amount_usd} USD with crypto or PayPal` : `Pay ${invoice.amount_usd} USD in ${invoice.blockchain}`}</h1>
-        <p className="text-sm text-zinc-400 mb-8">Plugin: <span className="font-mono text-orange-300">{invoice.plugin_id}</span></p>
+        <p className="text-sm text-zinc-400 mb-8">{invoice.plugin_id.startsWith('b1dz:') ? 'Purchase' : 'Plugin'}: <span className="font-mono text-orange-300">{invoice.plugin_id}</span></p>
 
         {TERMINAL_OK.has(invoice.status) ? (
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
@@ -102,7 +102,7 @@ export function InvoiceClient({ initial }: { initial: Invoice }) {
               </a>
             )}
             <p className="text-xs text-zinc-500">
-              This page checks every 5 seconds and activates the plugin as soon as CoinPay confirms the payment. You can close it.
+              This page checks every 5 seconds and activates your purchase as soon as CoinPay confirms the payment. You can close it.
             </p>
           </div>
         ) : (
