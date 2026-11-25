@@ -54,6 +54,11 @@ export const DEFAULT_TERMINAL_MAX_ORDER_USD = 10_000;
 /** What a broker can trade: US stock and ETF tickers (BRK.B style classes allowed). */
 const ORDER_SYMBOL = /^[A-Z][A-Z0-9]{0,5}([.-][A-Z]{1,2})?$/;
 
+/** Can a broker ticket be opened for this symbol? (BTC-USD and ^GSPC cannot.) */
+export function isOrderSymbol(symbol: string): boolean {
+  return ORDER_SYMBOL.test(symbol.trim().toUpperCase());
+}
+
 export type ManualOrderParse = { ok: true; order: BrokerOrderArgs } | { ok: false; error: string };
 
 function positive(v: unknown): number | null {

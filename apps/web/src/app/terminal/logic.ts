@@ -93,6 +93,35 @@ export function localSearch(catalog: Catalog, query: string, limit = 12): { labe
   return out.slice(0, limit);
 }
 
+// ---- watchlist panel -------------------------------------------------------
+
+export interface WatchQuote {
+  last: number | null;
+  /** Day change in percent. */
+  day: number | null;
+}
+
+/** symbol -> last and day change, read from a returns-board table (the Watchlist card). */
+export function watchQuotes(blocks: { kind: string; rows?: Record<string, unknown>[] }[] | undefined): Record<string, WatchQuote> {
+  const out: Record<string, WatchQuote> = {};
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  for (const b of blocks ?? []) {
+    if (b.kind !== 'table') continue;
+    for (const row of b.rows ?? []) {
+      const symbol = typeof row.symbol === 'string' ? row.symbol.toUpperCase() : '';
+      if (symbol) out[symbol] = { last: num(row.last), day: num(row.day) };
+    }
+  }
+  return out;
+}
+
+/** Split a list into runs of at most `size` (the Watchlist card takes 40 symbols a call). */
+export function chunk<T>(list: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
 // ---- URL state -------------------------------------------------------------
 
 export interface View {

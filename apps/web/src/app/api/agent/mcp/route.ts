@@ -4,6 +4,7 @@ import { ACCESS_PREFIX, CORS_HEADERS, resolveAccessToken, resourceMetadataUrl, S
 import { createAdminSupabase } from '@/lib/supabase';
 import { getAgentBudget, getAgentPortfolio, getAgentQuote, placeAgentOrder } from '@/lib/agent-trade';
 import { cardAsText, researchCatalog, researchSearch, runResearchCard } from '@/lib/research-api';
+import { changeWatchlist, readWatchlist } from '@/lib/terminal-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -111,6 +112,30 @@ const TOOLS = [
     },
     annotations: { title: 'Run a research card', ...READ_WORLD },
   },
+  {
+    name: 'watchlist_get',
+    title: 'Read the watchlist',
+    description:
+      'The tickers on this user\'s research terminal watchlist (the list b1dz.com/terminal shows). To price them, pass the symbols to research_card with id "overview.watchlist" and params {"symbols":"AAPL,MSFT"}.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { title: 'Read the watchlist', ...READ },
+  },
+  {
+    name: 'watchlist_edit',
+    title: 'Edit the watchlist',
+    description:
+      'Add or remove tickers on this user\'s research terminal watchlist. A watchlist is only a list to look at: nothing here buys or sells, and the automated strategies never trade it. Returns the new list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        add: { type: 'array', items: { type: 'string' }, description: 'Tickers to add, e.g. ["NVDA","BTC-USD"]' },
+        remove: { type: 'array', items: { type: 'string' }, description: 'Tickers to remove' },
+      },
+      additionalProperties: false,
+    },
+    // Changes a saved list the user can change back; touches nothing outside b1dz.
+    annotations: { title: 'Edit the watchlist', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
 ] as const;
 
 function rpcResult(id: unknown, result: unknown) {
@@ -172,6 +197,10 @@ async function runTool(agent: AuthedAgent, name: string, args: Record<string, un
       if ('error' in body) throw new Error(body.error);
       return args.format === 'json' ? body : cardAsText(body);
     }
+    case 'watchlist_get':
+      return readWatchlist(agent.admin, agent.userId);
+    case 'watchlist_edit':
+      return changeWatchlist(agent.admin, agent.userId, args.add, args.remove);
     default:
       throw new Error(`unknown tool: ${name}`);
   }
@@ -191,9 +220,9 @@ export async function POST(req: NextRequest) {
     return rpcResult(msg.id, {
       protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.2.0' },
+      serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.3.0' },
       instructions:
-        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source.',
+        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source. watchlist_get and watchlist_edit read and change the user\'s research watchlist; a watchlist never trades. Stock orders through the user\'s broker are not available to agents: the user places those at b1dz.com/terminal.',
     });
   }
   if (msg.method.startsWith('notifications/')) return new Response(null, { status: 202, headers: CORS_HEADERS });

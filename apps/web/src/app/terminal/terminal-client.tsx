@@ -7,12 +7,17 @@
  * tab, and a grid of cards. The cards are the same ones `b1dz research` shows
  * in a terminal; this page only lays them out. Data comes from
  * /api/research/card/<id>, which needs a signed-in user.
+ *
+ * The right-hand panel (watch-panel.tsx) holds the user's watchlist, their
+ * broker account and the order ticket.
  */
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TRANSFORMS, TRANSFORM_LABEL, type Transform } from '@b1dz/research/transform';
 import type { CardResult } from '@b1dz/research/types';
+import { isOrderSymbol } from '@b1dz/core/terminal';
 import { BlockView } from './blocks';
+import { WatchPanel, type WatchPanelHandle } from './watch-panel';
 import {
   PRIMARY_PARAMS,
   RANGES,
@@ -34,6 +39,7 @@ const MY = 'my';
 const LS_PARAMS = 'b1dz:terminal:params';
 const LS_PINNED = 'b1dz:terminal:pinned';
 const LS_LAST = 'b1dz:terminal:last';
+const LS_WATCH_OPEN = 'b1dz:terminal:watch-open';
 
 interface Run extends CardResult {
   id: string;
@@ -83,6 +89,9 @@ const HELP: [string, string][] = [
   ['<  >', 'shorter / longer date range'],
   ['t', 'chart transform: level, indexed, YoY %, drawdown'],
   ['r', 'reload the cards on this tab'],
+  ['w', 'show or hide the watchlist and your broker account'],
+  ['a', 'add the current symbol to the watchlist'],
+  ['b  x', 'buy / sell the current symbol (opens the order ticket)'],
   ['Esc', 'close search, help or a maximized card'],
   ['?', 'this help'],
 ];
@@ -101,6 +110,8 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
   const [help, setHelp] = useState(false);
   const [menu, setMenu] = useState(false);
   const [note, setNote] = useState('');
+  const [watchOpen, setWatchOpen] = useState(false);
+  const watch = useRef<WatchPanelHandle>(null);
 
   const resultsRef = useRef<Record<string, Loaded>>({});
   const queue = useRef<(() => Promise<void>)[]>([]);
@@ -115,6 +126,9 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
     const fromUrl = viewFromSearch(window.location.search, catalog, last);
     const explicit = new URLSearchParams(window.location.search).has('d');
     setPinned(readJson<Pinned[]>(LS_PINNED, []));
+    // Open by default where there is room for it; remembered after that.
+    // On a phone the panel covers the page, so it only opens when asked.
+    setWatchOpen(window.matchMedia('(min-width: 768px)').matches && readJson<boolean>(LS_WATCH_OPEN, window.matchMedia('(min-width: 1280px)').matches));
     setView({ ...fromUrl, params: explicit ? { ...saved[fromUrl.dashboard], ...fromUrl.params } : (saved[fromUrl.dashboard] ?? {}) });
     setReady(true);
   }, [catalog]);
@@ -252,6 +266,26 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
     [pinned, go, catalog],
   );
 
+  const toggleWatch = useCallback((next?: boolean) => {
+    setWatchOpen((cur) => {
+      const open = next ?? !cur;
+      writeJson(LS_WATCH_OPEN, open);
+      return open;
+    });
+  }, []);
+  /** The ticker the current tab is about, when it has one. */
+  const currentSymbol = (view.params.symbol ?? '').trim().toUpperCase();
+  const tradeCurrent = useCallback(
+    (side: 'buy' | 'sell') => {
+      if (!signedIn) return flash('sign in to trade');
+      if (!currentSymbol) return flash('no symbol on this tab: open a company first');
+      if (!isOrderSymbol(currentSymbol)) return flash(`${currentSymbol} is not a stock or ETF a broker can trade`);
+      toggleWatch(true);
+      watch.current?.trade(currentSymbol, side);
+    },
+    [signedIn, currentSymbol, flash, toggleWatch],
+  );
+
   const runSearch = useCallback(async () => {
     const q = query.trim();
     if (!q) return;
@@ -295,6 +329,16 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
         setTransform(next);
         flash(`charts: ${TRANSFORM_LABEL[next]}`);
       } else if (e.key === 'r') reload();
+      else if (e.key === 'w') toggleWatch();
+      else if (e.key === 'a') {
+        if (!currentSymbol) return flash('no symbol on this tab to add');
+        toggleWatch(true);
+        watch.current?.add(currentSymbol);
+      } else if (e.key === 'b' || e.key === 'x') {
+        // The ticket focuses its quantity box at once: without this the key itself is typed into it.
+        e.preventDefault();
+        tradeCurrent(e.key === 'b' ? 'buy' : 'sell');
+      }
       else if (e.key === 's') {
         const name = PRIMARY_PARAMS.find((n) => specs.some((p) => p.name === n)) ?? specs[0]?.name;
         const input = name ? paramBar.current?.querySelector<HTMLElement>(`[data-param="${name}"]`) : null;
@@ -313,14 +357,14 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [moveTab, reload, flash, transform, specs, view.params.range, setParam]);
+  }, [moveTab, reload, flash, transform, specs, view.params.range, setParam, toggleWatch, currentSymbol, tradeCurrent]);
 
   const loginHref = `/login?next=${encodeURIComponent(`/terminal${searchFromView({ dashboard: dashboard?.id ?? '', tab: tab?.id ?? '', params: view.params })}`)}`;
   const loadingCount = Object.values(results).filter((r) => r.status === 'loading').length;
   const visible = maximized !== null && shown[maximized] ? [{ ...shown[maximized], index: maximized }] : shown.map((s, index) => ({ ...s, index }));
 
   return (
-    <div className="flex min-h-0 flex-1 font-mono text-[13px]">
+    <div className="relative flex min-h-0 flex-1 font-mono text-[13px]">
       {/* sidebar */}
       <aside className={`${menu ? 'absolute inset-y-0 left-0 z-30 flex' : 'hidden'} w-60 shrink-0 flex-col overflow-y-auto border-r border-zinc-800 bg-zinc-950 py-2 md:static md:flex`}>
         <nav aria-label="Dashboards">
@@ -376,6 +420,15 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
               className="w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-100 placeholder:text-zinc-600 focus:border-amber-400 focus:outline-none"
             />
           </form>
+          <button
+            type="button"
+            onClick={() => toggleWatch()}
+            aria-pressed={watchOpen}
+            className={`whitespace-nowrap rounded border px-2 py-0.5 ${watchOpen ? 'border-amber-400/60 text-amber-300' : 'border-zinc-700 text-zinc-400 hover:text-zinc-100'}`}
+            title="Watchlist and trading (w)"
+          >
+            watch
+          </button>
           <button type="button" onClick={() => setHelp(true)} className="rounded border border-zinc-700 px-2 py-0.5 text-zinc-400 hover:text-zinc-100" aria-label="Keyboard help">
             ?
           </button>
@@ -417,6 +470,23 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
             {specs.map((p) => (
               <ParamInput key={`${dashboard?.id}-${p.name}`} spec={p} value={view.params[p.name] ?? ''} onChange={(v) => setParam(p.name, v)} />
             ))}
+            {currentSymbol && (
+              <span className="flex gap-1 pb-0.5 text-xs">
+                <button type="button" onClick={() => { toggleWatch(true); watch.current?.add(currentSymbol); }} className="rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-400 hover:text-zinc-100" title="Add to the watchlist (a)">
+                  + watch
+                </button>
+                {signedIn && isOrderSymbol(currentSymbol) && (
+                  <>
+                    <button type="button" onClick={() => tradeCurrent('buy')} className="rounded border border-emerald-500/50 px-1.5 py-0.5 text-emerald-400 hover:bg-emerald-500/20" title={`Buy ${currentSymbol} (b)`}>
+                      buy
+                    </button>
+                    <button type="button" onClick={() => tradeCurrent('sell')} className="rounded border border-red-500/50 px-1.5 py-0.5 text-red-400 hover:bg-red-500/20" title={`Sell ${currentSymbol} (x)`}>
+                      sell
+                    </button>
+                  </>
+                )}
+              </span>
+            )}
             {transform !== 'level' && <span className="pb-1 text-xs text-amber-300">{TRANSFORM_LABEL[transform]}</span>}
           </div>
         )}
@@ -458,10 +528,23 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
 
         {/* status */}
         <div className="flex items-center gap-3 border-t border-zinc-800 px-3 py-1 text-xs text-zinc-500">
-          <span className={note ? 'text-amber-300' : 'hidden md:inline'}>{note || '/ search · [ ] tabs · s input · < > range · t transform · r reload · ? help'}</span>
+          <span className={note ? 'text-amber-300' : 'hidden md:inline'}>{note || '/ search · [ ] tabs · s input · < > range · t transform · r reload · w watchlist · b buy · x sell · ? help'}</span>
           <span className="ml-auto">{loadingCount ? `loading ${loadingCount}…` : 'Research only. Quotes can be delayed. Not investment advice.'}</span>
         </div>
       </section>
+
+      <WatchPanel
+        ref={watch}
+        open={watchOpen}
+        signedIn={signedIn}
+        loginHref={loginHref}
+        onClose={() => toggleWatch(false)}
+        onOpenSymbol={(symbol) => {
+          go('company', 'overview', { symbol });
+          if (window.matchMedia('(max-width: 767px)').matches) toggleWatch(false);
+        }}
+        flash={flash}
+      />
 
       {help && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4" onClick={() => setHelp(false)}>
@@ -476,7 +559,7 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
               ))}
             </dl>
             <p className="mt-3 text-xs text-zinc-500">
-              Each card names its source. Pin a card to build your own dashboard. The same cards run in a real terminal with <code>b1dz research</code>.
+              Each card names its source. Pin a card to build your own dashboard. Orders go through your own broker, linked in Settings. The same cards run in a real terminal with <code>b1dz research</code>.
             </p>
           </div>
         </div>

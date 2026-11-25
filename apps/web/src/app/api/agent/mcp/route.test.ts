@@ -80,7 +80,7 @@ describe('MCP route (e2e)', () => {
     const res = await POST(rpc('tools/list') as never);
     const body = await res.json();
     const names = (body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
-    expect(names).toEqual(['get_budget', 'get_portfolio', 'get_quote', 'place_order', 'research_card', 'research_catalog', 'research_search']);
+    expect(names).toEqual(['get_budget', 'get_portfolio', 'get_quote', 'place_order', 'research_card', 'research_catalog', 'research_search', 'watchlist_edit', 'watchlist_get']);
     for (const t of body.result.tools.filter((x: { name: string }) => x.name.startsWith('research_'))) {
       expect(t.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }

@@ -24,14 +24,39 @@ function controlHeaders(): Record<string, string> {
   return { 'content-type': 'application/json', 'x-b1dz-control-token': token };
 }
 
-async function call(path: string, body: Record<string, unknown>): Promise<Response> {
+async function call(path: string, body: Record<string, unknown>, timeoutMs = 10_000): Promise<Response> {
   return fetch(`${controlUrl()}${path}`, {
     method: 'POST',
     headers: controlHeaders(),
     body: JSON.stringify(body),
     cache: 'no-store',
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
+}
+
+export type EquityAction = 'account' | 'order' | 'cancel' | 'confirm';
+
+/**
+ * Manual equity trading for the research terminal. The daemon holds the
+ * user's unlocked broker credentials; this process only relays the ticket and
+ * the daemon's answer (which is already safe to show the user).
+ *
+ * A placed order is not idempotent at the broker, so a timeout here is
+ * reported as "unknown, check your orders", never retried.
+ */
+export async function daemonEquity(action: EquityAction, userId: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
+  let res: Response;
+  try {
+    res = await call(`/equity/${action}`, { ...body, userId }, 25_000);
+  } catch (e) {
+    const timedOut = (e as Error).name === 'TimeoutError';
+    if (timedOut && (action === 'order' || action === 'confirm')) {
+      return { status: 504, body: { error: 'The broker did not answer in time. The order may or may not have been placed: check your open orders before sending it again.', unknown: true } };
+    }
+    return { status: 503, body: { error: 'trading daemon unreachable; try again shortly' } };
+  }
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return { status: res.status, body: json };
 }
 
 export async function daemonUnlock(userId: string, dataKey: string, ttlSeconds: number): Promise<{ ok: boolean; status: number; body: unknown }> {

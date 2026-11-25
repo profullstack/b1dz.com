@@ -2,7 +2,8 @@
  * GET /api/oauth/{plugin}/callback
  *
  * Provider redirects here with ?code&state. We verify state against the cookie,
- * exchange the code for tokens (confidential client → HTTP Basic auth), and
+ * exchange the code for tokens (HTTP Basic for a confidential client; client id
+ * plus the PKCE verifier for a public one), and
  * seal the access token (+ refresh/expiry when present) to the user's OAuth
  * inbox public key (user_settings.secret_inbox). The server can write the
  * token but can never read it back: the user's unlocked browser (or the
@@ -13,7 +14,8 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { authenticate } from '@/lib/api-auth';
-import { getOAuthProvider, isOAuthConfigured } from '@/lib/oauth-providers';
+import { getOAuthProvider, isOAuthConfigured, tokenRequest } from '@/lib/oauth-providers';
+import { requestOrigin } from '@/lib/credits';
 import { sealToInbox } from '@b1dz/core/sealed-secrets';
 import { loadSettingsRow, rowInbox, rowSeal, type Sb } from '@/lib/settings-row';
 
@@ -22,7 +24,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest, { params }: { params: Promise<{ plugin: string }> }) {
   const { plugin } = await params;
   const url = new URL(req.url);
-  const origin = url.origin;
+  const origin = requestOrigin(req);
   const settings = (q: string) => NextResponse.redirect(`${origin}/settings?tab=plugins&${q}`);
 
   const provider = getOAuthProvider(plugin);
@@ -53,24 +55,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ plug
   }
 
   const redirectUri = `${origin}/api/oauth/${plugin}/callback`;
-  const basic = Buffer.from(`${process.env[provider.clientIdEnv]}:${process.env[provider.clientSecretEnv]}`).toString('base64');
-  const body = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: redirectUri,
-  });
+  const grant: Record<string, string> = { grant_type: 'authorization_code', code, redirect_uri: redirectUri };
+  if (provider.publicClient) {
+    const verifier = req.cookies.get(`oauth_pkce_${plugin}`)?.value;
+    if (!verifier) return settings(`oauth=badstate&plugin=${plugin}`);
+    grant.code_verifier = verifier;
+  }
+  const tokenReq = tokenRequest(provider, grant);
 
   let tokenJson: { access_token?: string; refresh_token?: string; expires_in?: number };
   try {
-    const tokenRes = await fetch(provider.tokenUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basic}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-      },
-      body: body.toString(),
-    });
+    const tokenRes = await fetch(provider.tokenUrl, { method: 'POST', headers: tokenReq.headers, body: tokenReq.body });
     const text = await tokenRes.text();
     if (!tokenRes.ok) {
       console.error(`[oauth] ${plugin} token exchange failed ${tokenRes.status}: ${text.slice(0, 200)}`);
@@ -104,6 +99,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ plug
 
   const res = settings(`oauth=success&plugin=${plugin}`);
   res.cookies.delete(`oauth_state_${plugin}`);
+  res.cookies.delete(`oauth_pkce_${plugin}`);
   console.log(`[oauth] ${plugin} linked for user ${auth.userId.slice(0, 8)}…`);
   return res;
 }
