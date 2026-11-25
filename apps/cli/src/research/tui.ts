@@ -29,7 +29,7 @@ import {
 } from '@b1dz/research';
 import { cycle, sideBySide, sidebarItems, visibleLength, windowStart, type SidebarItem } from './layout.js';
 import type { ResearchStore } from './store.js';
-import { describeOrder } from '@b1dz/core';
+import { TV_CHANNELS, describeOrder, type TvChannel } from '@b1dz/core';
 import { accountLines, parseTicketLine, tradeError, type TradeClient } from '../trade.js';
 
 /* blessed ships no types; the widgets used here are small and stable. */
@@ -78,6 +78,9 @@ Keys
   Trade (your own broker, after b1dz login and b1dz unlock)
     b / x           buy / sell this tab's symbol: 5 shares, $500, or 5 @190.50 for a limit
     a               account: broker, buying power, positions, open orders
+
+  Live TV (your hdtilt.com playlists, after b1dz tv login; plays in mpv)
+    v               pick CNBC, Bloomberg or Fox Business
     c               compare: plot tickers or FRED:SERIES on one axis
     +               pin the focused card to "My dashboard"     -   unpin (in My dashboard)
 
@@ -113,6 +116,8 @@ export interface ResearchTuiOptions {
   onQuit?: () => void;
   /** Account features (watchlist sync, orders). Absent: research only. */
   trader?: TradeClient;
+  /** Start a live TV channel in an outside player; resolves to a line to show. Absent: no TV key. */
+  watchTv?: (channel: TvChannel) => Promise<{ ok: boolean; message: string }>;
 }
 
 export interface ResearchTui {
@@ -339,7 +344,7 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
     const loading = [...results.values()].filter((r) => r.status === 'loading').length;
     const hint = maximized
       ? 'Esc back · t transform · e export CSV · < > range · ? help'
-      : '/ search · s input · [ ] tabs · Tab card · Enter max · w watchlist · a account · b buy · x sell · u web link · ? help · q quit';
+      : '/ search · s input · [ ] tabs · Tab card · Enter max · w watchlist · a account · b buy · x sell · v tv · u web link · ? help · q quit';
     footer.setContent(` ${message ? `{yellow-fg}${paint(message, undefined, 'blessed')}{/yellow-fg}` : paint(hint, 'dim', 'blessed')}${loading ? `{|}{cyan-fg}loading ${loading}…{/cyan-fg} ` : ''}`);
     screen.render();
   }
@@ -673,6 +678,15 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
       });
     }
     if (ch === 'u') return say(`web: ${webLink(dash()?.id, tab()?.id, dashParams())}`, 15_000);
+    if (ch === 'v') {
+      const watchTv = opts.watchTv;
+      if (!watchTv) return say('live TV is not available here: run b1dz tv');
+      return void pick('Live TV', TV_CHANNELS.map((c) => c.label)).then((i) => {
+        if (i === null) return;
+        say(`tuning ${TV_CHANNELS[i].label}…`, 60_000);
+        void watchTv(TV_CHANNELS[i]).then((r) => say(r.message, r.ok ? 8000 : 15_000));
+      });
+    }
     if (ch === 'a') return void showAccount();
     if (ch === 'b') return void ticket('buy');
     if (ch === 'x') return void ticket('sell');

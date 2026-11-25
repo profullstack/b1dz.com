@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeOrder, editWatchlist, estimateOrderUsd, normalizeWatchSymbol, parseManualOrder, parseWatchlist, serializeWatchlist } from './terminal.js';
+import { TV_CHANNELS, tvChannelOf, describeOrder, editWatchlist, estimateOrderUsd, normalizeWatchSymbol, parseManualOrder, parseWatchlist, serializeWatchlist } from './terminal.js';
 
 describe('watchlist', () => {
   it('normalizes the symbols research cards take', () => {
@@ -81,5 +81,20 @@ describe('order helpers', () => {
     expect(describeOrder({ symbol: 'AAPL', side: 'buy', type: 'market', tif: 'day', qty: 5 })).toBe('Buy 5 AAPL at market, DAY');
     expect(describeOrder({ symbol: 'AAPL', side: 'sell', type: 'limit', tif: 'gtc', qty: 2, limitPrice: 190.5, extendedHours: true })).toBe('Sell 2 AAPL limit $190.5, GTC, extended hours');
     expect(describeOrder({ symbol: 'SPY', side: 'buy', type: 'market', tif: 'day', notionalUsd: 1500 })).toBe('Buy $1,500 of SPY at market, DAY');
+  });
+});
+
+describe('tv channels', () => {
+  it('offers CNBC, Bloomberg and Fox Business in that order', () => {
+    expect(TV_CHANNELS.map((c) => c.key)).toEqual(['cnbc', 'bloomberg', 'foxbusiness']);
+  });
+  it('understands what people type', () => {
+    expect(tvChannelOf('CNBC')?.key).toBe('cnbc');
+    expect(tvChannelOf('bbg')?.key).toBe('bloomberg');
+    expect(tvChannelOf('Fox Business')?.key).toBe('foxbusiness');
+    expect(tvChannelOf('fox')?.key).toBe('foxbusiness');
+    expect(tvChannelOf('3')?.key).toBe('foxbusiness');
+    expect(tvChannelOf('espn')).toBeUndefined();
+    expect(tvChannelOf('')).toBeUndefined();
   });
 });

@@ -186,7 +186,8 @@ export async function runResearchCli(args: string[]): Promise<number> {
   const params = parseParams(args);
   const tab = rest.find((a) => !a.includes('=') && !a.startsWith('--'));
   const { tradeClient } = await import('../trade.js');
-  startResearchTui({ registry: reg, ctx, store, trader: tradeClient(), start: { dashboard: dashboard ?? (Object.keys(params).length ? 'summary' : undefined), tab, params } });
+  const { tvWatch } = await import('../tv.js');
+  startResearchTui({ registry: reg, ctx, store, trader: tradeClient(), watchTv: (c) => tvWatch(c), start: { dashboard: dashboard ?? (Object.keys(params).length ? 'summary' : undefined), tab, params } });
   // The TUI owns the process from here; it exits on q.
   await new Promise(() => {});
   return 0;

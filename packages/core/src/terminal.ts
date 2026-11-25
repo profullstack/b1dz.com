@@ -128,3 +128,31 @@ export function describeOrder(order: BrokerOrderArgs): string {
   const px = order.type === 'limit' ? `limit $${order.limitPrice}` : 'at market';
   return `${order.side === 'buy' ? 'Buy' : 'Sell'} ${size} ${order.symbol} ${px}, ${order.tif.toUpperCase()}${order.extendedHours ? ', extended hours' : ''}`;
 }
+
+// ---- live TV ---------------------------------------------------------------
+
+export interface TvChannel {
+  key: string;
+  label: string;
+  /** Short label for a button. */
+  short: string;
+  /** What to ask hdtilt.com for. */
+  query: string;
+  /** Other names people type for it. */
+  aliases: string[];
+}
+
+/** The business channels the terminal offers (web tile and `b1dz tv`), in button order. */
+export const TV_CHANNELS: TvChannel[] = [
+  { key: 'cnbc', label: 'CNBC', short: 'CNBC', query: 'cnbc', aliases: [] },
+  { key: 'bloomberg', label: 'Bloomberg', short: 'BBG', query: 'bloomberg', aliases: ['bbg', 'bloombergtv'] },
+  { key: 'foxbusiness', label: 'Fox Business', short: 'FOX', query: 'fox business', aliases: ['fox', 'fbn', 'foxbiz'] },
+];
+
+/** "fox", "Fox Business", "BBG", "2": the channel someone means, or undefined. */
+export function tvChannelOf(input: string): TvChannel | undefined {
+  const want = input.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!want) return undefined;
+  if (/^[1-9]$/.test(want)) return TV_CHANNELS[Number(want) - 1];
+  return TV_CHANNELS.find((c) => c.key === want || c.short.toLowerCase() === want || c.label.toLowerCase().replace(/[^a-z0-9]/g, '') === want || c.aliases.includes(want));
+}

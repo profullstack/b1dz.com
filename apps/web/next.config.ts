@@ -34,13 +34,20 @@ loadRootEnv();
 // Pragmatic CSP: Next.js injects inline bootstrap/JSON-LD scripts, so script-src
 // keeps 'unsafe-inline'. connect-src stays broad (https/wss) for Supabase auth and
 // exchange WebSocket feeds. frame-ancestors covers clickjacking.
+/** Where live TV streams come from (HDTILT_URL points a dev build at a local stand-in). */
+const tvOrigin = new URL(process.env.HDTILT_URL || 'https://hdtilt.com').origin;
+
 const contentSecurityPolicy = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://crawlproof.com https://cdn.jsdelivr.net",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https: wss:",
+  `connect-src 'self' https: wss:${tvOrigin.startsWith('https:') ? '' : ` ${tvOrigin}`}`,
+  // Live TV tile on /terminal: streams come from the viewer's hdtilt.com account;
+  // hls.js and mpegts.js feed the <video> through blob: URLs and a blob: worker.
+  `media-src 'self' blob: ${tvOrigin}`,
+  "worker-src 'self' blob:",
   "frame-src 'self' https://crawlproof.com",
   "frame-ancestors 'self'",
   "base-uri 'self'",

@@ -18,6 +18,7 @@ import type { CardResult } from '@b1dz/research/types';
 import { isOrderSymbol } from '@b1dz/core/terminal';
 import { BlockView } from './blocks';
 import { WatchPanel, type WatchPanelHandle } from './watch-panel';
+import { TvTile, type TvTileHandle } from './tv-tile';
 import {
   PRIMARY_PARAMS,
   RANGES,
@@ -40,6 +41,7 @@ const LS_PARAMS = 'b1dz:terminal:params';
 const LS_PINNED = 'b1dz:terminal:pinned';
 const LS_LAST = 'b1dz:terminal:last';
 const LS_WATCH_OPEN = 'b1dz:terminal:watch-open';
+const LS_TV_OPEN = 'b1dz:terminal:tv-open';
 
 interface Run extends CardResult {
   id: string;
@@ -92,6 +94,8 @@ const HELP: [string, string][] = [
   ['w', 'show or hide the watchlist and your broker account'],
   ['a', 'add the current symbol to the watchlist'],
   ['b  x', 'buy / sell the current symbol (opens the order ticket)'],
+  ['v', 'live TV: CNBC, Bloomberg, Fox Business from your hdtilt.com account'],
+  [',  .', 'previous / next TV channel'],
   ['Esc', 'close search, help or a maximized card'],
   ['?', 'this help'],
 ];
@@ -112,6 +116,8 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
   const [note, setNote] = useState('');
   const [watchOpen, setWatchOpen] = useState(false);
   const watch = useRef<WatchPanelHandle>(null);
+  const [tvOpen, setTvOpen] = useState(false);
+  const tv = useRef<TvTileHandle>(null);
 
   const resultsRef = useRef<Record<string, Loaded>>({});
   const queue = useRef<(() => Promise<void>)[]>([]);
@@ -121,6 +127,14 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
 
   // Restore the last view, saved inputs and pinned cards once the browser is available.
   useEffect(() => {
+    // Back from connecting hdtilt: ?tv=<outcome> is ours, not a card input.
+    const arrived = new URLSearchParams(window.location.search);
+    const tvOutcome = arrived.get('tv');
+    if (tvOutcome) {
+      arrived.delete('tv');
+      const rest = arrived.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
+    }
     const saved = readJson<Record<string, Record<string, string>>>(LS_PARAMS, {});
     const last = readJson<Partial<View>>(LS_LAST, {});
     const fromUrl = viewFromSearch(window.location.search, catalog, last);
@@ -130,6 +144,12 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
     // On a phone the panel covers the page, so it only opens when asked.
     setWatchOpen(window.matchMedia('(min-width: 768px)').matches && readJson<boolean>(LS_WATCH_OPEN, window.matchMedia('(min-width: 1280px)').matches));
     setView({ ...fromUrl, params: explicit ? { ...saved[fromUrl.dashboard], ...fromUrl.params } : (saved[fromUrl.dashboard] ?? {}) });
+    if (tvOutcome) {
+      setTvOpen(true);
+      writeJson(LS_TV_OPEN, true);
+      const said: Record<string, string> = { connected: 'hdtilt connected', denied: 'hdtilt was not connected', badstate: 'the hdtilt sign-in expired: try again', failed: 'hdtilt did not finish the sign-in: try again' };
+      setNote(said[tvOutcome] ?? '');
+    } else setTvOpen(readJson<boolean>(LS_TV_OPEN, false));
     setReady(true);
   }, [catalog]);
 
@@ -273,6 +293,13 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
       return open;
     });
   }, []);
+  const toggleTv = useCallback((next?: boolean) => {
+    setTvOpen((cur) => {
+      const open = next ?? !cur;
+      writeJson(LS_TV_OPEN, open);
+      return open;
+    });
+  }, []);
   /** The ticker the current tab is about, when it has one. */
   const currentSymbol = (view.params.symbol ?? '').trim().toUpperCase();
   const tradeCurrent = useCallback(
@@ -330,6 +357,8 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
         flash(`charts: ${TRANSFORM_LABEL[next]}`);
       } else if (e.key === 'r') reload();
       else if (e.key === 'w') toggleWatch();
+      else if (e.key === 'v') toggleTv();
+      else if (e.key === ',' || e.key === '.') tv.current?.zap(e.key === '.' ? 1 : -1);
       else if (e.key === 'a') {
         if (!currentSymbol) return flash('no symbol on this tab to add');
         toggleWatch(true);
@@ -357,7 +386,7 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [moveTab, reload, flash, transform, specs, view.params.range, setParam, toggleWatch, currentSymbol, tradeCurrent]);
+  }, [moveTab, reload, flash, transform, specs, view.params.range, setParam, toggleWatch, toggleTv, currentSymbol, tradeCurrent]);
 
   const loginHref = `/login?next=${encodeURIComponent(`/terminal${searchFromView({ dashboard: dashboard?.id ?? '', tab: tab?.id ?? '', params: view.params })}`)}`;
   const loadingCount = Object.values(results).filter((r) => r.status === 'loading').length;
@@ -428,6 +457,15 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
             title="Watchlist and trading (w)"
           >
             watch
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleTv()}
+            aria-pressed={tvOpen}
+            className={`whitespace-nowrap rounded border px-2 py-0.5 ${tvOpen ? 'border-amber-400/60 text-amber-300' : 'border-zinc-700 text-zinc-400 hover:text-zinc-100'}`}
+            title="Live TV: CNBC, Bloomberg, Fox Business (v)"
+          >
+            tv
           </button>
           <button type="button" onClick={() => setHelp(true)} className="rounded border border-zinc-700 px-2 py-0.5 text-zinc-400 hover:text-zinc-100" aria-label="Keyboard help">
             ?
@@ -528,7 +566,7 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
 
         {/* status */}
         <div className="flex items-center gap-3 border-t border-zinc-800 px-3 py-1 text-xs text-zinc-500">
-          <span className={note ? 'text-amber-300' : 'hidden md:inline'}>{note || '/ search · [ ] tabs · s input · < > range · t transform · r reload · w watchlist · b buy · x sell · ? help'}</span>
+          <span className={note ? 'text-amber-300' : 'hidden md:inline'}>{note || '/ search · [ ] tabs · s input · < > range · t transform · r reload · w watchlist · b buy · x sell · v tv · ? help'}</span>
           <span className="ml-auto">{loadingCount ? `loading ${loadingCount}…` : 'Research only. Quotes can be delayed. Not investment advice.'}</span>
         </div>
       </section>
@@ -545,6 +583,8 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
         }}
         flash={flash}
       />
+
+      {ready && <TvTile ref={tv} open={tvOpen} onClose={() => toggleTv(false)} flash={flash} />}
 
       {help && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4" onClick={() => setHelp(false)}>
