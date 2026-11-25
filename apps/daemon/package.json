@@ -29,6 +29,7 @@
     "@b1dz/source-crypto-arb": "workspace:*",
     "@b1dz/source-crypto-trade": "workspace:*",
     "@b1dz/source-ibkr": "workspace:*",
+    "@b1dz/source-moomoo": "workspace:*",
     "@b1dz/source-schwab": "workspace:*",
     "@b1dz/source-strategies": "workspace:*",
     "@b1dz/source-tradestation": "workspace:*",

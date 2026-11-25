@@ -5,6 +5,7 @@
  */
 export type {
   BrokerConnectorPlugin,
+  BrokerOrder,
   BrokerOrderResult,
   BrokerOrderArgs,
   BrokerPosition,

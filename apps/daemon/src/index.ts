@@ -16,6 +16,7 @@ import { DaemonRuntime } from './runtime.js';
 import { refreshUserConfig, scrubOperatorCredentialEnv, verifyUnlockKey } from './user-config.js';
 import { unlockStore } from './unlock-store.js';
 import { startControlServer } from './control-server.js';
+import { createManualTrade } from './manual-trade.js';
 
 // No operator wallet keys or exchange secrets in this process: user
 // operations never fall back to them (the operator unlocks like any user).
@@ -35,7 +36,7 @@ if (!url) fail('NEXT_PUBLIC_SUPABASE_URL missing');
 if (!key) fail('SUPABASE_SECRET_KEY missing');
 
 const runtime = new DaemonRuntime({ supabaseUrl: url, supabaseSecretKey: key });
-const control = startControlServer({ store: unlockStore, verifyKey: verifyUnlockKey, onChange: refreshUserConfig });
+const control = startControlServer({ store: unlockStore, verifyKey: verifyUnlockKey, onChange: refreshUserConfig, trade: createManualTrade() });
 
 // Periodic memory snapshot — 60s cadence, stderr so it bypasses any
 // log-routing wrappers that filter "[...]" prefixed lines. Lets us

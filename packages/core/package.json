@@ -25,6 +25,10 @@
     "./settings-fields": {
       "import": "./src/settings-fields.ts",
       "default": "./src/settings-fields.ts"
+    },
+    "./terminal": {
+      "import": "./src/terminal.ts",
+      "default": "./src/terminal.ts"
     }
   },
   "scripts": {

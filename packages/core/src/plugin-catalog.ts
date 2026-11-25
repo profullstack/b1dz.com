@@ -147,6 +147,11 @@ const PLUGIN_CONFIG_SCHEMAS = Object.fromEntries(
       strings: [{ key: 'TRADESTATION_ACCOUNT_ID', label: 'Account ID' }],
       bools: [{ key: 'TRADESTATION_SIM', label: 'Simulated (paper)', hint: 'Use the sim host' }],
     },
+    moomoo: {
+      secrets: [{ key: 'MOOMOO_ACCESS_TOKEN', label: 'OAuth access token', hint: 'Filled in by Connect; lasts 2 hours and renews itself' }],
+      strings: [{ key: 'MOOMOO_ACCOUNT_ID', label: 'Account ID (optional)', hint: 'Blank picks your first U.S. account' }],
+      bools: [{ key: 'MOOMOO_PAPER', label: 'Paper trading', hint: 'On: your moomoo paper account. Off: real money' }],
+    },
     webull: {
       secrets: [{ key: 'WEBULL_ACCESS_TOKEN', label: 'Access token' }],
       strings: [
@@ -498,6 +503,21 @@ export const PLUGIN_CATALOG: CatalogEntry[] = [
       author: 'b1dz',
       description: 'US stocks & ETFs via the TradeStation v3 API. OAuth, simulated-trading host.',
       capabilities: ['asset:equity', 'venue:tradestation', 'broker:tradestation', 'market:us', 'feature:paper'],
+    },
+  },
+  {
+    status: 'preview',
+    pricing: { model: 'free' },
+    tagline: 'US stocks & ETFs via moomoo.',
+    config_schema: PLUGIN_CONFIG_SCHEMAS.moomoo,
+    manifest: {
+      id: 'moomoo',
+      kind: 'connector',
+      version: '0.1.0',
+      name: 'moomoo: US Equities',
+      author: 'b1dz',
+      description: 'US stocks & ETFs via the moomoo OpenAPI (REST, OAuth 2.1). Live and paper accounts. Whole-share orders.',
+      capabilities: ['asset:equity', 'venue:moomoo', 'broker:moomoo', 'market:us', 'feature:extended-hours', 'feature:paper'],
     },
   },
   {
