@@ -440,7 +440,7 @@ export function PluginsSection({
                                 href={`/api/oauth/${row.plugin_id}/start`}
                                 className="shrink-0 rounded-lg bg-sky-500/80 hover:bg-sky-400 px-3 py-1.5 text-xs font-medium text-black transition"
                               >
-                                Connect {name.split(' — ')[0]}
+                                Connect {name.split(/ — |: /)[0]}
                               </a>
                             ) : (
                               <span className="shrink-0 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-500">OAuth unavailable</span>

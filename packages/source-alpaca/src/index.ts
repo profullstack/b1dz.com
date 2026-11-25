@@ -23,6 +23,7 @@ import type {
   AlpacaConfig,
   AlpacaOrderRaw,
   BrokerConnectorPlugin,
+  BrokerOrder,
   BrokerOrderArgs,
   BrokerOrderResult,
   BrokerPosition,
@@ -72,6 +73,9 @@ function orderResult(raw: AlpacaOrderRaw): BrokerOrderResult {
     fillPrice: fillPrice && fillPrice > 0 ? fillPrice : undefined,
   };
 }
+
+/** Alpaca statuses that still work at the exchange (cancellable). */
+const OPEN_STATUSES = new Set(['new', 'accepted', 'partially_filled', 'pending_new', 'accepted_for_bidding', 'held', 'pending_replace', 'replaced', 'calculated']);
 
 export class AlpacaConnector implements BrokerConnectorPlugin {
   readonly manifest: PluginManifest & { kind: 'broker' };
@@ -160,6 +164,27 @@ export class AlpacaConnector implements BrokerConnectorPlugin {
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  async listOrders(): Promise<BrokerOrder[]> {
+    const raw = await this.client.listOrders();
+    return raw.map((o): BrokerOrder => {
+      const status = mapOrderStatus(o.status) ?? 'accepted';
+      const fillPrice = o.filled_avg_price != null ? Number(o.filled_avg_price) : 0;
+      return {
+        orderId: o.id,
+        symbol: o.symbol ?? '',
+        side: o.side === 'sell' ? 'sell' : 'buy',
+        type: o.type === 'limit' ? 'limit' : o.type === 'market' ? 'market' : 'other',
+        qty: Number(o.qty) || 0,
+        filledQty: Number(o.filled_qty) || 0,
+        limitPrice: o.limit_price != null ? Number(o.limit_price) || undefined : undefined,
+        fillPrice: fillPrice > 0 ? fillPrice : undefined,
+        status,
+        open: OPEN_STATUSES.has(o.status),
+        createdAt: o.created_at,
+      };
+    });
   }
 
   async cancelOrder(orderId: string): Promise<BrokerOrderResult> {

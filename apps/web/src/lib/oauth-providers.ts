@@ -7,6 +7,8 @@ export {
   getOAuthProvider,
   isOAuthConfigured,
   oauthStatus,
+  pkceChallenge,
+  tokenRequest,
   refreshAccessToken,
   type OAuthProvider,
   type OAuthTokenResponse,

@@ -19,11 +19,6 @@
  * and never live as plaintext globals.
  */
 import type { SourceWorker, UserContext } from '../types.js';
-import { createAlpacaConnector } from '@b1dz/source-alpaca';
-import { createIbkrConnector } from '@b1dz/source-ibkr';
-import { createTradierConnector } from '@b1dz/source-tradier';
-import { createSchwabConnector } from '@b1dz/source-schwab';
-import { createTradeStationConnector } from '@b1dz/source-tradestation';
 import { STRATEGY_PLUGINS } from '@b1dz/source-strategies';
 import {
   decideEquityOrder,
@@ -33,134 +28,16 @@ import {
 import {
   getB1dzVersion,
   etParts,
-  OAUTH_PROVIDERS,
-  isOAuthConfigured,
-  refreshAccessToken,
-  type BrokerConnectorPlugin,
   type MarketSnapshot,
   type Signal,
   type StrategyPlugin,
 } from '@b1dz/core';
-import { loadUserConfig, mergeUserSecret, type UserConfig } from '../user-config.js';
+import { loadUserConfig, type UserConfig } from '../user-config.js';
+import { primaryBroker, refreshOauthTokens, userBool } from '../brokers.js';
 import { combineStrategies, forAssetClass, loadUserStrategies } from '../user-strategies.js';
 
 const POLL_INTERVAL_MS = 30_000;
 const HISTORY_CAP = 120;
-const TOKEN_REFRESH_BUFFER_MS = 5 * 60_000; // refresh once within 5 min of expiry
-
-/**
- * Keep every linked OAuth session alive (the terminal runs 24/7). For each
- * provider that issues refresh tokens, if the access token is within the buffer
- * of expiry, swap it for a fresh one and persist it. Returns true if anything
- * changed (caller reloads config). Runs regardless of the trading switch.
- */
-async function refreshOauthTokens(userId: string, cfg: UserConfig): Promise<boolean> {
-  const now = Date.now();
-  let refreshed = false;
-  for (const provider of Object.values(OAUTH_PROVIDERS)) {
-    if (!provider.refreshKey || !provider.expiryKey) continue; // e.g. Alpaca tokens don't expire
-    const refreshToken = cfg.getUserSecret(provider.refreshKey);
-    if (!refreshToken) continue; // not linked via OAuth (this user)
-    const expiresMs = Date.parse(cfg.getUserSecret(provider.expiryKey) ?? '');
-    if (Number.isFinite(expiresMs) && expiresMs - now > TOKEN_REFRESH_BUFFER_MS) continue; // still fresh
-    if (!isOAuthConfigured(provider)) continue; // operator hasn't set client id/secret
-    try {
-      const tok = await refreshAccessToken(provider, refreshToken);
-      const patch: Record<string, string> = { [provider.tokenKey]: tok.access_token };
-      if (tok.refresh_token) patch[provider.refreshKey] = tok.refresh_token;
-      if (tok.expires_in) patch[provider.expiryKey] = new Date(now + tok.expires_in * 1000).toISOString();
-      await mergeUserSecret(userId, patch);
-      refreshed = true;
-      console.log(`[equities] refreshed ${provider.pluginId} OAuth token for ${userId.slice(0, 8)}…`);
-    } catch (e) {
-      console.error(`[equities] ${provider.pluginId} token refresh failed: ${(e as Error).message}`);
-    }
-  }
-  return refreshed;
-}
-
-interface PrimaryBroker { id: string; connector: BrokerConnectorPlugin; paper: boolean; supportsFractional: boolean; }
-
-/** Strict per-user boolean (this user's plain blob only; never env). */
-function userBool(cfg: UserConfig, key: string, dflt: boolean): boolean {
-  const raw = cfg.getUserPlain(key);
-  if (raw === undefined) return dflt;
-  return ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase());
-}
-
-/**
- * Pick the broker to trade through, in priority order. ALL credentials and
- * account identifiers are read with the STRICT per-user getters — never from
- * process.env. This is the multi-tenant safety boundary: a user who hasn't
- * entered their own keys gets no broker (worker idles), and can NEVER fall back
- * to the operator's env credentials and act on the operator's account.
- */
-function primaryBroker(cfg: UserConfig): PrimaryBroker | null {
-  const oauthToken = cfg.getUserSecret('ALPACA_OAUTH_TOKEN');
-  const key = cfg.getUserSecret('ALPACA_API_KEY_ID');
-  const secret = cfg.getUserSecret('ALPACA_API_SECRET_KEY');
-  if (oauthToken || (key && secret)) {
-    const paper = userBool(cfg, 'ALPACA_PAPER', true);
-    const feed = (cfg.getUserPlain('ALPACA_FEED') as 'iex' | 'sip' | undefined) ?? 'iex';
-    return {
-      id: 'alpaca',
-      paper,
-      supportsFractional: true,
-      // OAuth bearer takes precedence over pasted key/secret.
-      connector: createAlpacaConnector(oauthToken ? { accessToken: oauthToken, paper, feed } : { keyId: key, secretKey: secret, paper, feed }),
-    };
-  }
-  // Tradier (OAuth or pasted token) — whole-share orders.
-  const tradierToken = cfg.getUserSecret('TRADIER_ACCESS_TOKEN');
-  const tradierAcct = cfg.getUserPlain('TRADIER_ACCOUNT_ID');
-  if (tradierToken && tradierAcct) {
-    const sandbox = userBool(cfg, 'TRADIER_SANDBOX', true);
-    return {
-      id: 'tradier',
-      paper: sandbox,
-      supportsFractional: false,
-      connector: createTradierConnector({ accessToken: tradierToken, accountId: tradierAcct, sandbox }),
-    };
-  }
-
-  // Charles Schwab (OAuth) — whole-share orders, no paper.
-  const schwabToken = cfg.getUserSecret('SCHWAB_ACCESS_TOKEN');
-  const schwabHash = cfg.getUserPlain('SCHWAB_ACCOUNT_HASH');
-  if (schwabToken && schwabHash) {
-    return {
-      id: 'schwab',
-      paper: false,
-      supportsFractional: false,
-      connector: createSchwabConnector({ accessToken: schwabToken, accountHash: schwabHash }),
-    };
-  }
-
-  // TradeStation (OAuth or pasted token) — whole-share orders.
-  const tsToken = cfg.getUserSecret('TRADESTATION_ACCESS_TOKEN');
-  const tsAcct = cfg.getUserPlain('TRADESTATION_ACCOUNT_ID');
-  if (tsToken && tsAcct) {
-    const sim = userBool(cfg, 'TRADESTATION_SIM', true);
-    return {
-      id: 'tradestation',
-      paper: sim,
-      supportsFractional: false,
-      connector: createTradeStationConnector({ accessToken: tsToken, accountId: tsAcct, sim }),
-    };
-  }
-
-  // IBKR last (advanced; needs a running gateway).
-  const base = cfg.getUserPlain('IBKR_BASE_URL');
-  if (base) {
-    return {
-      id: 'ibkr',
-      paper: false,
-      supportsFractional: true,
-      connector: createIbkrConnector({ baseUrl: base, accountId: cfg.getUserPlain('IBKR_ACCOUNT_ID'), accessToken: cfg.getUserSecret('IBKR_ACCESS_TOKEN') }),
-    };
-  }
-  return null;
-}
-
 function riskConfig(cfg: UserConfig): EquityRiskConfig {
   return {
     perTradeUsd: cfg.getNumber('EQUITY_PER_TRADE_USD', 500)!,

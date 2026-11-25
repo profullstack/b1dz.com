@@ -11,8 +11,9 @@ b1dz research company symbol=NVDA    # open on a dashboard
 b1dz research help                   # every command
 ```
 
-Research only. Quotes can be delayed, data can be revised, there is no order
-entry, and nothing here is investment advice.
+Research only. Quotes can be delayed, data can be revised, and nothing here is
+investment advice. The cards never trade. Buying and selling is a separate,
+explicit step through your own broker: see [Watchlist and trading](#watchlist-and-trading).
 
 ## One registry, five surfaces
 
@@ -27,7 +28,88 @@ cards:
 | Web | `https://b1dz.com/terminal` | `apps/web/src/app/terminal/`: the same dashboards in the browser, keyboard driven, installable with the PWA. Public to browse; live data needs a signed-in user. Links are shareable (`/terminal?d=company&symbol=NVDA`) |
 | CLI | `b1dz research card <id> [name=value ...] [--json\|--csv]` | text, JSON or CSV for scripts |
 | HTTP API | `GET /api/research`, `/api/research/card/<id>`, `/api/research/search` | catalog is public; cards need a session or a `b1dz_agent_` token |
-| MCP | `research_catalog`, `research_search`, `research_card` on `/api/agent/mcp` | read-only tools beside the trading tools |
+| MCP | `research_catalog`, `research_search`, `research_card`, `watchlist_get`, `watchlist_edit` on `/api/agent/mcp` | research tools are read-only; the watchlist tools edit a list and never trade |
+
+## Watchlist and trading
+
+The web terminal has a right-hand panel (press `w`) with a watchlist, your
+broker account and an order ticket. The CLI has the same account features as
+`b1dz trade`.
+
+### Watchlist
+
+| Where | Saved | How |
+|---|---|---|
+| `/terminal` signed in | on your account (`TERMINAL_WATCHLIST` in your plain settings) | type a ticker in the panel, press `a` on a company page, or click `+ watch` |
+| `/terminal` signed out | in that browser | same, prices need a sign-in |
+| `b1dz trade watch [+NVDA -TSLA]` | on your account | the same list the web shows |
+| `b1dz research watchlist` | on that machine (`~/.config/b1dz/research.json`) | the account-free TUI list |
+| MCP | on your account | `watchlist_get`, `watchlist_edit` |
+| HTTP | on your account | `GET` / `PUT /api/terminal/watchlist` |
+
+It holds up to 100 tickers of any kind the cards can price (`AAPL`, `BRK.B`,
+`BTC-USD`, `^GSPC`). It is separate from `EQUITY_WATCHLIST`, the list the
+automated equity strategies trade: watching a ticker never makes the bot trade
+it. Prices in the panel are the latest daily close from the Watchlist card,
+not a live quote.
+
+### Buy and sell
+
+Orders go through a broker you link yourself, on your own account:
+
+| Broker | Link it | Accounts | Sizes |
+|---|---|---|---|
+| Alpaca | Settings, Plugins: paste an API key id and secret, or Connect | paper (default) and live | shares or dollars (fractional) |
+| moomoo | Settings, Plugins: Connect (OAuth 2.1, grant quotes and trading) | paper (default) and live | whole shares |
+| Tradier, Schwab, TradeStation, IBKR | Settings, Plugins | per broker | whole shares (IBKR fractional) |
+
+Then unlock trading (Settings, or `b1dz unlock`): broker credentials are sealed
+under your passphrase and only the daemon can read them, only while your
+session is unlocked. The web server relays the ticket and never sees a key.
+
+In the terminal: `buy` / `sell` on a watchlist row or a position, `b` / `x` on
+a company page. The ticket takes shares (or dollars where the broker allows),
+market or limit, day or good-until-canceled, and optional extended hours on a
+limit order. You review it, and a live order needs a tick on "this is a real
+order" before the button works. Open orders can be canceled from the panel.
+
+```sh
+b1dz trade                      # broker, buying power, positions, open orders
+b1dz trade buy AAPL 5           # market order, asks before sending
+b1dz trade buy SPY '$500'       # dollars (Alpaca)
+b1dz trade sell AAPL 5 --limit 190.50 --gtc
+b1dz trade orders
+b1dz trade cancel <order-id>
+b1dz trade --broker moomoo      # pick a linked broker
+```
+
+Guards on every manual order, applied in the daemon:
+
+- a sell can never exceed the shares you hold (no short selling from a ticket);
+- a live order may not exceed `TERMINAL_MAX_ORDER_USD` (default $10,000), and
+  one that cannot be priced is refused, so use a limit order when quotes are down;
+- paper and live are labelled on the account, the ticket and the confirmation.
+
+Buying power, market hours and pattern-day-trading rules are the broker's
+call; its answer is shown word for word. A manual order does not wait on
+`EQUITY_TRADE_EXECUTION`: that switch gates the automated strategies only.
+moomoo sometimes answers a live order with a warning to acknowledge; the
+ticket shows it and sends only if you confirm. If a broker does not answer in
+time the ticket says so and never retries by itself, because a placed order is
+not idempotent: check your open orders first.
+
+Agents cannot place stock orders: the MCP server exposes the watchlist only.
+
+Code: `packages/core/src/terminal.ts` (shared ticket rules),
+`apps/daemon/src/manual-trade.ts` and `brokers.ts`, `packages/source-moomoo`,
+`packages/source-alpaca`, `apps/web/src/lib/terminal-api.ts`,
+`apps/web/src/app/terminal/watch-panel.tsx`, `apps/cli/src/trade.ts`.
+
+Operator setup for moomoo: register a public OAuth client once
+(`POST https://webapi.moomoo.com/oauth2/register` with the redirect URI
+`https://<site>/api/oauth/moomoo/callback` and
+`token_endpoint_auth_method: "none"`) and set `MOOMOO_OAUTH_CLIENT_ID`. There
+is no client secret.
 
 ## Coverage
 

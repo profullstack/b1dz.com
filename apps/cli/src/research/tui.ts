@@ -58,6 +58,7 @@ export const HELP = `Keys
 
   Lists and layout
     w               watchlist: +AAPL adds, -TSLA removes, a name switches list
+                    (to buy or sell: b1dz trade, or the ticket at b1dz.com/terminal)
     c               compare: plot tickers or FRED:SERIES on one axis
     +               pin the focused card to "My dashboard"     -   unpin (in My dashboard)
 

@@ -100,6 +100,7 @@ function help() {
 At a glance:
   Dashboard:          b1dz tui
   Market research:    b1dz research       (TUI: equities, options, rates, macro, filings)
+  Buy and sell:       b1dz trade          (your own broker: Alpaca, moomoo, ...)
   Backtesting:        b1dz backtest <tf>
   Spread/edge audit:  b1dz audit-arb
   Live quotes:        b1dz observe        (CEX + DEX multi-venue)
@@ -133,6 +134,13 @@ Research (no account needed):
   b1dz research company symbol=NVDA   open on a dashboard
   b1dz research card <id> [name=value ...] [--json|--csv]   one card for scripts
   b1dz research help       every research command
+
+Trading (your own broker, linked at b1dz.com/settings):
+  b1dz trade               broker, buying power, positions, open orders
+  b1dz trade buy AAPL 5    market order (or $500 for dollars; --limit <price>)
+  b1dz trade sell AAPL 5 --limit 190.50
+  b1dz trade orders | cancel <order-id> | watch [+SYM -SYM]
+  b1dz trade help          every trade command
 
 Daemon:
   b1dz status              show b1dzd status (user systemd, then system-wide)
@@ -370,6 +378,10 @@ if (source === 'unlock' || source === 'lock' || source === 'vault') {
   const { vaultCommand } = await import('./vault.js');
   await vaultCommand(source, process.argv.slice(3));
   process.exit(0);
+}
+if (source === 'trade') {
+  const { runTradeCli } = await import('./trade.js');
+  process.exit(await runTradeCli(process.argv.slice(3)));
 }
 if (source === 'redeem') { await redeem(process.argv.slice(3)); process.exit(0); }
 if (source === 'invites') { await invites(process.argv.slice(3)); process.exit(0); }

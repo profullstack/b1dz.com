@@ -195,6 +195,9 @@ importers:
       '@b1dz/source-ibkr':
         specifier: workspace:*
         version: link:../../packages/source-ibkr
+      '@b1dz/source-moomoo':
+        specifier: workspace:*
+        version: link:../../packages/source-moomoo
       '@b1dz/source-schwab':
         specifier: workspace:*
         version: link:../../packages/source-schwab
@@ -714,6 +717,22 @@ importers:
       vitest:
         specifier: latest
         version: 5.1.0(@types/node@26.6.6)(vite@8.0.7(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
+
+  packages/source-moomoo:
+    dependencies:
+      '@b1dz/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: latest
+        version: 26.6.6
+      typescript:
+        specifier: latest
+        version: 7.0.2
+      vitest:
+        specifier: latest
+        version: 5.1.1(@types/node@26.6.6)(vite@8.0.7(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15))
 
   packages/source-nichedb:
     devDependencies:

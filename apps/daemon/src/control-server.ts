@@ -4,6 +4,10 @@
  *   POST /unlock { userId, dataKey (base64 32 bytes), ttlSeconds? }
  *   POST /lock   { userId }
  *   POST /status { userId }
+ *   POST /equity/account { userId, broker? }            broker account for the terminal
+ *   POST /equity/order   { userId, broker?, ...ticket } place a manual order
+ *   POST /equity/cancel  { userId, broker?, orderId }
+ *   POST /equity/confirm { userId, broker?, confirmId }
  *   GET  /health
  *
  * Bound to 127.0.0.1 (B1DZ_DAEMON_CONTROL_HOST/PORT, default :8790) and
@@ -18,6 +22,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 import { clampUnlockTtlSeconds } from '@b1dz/core/sealed-secrets';
 import type { UnlockStore } from './unlock-store.js';
+import type { ManualTrade, ManualTradeAction } from './manual-trade.js';
 
 const MAX_BODY = 4096;
 
@@ -28,7 +33,16 @@ export interface ControlServerOptions {
   verifyKey: (userId: string, key: Uint8Array) => Promise<'ok' | 'no-seal' | 'bad-key'>;
   /** Called after unlock/lock so cached state is refreshed. */
   onChange?: (userId: string) => void;
+  /** Manual equity orders from the terminal. Absent: the /equity routes answer 404. */
+  trade?: ManualTrade;
 }
+
+const TRADE_ROUTES: Record<string, ManualTradeAction> = {
+  '/equity/account': 'account',
+  '/equity/order': 'order',
+  '/equity/cancel': 'cancel',
+  '/equity/confirm': 'confirm',
+};
 
 const UUIDISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -79,6 +93,13 @@ export function createControlHandler(opts: ControlServerOptions) {
       if (!body) return send(res, 400, { error: 'bad body' });
       const userId = typeof body.userId === 'string' ? body.userId : '';
       if (!UUIDISH.test(userId)) return send(res, 400, { error: 'userId required' });
+
+      const tradeAction = req.url ? TRADE_ROUTES[req.url] : undefined;
+      if (tradeAction && opts.trade) {
+        // manualTrade never throws and returns only messages meant for the user.
+        const r = await opts.trade(tradeAction, userId, body);
+        return send(res, r.status, r.body);
+      }
 
       switch (req.url) {
         case '/status':

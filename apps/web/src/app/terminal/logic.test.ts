@@ -4,7 +4,9 @@ import {
   barGeometry,
   cardKey,
   cardUrl,
+  chunk,
   groupDashboards,
+  watchQuotes,
   lineGeometry,
   localSearch,
   nearestIndex,
@@ -15,6 +17,34 @@ import {
   viewFromSearch,
   type Catalog,
 } from './logic';
+
+describe('watchlist panel helpers', () => {
+  it('reads last and day change per symbol from the Watchlist card', () => {
+    const blocks = [
+      { kind: 'text' },
+      {
+        kind: 'table',
+        rows: [
+          { name: 'AAPL', symbol: 'aapl', last: 349.08, day: -1.25, w1: 2 },
+          { name: 'Bitcoin', symbol: 'BTC-USD', last: 91000 },
+          { name: 'No data', symbol: 'ZZZZ' },
+          { name: 'no symbol', last: 5 },
+        ],
+      },
+    ];
+    expect(watchQuotes(blocks)).toEqual({
+      AAPL: { last: 349.08, day: -1.25 },
+      'BTC-USD': { last: 91000, day: null },
+      ZZZZ: { last: null, day: null },
+    });
+    expect(watchQuotes(undefined)).toEqual({});
+  });
+
+  it('chunks a long list', () => {
+    expect(chunk([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(chunk([], 40)).toEqual([]);
+  });
+});
 
 const catalog: Catalog = {
   dashboards: [

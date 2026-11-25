@@ -86,7 +86,12 @@ export const PLAIN_STRING_FIELDS = [
   'IBKR_ACCOUNT_ID',
   'WEBULL_ACCOUNT_ID',
   'WEBULL_BASE_URL',
+  'MOOMOO_ACCOUNT_ID',
   'EQUITY_WATCHLIST',
+  // Research terminal: the user's own watchlist (never traded by the bot)
+  // and the broker manual orders go through.
+  'TERMINAL_WATCHLIST',
+  'TERMINAL_BROKER',
   // AI analyzer
   'AI_PROVIDER',
 ] as const;
@@ -170,6 +175,8 @@ export const PLAIN_NUMBER_FIELDS = [
   'MAX_OVERNIGHT_USD',
   'EQUITY_PER_TRADE_USD',
   'EQUITY_MAX_POSITION_USD',
+  // Research terminal: cap on one manual live order (fat-finger guard)
+  'TERMINAL_MAX_ORDER_USD',
   'EQUITY_MIN_SIGNAL',
   'EQUITY_ACCOUNT_EQUITY_USD',
   'EQUITY_CLOSE_BUFFER_MIN',
@@ -198,6 +205,7 @@ export const PLAIN_BOOL_FIELDS = [
   'TRADIER_SANDBOX',
   'TRADESTATION_SIM',
   'WEBULL_PAPER',
+  'MOOMOO_PAPER',
   // AI analyzer
   'AI_ANALYZER_ENABLED',
 ] as const;

@@ -76,6 +76,12 @@ export interface AlpacaOrderRaw {
   filled_qty: string;
   filled_avg_price: string | null;
   qty: string | null;
+  symbol?: string;
+  side?: string;
+  type?: string;
+  limit_price?: string | null;
+  notional?: string | null;
+  created_at?: string;
 }
 
 export interface AlpacaOrderRequest {
@@ -188,6 +194,11 @@ export class AlpacaClient {
     return this.request<void>(this.tradingBase, `/v2/orders/${encodeURIComponent(orderId)}`, {
       method: 'DELETE',
     });
+  }
+
+  /** Open and recently closed orders, newest first. */
+  listOrders(limit = 50): Promise<AlpacaOrderRaw[]> {
+    return this.request<AlpacaOrderRaw[]>(this.tradingBase, `/v2/orders?status=all&limit=${limit}&direction=desc`);
   }
 
   getOrder(orderId: string): Promise<AlpacaOrderRaw> {

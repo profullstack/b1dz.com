@@ -79,6 +79,29 @@ export interface BrokerOrderResult {
   status?: 'accepted' | 'filled' | 'partial' | 'rejected' | 'canceled';
   fillPrice?: number;
   filledQty?: number;
+  /**
+   * The broker accepted nothing yet: it wants the user to acknowledge a
+   * warning first (moomoo "order confirm"). `ok` is false. Show `message`,
+   * then call the connector's confirmOrder(id) only on an explicit yes.
+   */
+  needsConfirm?: { id: string; url?: string };
+}
+
+/** One order as the broker reports it (open, or recently closed). */
+export interface BrokerOrder {
+  orderId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  type: 'market' | 'limit' | 'other';
+  qty: number;
+  filledQty: number;
+  limitPrice?: number;
+  fillPrice?: number;
+  status: NonNullable<BrokerOrderResult['status']>;
+  /** Still working at the broker (can be cancelled). */
+  open: boolean;
+  /** ISO 8601. */
+  createdAt?: string;
 }
 
 export interface BrokerPosition {
@@ -118,6 +141,10 @@ export interface BrokerConnectorPlugin {
   quote(symbol: string): Promise<BrokerQuote>;
   placeOrder(args: BrokerOrderArgs): Promise<BrokerOrderResult>;
   cancelOrder(orderId: string): Promise<BrokerOrderResult>;
+  /** Open orders plus the recently closed ones, newest first. Optional per broker. */
+  listOrders?(): Promise<BrokerOrder[]>;
+  /** Acknowledge a broker warning returned as `needsConfirm`. Optional per broker. */
+  confirmOrder?(confirmId: string): Promise<BrokerOrderResult>;
 }
 
 export type Plugin = ConnectorPlugin | StrategyPlugin | BrokerConnectorPlugin;
