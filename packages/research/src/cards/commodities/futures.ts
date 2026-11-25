@@ -4,6 +4,7 @@
  * networks (data centres); where it does not answer these cards say so
  * rather than show anything else.
  */
+import { CDE_NOTE, futuresNotes } from '../../lib/exchange-futures.js';
 import { getQuotes, returnsBoard } from '../../lib/market.js';
 import { SourceError, type CardDef, type Row } from '../../types.js';
 
@@ -75,7 +76,7 @@ export function futuresBoardCard(def: { id: string; title: string; description: 
         .slice(0, 30);
       if (!list.length) throw new SourceError('Market data', 'no symbols given');
       const { block, source, notes } = await returnsBoard(ctx, list.map((symbol) => ({ symbol, label: names.get(symbol) ?? symbol })));
-      return { blocks: [block], source, notes: ['Front-month futures, continuous: returns across a contract roll include the roll gap.', ...notes] };
+      return { blocks: [block], source, notes: [...futuresNotes(source, 'Front-month futures, continuous: returns across a contract roll include the roll gap.'), ...notes] };
     },
   };
 }
@@ -141,7 +142,7 @@ export function curveCard(def: { id: string; title: string; description: string;
         ],
         source: sources,
         asOf: front.q.time,
-        notes: [`Dated ${root.name} contracts (${root.unit}), delayed quotes. Contracts with no quote are left out.`],
+        notes: [`Dated ${root.name} contracts (${root.unit}), delayed quotes. Contracts with no quote are left out.`, ...(sources.includes('Coinbase Derivatives') ? [CDE_NOTE] : [])],
       };
     },
   };
