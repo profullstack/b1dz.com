@@ -7,7 +7,7 @@ import { resolveEconomy } from './countries.js';
 import { foldHeadlines, type FoldedHeadline, type Headline } from './fold.js';
 import { parseFeed } from './rss.js';
 
-interface FeedDef {
+export interface FeedDef {
   /** Publisher shown in the Source column. */
   name: string;
   url: string;
@@ -57,7 +57,7 @@ async function readFeed(ctx: Ctx, feed: FeedDef, ttl = 300): Promise<Headline[]>
 }
 
 /** Read every feed; a feed that fails is named in `failed` rather than failing the card. */
-async function readFeeds(ctx: Ctx, feeds: FeedDef[]): Promise<{ items: Headline[]; failed: string[]; answered: number }> {
+export async function readFeeds(ctx: Ctx, feeds: FeedDef[]): Promise<{ items: Headline[]; failed: string[]; answered: number }> {
   const got = await Promise.allSettled(feeds.map((f) => readFeed(ctx, f)));
   const items: Headline[] = [];
   const failed: string[] = [];
@@ -75,14 +75,14 @@ async function readFeeds(ctx: Ctx, feeds: FeedDef[]): Promise<{ items: Headline[
   return { items, failed, answered };
 }
 
-const NEWS_COLUMNS: Column[] = [
+export const NEWS_COLUMNS: Column[] = [
   { key: 'time', label: 'Time (UTC)', format: 'datetime' },
   { key: 'title', label: 'Headline', maxWidth: 90 },
   { key: 'source', label: 'Source', maxWidth: 30 },
   { key: 'link', label: 'Link', maxWidth: 40 },
 ];
 
-function newsRows(items: FoldedHeadline[], limit: number): Row[] {
+export function newsRows(items: FoldedHeadline[], limit: number): Row[] {
   return items.slice(0, limit).map((h) => ({
     time: h.date,
     title: h.title,
@@ -91,7 +91,7 @@ function newsRows(items: FoldedHeadline[], limit: number): Row[] {
   }));
 }
 
-function newest(items: { date: number | null }[]): string | undefined {
+export function newest(items: { date: number | null }[]): string | undefined {
   const t = items.reduce<number | null>((m, i) => (i.date !== null && (m === null || i.date > m) ? i.date : m), null);
   return t === null ? undefined : new Date(t).toISOString().slice(0, 16) + 'Z';
 }

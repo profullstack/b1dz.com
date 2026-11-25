@@ -2,13 +2,14 @@
 import { Registry } from '../registry.js';
 import type { AreaModule } from '../types.js';
 import { commodities } from './commodities/index.js';
+import { crypto } from './crypto/index.js';
 import { derivatives } from './derivatives/index.js';
 import { equities } from './equities/index.js';
 import { macro } from './macro/index.js';
 import { overview } from './overview/index.js';
 import { rates } from './rates/index.js';
 
-export const AREAS: AreaModule[] = [overview, equities, rates, derivatives, commodities, macro];
+export const AREAS: AreaModule[] = [overview, equities, rates, derivatives, commodities, crypto, macro];
 
 /** Sidebar group order. Groups not listed sort after these, alphabetically. */
 export const GROUP_ORDER = [

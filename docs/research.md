@@ -1,8 +1,8 @@
 # b1dz research
 
-A market research TUI: 28 dashboards, 116 tabs and 219 cards covering equities,
-options, sovereign curves, credit, FX, futures, energy, shipping, macro, SEC
-filings and news. Every card reads a public or official source and names it.
+A market research TUI: 37 dashboards, 156 tabs and 282 cards covering equities,
+options, sovereign curves, credit, FX, futures, energy, shipping, crypto, macro,
+SEC filings and news. Every card reads a public or official source and names it.
 No b1dz account is needed, and all but one card work with no API key.
 
 ```sh
@@ -131,7 +131,7 @@ is no client secret.
 | **Derivatives** | **Equity Options** (`options`: Chain, Stats, Term structure, Smile & surface, Volatility, Strategies); **Futures & Positioning** (`futures`: Futures, Positioning) |
 | **Currencies** | **Currencies** (`fx`: Board, Strength, Cross rates, Rates & differentials, REER & reserves, Positioning) |
 | **Commodities & Energy** | **Commodities** (`commodities`: Boards, Curves, Positioning); **Energy** (`energy`: Overview, Oil, Natural gas, Power, Outlook, International); **Agriculture & Food** (`agri`: Boards and curves, Positioning, Balances, Farm data) |
-| **Crypto** | **Crypto** (`crypto`: Spot, Order book, Options, Volatility, Funding) |
+| **Crypto** | **Crypto Markets** (`crypto-markets`: Overview, Movers, Sentiment, Sectors); **Crypto: Coin** (`crypto`: Overview, Venues, Order book, Options, Volatility, Funding, News); **Crypto Derivatives** (`crypto-derivatives`: Funding, Open interest, Venues, Basis, Positioning, Options); **DeFi** (`defi`: Value locked, Protocols, DEX volume, Fees & revenue, Yields, Hacks); **Stablecoins** (`stablecoins`: Supply, Pegs, By chain); **Bitcoin On-Chain** (`bitcoin`: Mempool & fees, Mining, Halving & supply, Activity, Lightning); **Ethereum On-Chain** (`ethereum`: Supply & burn, Gas & activity, Staking, Layer 2); **Crypto ETFs & Stocks** (`crypto-equities`: ETFs, Stocks, Treasuries); **Crypto Exchanges** (`crypto-exchanges`: Spot, Derivatives, Reserves & flows, Decentralized); **Crypto News** (`crypto-news`: Headlines, Coin or topic, Research) |
 | **Macro & Economy** | **Money & Banking** (`banking`: Bank credit quality, Bank failures, Bank lookup, Fed and ECB liquidity); **Economy by Country** (`economy`: Country Monitor, OECD snapshot, External accounts, IMF forecasts); **U.S. Economy** (`us-economy`: Nowcasts, Prices, Labor, Housing & CRE, Business surveys); **Trade & Shipping** (`trade`: Chokepoints, Ports, Trade); **Data Explorers** (`explorers`: Search) |
 | **Government & Regulation** | **U.S. Congress** (`congress`: Bills, Laws, Votes, Members, Committees); **Federal Spending** (`spending`: Agencies, Awards, Recipients) |
 | **News & Research** | **SEC Filings & Enforcement** (`sec`: Search, Latest filings, Enforcement & news, Advisers); **News** (`news`: Markets, Official, Company, Regional) |
@@ -145,7 +145,7 @@ is no client secret.
 | `h` / `l`, arrows | dashboard list / cards |
 | `[` `]`, `1`-`9` | previous / next tab, jump to tab |
 | `Tab`, `Enter`, `Esc` | next card, maximize it, go back |
-| `/` or `Ctrl-G` | search: ticker, company, `CIK 320193`, CUSIP, dataset (`cpi`, `sofr`), dashboard |
+| `/` or `Ctrl-G` | search: ticker, company, coin (`sol`, `chainlink`), `CIK 320193`, CUSIP, dataset (`cpi`, `sofr`, `tvl`), dashboard |
 | `s`, `p` | set the tab's main input (symbol, country, query), or any param |
 | `<` `>` | shorter / longer date range (1M to MAX) |
 | `t` | chart transform: level, indexed, YoY %, drawdown |
@@ -167,7 +167,11 @@ Fed, FRED, ECB, Bank of England, Japan MoF, Bank of Canada, Riksbank, Tesouro
 Direto, BIS, IMF and IMF PortWatch, OECD, CFTC, DTCC SDR, FDIC, EIA, BLS,
 U.S. Census, USDA FAS, Freddie Mac, Congress.gov, U.S. Senate, USAspending,
 UN Comtrade, Deribit, Coinbase and Coinbase Derivatives, Kraken, NicheDB
-(Alpaca), Montreal Exchange, and publisher and agency RSS feeds.
+(Alpaca), Montreal Exchange, and publisher and agency RSS feeds. The crypto
+dashboards add CoinPaprika, CoinGecko, alternative.me, DefiLlama,
+mempool.space, Blockchain.com, 1ML, ultrasound.money, Blockscout, L2BEAT, and
+the public market-data APIs of Hyperliquid, OKX, Kraken Futures, dYdX, Bitget,
+Gate, Gemini, Bitstamp, Binance.US and Bitfinex.
 
 Where a card has more than one provider it tries them in order, shows the one
 that answered in its header, and lists the ones it skipped in its notes.
@@ -199,6 +203,8 @@ environment variables.
   closely but are not CME settlements: the change is over 24 hours, far-dated
   contracts often have not traded yet (so a curve can be two points), and a
   contract's history starts when it was listed. Each row names its venue.
+- **Crypto is keyless and built to stay inside free limits.** Ten dashboards
+  in the Crypto group, described under [Crypto](#crypto) below.
 - **U.S. stock and ETF history falls back to NicheDB**, the Alpaca-fed daily
   bars the b1dz console and backtester read, when Nasdaq does not answer.
 - **Yahoo Finance is still the only source for the rest**: equity-index,
@@ -222,6 +228,48 @@ environment variables.
   tariffs, crude exports by country (the EIA series is complete only through
   2018), and earnings call transcripts.
 - **Macro shows official releases and IMF forecasts**, not survey consensus.
+
+## Crypto
+
+Every crypto card reads a public endpoint with no key. One `symbol` input (a
+coin or a dollar pair: `SOL`, `ETH-USD`) drives the coin cards across
+dashboards; the Deribit option and volatility cards take `currency` (BTC or
+ETH) because Deribit lists options on those two only.
+
+| Dashboard | Source | What to know |
+|---|---|---|
+| Crypto Markets | CoinPaprika, then CoinGecko; alternative.me; Coinbase | The top 500 coins (250 on the fallback). Prices are volume-weighted across exchanges. Trending and Sectors are CoinGecko only |
+| Crypto: Coin | CoinPaprika; Coinbase, Kraken, Gemini, Bitstamp, Binance.US, Bitfinex, OKX; Deribit | Price Across Exchanges reads each exchange's own ticker. The spot book is one exchange (Kraken, then Coinbase). Market cap history goes back one year |
+| Crypto Derivatives | Hyperliquid, OKX, Kraken Futures, dYdX, Bitget, Gate, Deribit, DefiLlama | Funding is annualised so venues with different intervals compare. Positioning and liquidations are OKX only |
+| DeFi, Stablecoins | DefiLlama | Value locked, DEX volume, fees and revenue, yields, hacks, stablecoin supply and pegs. The large lists are cached for an hour |
+| Bitcoin On-Chain | mempool.space, Blockchain.com, 1ML | Halving dates are estimates from the block height. Lightning is the public network as 1ML's node sees it |
+| Ethereum On-Chain | ultrasound.money, Blockscout, L2BEAT, DefiLlama | Supply, burn and issuance; gas with dollar costs; staking; layer 2 value and activity |
+| Crypto ETFs & Stocks | Nasdaq, Coinbase, CoinGecko | Share prices and returns, not fund flows. Treasuries are holdings from company filings as CoinGecko collects them |
+| Crypto Exchanges | CoinPaprika, CoinGecko, DefiLlama | Reported volume, open interest, and the assets in wallets exchanges have disclosed |
+| Crypto News | Publisher RSS feeds | CoinDesk, Cointelegraph, The Block, Decrypt, DL News, CryptoSlate, Protos, The Defiant and others, with repeats folded |
+
+Limits that shape the cards:
+
+- **CoinGecko's public API allows about five requests a minute** from a server
+  address. It is the fallback for the market list and the only source for
+  trending coins, sectors, derivatives exchanges and company treasuries, so
+  those are cached for 30 minutes to six hours. A cold load of several
+  CoinGecko cards at once can still be refused; the card says so and works on
+  the next refresh.
+- **CoinPaprika's keyless plan allows 20,000 requests a month** and one year of
+  daily history. The market list is cached for five minutes.
+- **Binance and Bybit do not serve U.S. addresses**, so they are not read
+  directly. Their funding rates come from the comparison feed Hyperliquid
+  publishes; their open interest and liquidations are not included, and the
+  open interest and liquidation cards say they are not the whole market.
+- **Not included**, because the source refused or was unreliable when tested:
+  bridge volumes and perpetual DEX volume (DefiLlama serves those on its paid
+  plan only), validator counts and the staking entry and exit queues
+  (beaconcha.in now requires a key), and Lightning capacity history
+  (mempool.space's Lightning statistics returned a different snapshot on each
+  request). Spot ETF flows, market-wide liquidation totals and on-chain
+  valuation measures such as MVRV are also absent: no open data feed for them
+  was found.
 
 ## Adding a card
 
