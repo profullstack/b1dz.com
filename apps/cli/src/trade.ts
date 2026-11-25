@@ -101,42 +101,126 @@ export function parseTradeArgs(args: string[]): { command: TradeCommand; flags: 
   return done({ kind: 'error', message: `unknown trade command: ${cmd}` });
 }
 
+/**
+ * One order typed on a line, as the TUI ticket takes it:
+ *   5            market order for 5 shares
+ *   $500         market order for $500
+ *   5 @190.50    limit order        (add gtc and/or ext after it)
+ */
+export function parseTicketLine(side: 'buy' | 'sell', symbol: string, line: string): ReturnType<typeof parseManualOrder> {
+  const toks = line.trim().split(/\s+/).filter(Boolean);
+  const size = toks.find((t) => !t.startsWith('@') && !/^(gtc|ext|day)$/i.test(t)) ?? '';
+  const limit = toks.find((t) => t.startsWith('@'))?.slice(1);
+  const has = (w: string) => toks.some((t) => t.toLowerCase() === w);
+  return parseManualOrder({
+    symbol,
+    side,
+    type: limit !== undefined ? 'limit' : 'market',
+    tif: has('gtc') ? 'gtc' : 'day',
+    ...(size.startsWith('$') ? { notionalUsd: size.slice(1).replace(/,/g, '') } : { qty: size.replace(/,/g, '') }),
+    ...(limit !== undefined ? { limitPrice: limit } : {}),
+    ...(has('ext') ? { extendedHours: true } : {}),
+  });
+}
+
 function base(): string {
   return (process.env.B1DZ_API_URL || 'https://b1dz.com').replace(/\/$/, '');
 }
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+export interface ApiAnswer {
+  ok: boolean;
+  status: number;
+  body: Json;
+}
 
-async function call(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; body: Json }> {
+/** The account API the web terminal uses, for the CLI and the TUI. Never exits the process. */
+export interface TradeClient {
+  signedIn(): boolean;
+  account(broker?: string): Promise<ApiAnswer>;
+  place(order: BrokerOrderArgs, broker?: string): Promise<ApiAnswer>;
+  confirm(confirmId: string, broker?: string): Promise<ApiAnswer>;
+  cancel(orderId: string, broker?: string): Promise<ApiAnswer>;
+  watchlist(): Promise<ApiAnswer>;
+  saveWatchlist(symbols: string[]): Promise<ApiAnswer>;
+}
+
+async function request(path: string, init: RequestInit = {}): Promise<ApiAnswer> {
   const c = loadCredentials();
-  if (!c) {
-    console.error('not signed in: run `b1dz login` first');
+  if (!c) return { ok: false, status: 401, body: { error: 'not signed in: run `b1dz login` first' } };
+  try {
+    const res = await fetch(`${base()}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${c.accessToken}` } });
+    const body = (await res.json().catch(() => ({}))) as Json;
+    if (res.status === 401) return { ok: false, status: 401, body: { error: 'session expired: run `b1dz login` again' } };
+    return { ok: res.ok, status: res.status, body };
+  } catch (e) {
+    return { ok: false, status: 0, body: { error: (e as Error).message || 'network error' } };
+  }
+}
+
+export function tradeClient(): TradeClient {
+  const q = (broker?: string) => (broker ? `?broker=${encodeURIComponent(broker)}` : '');
+  const post = (path: string, body: unknown) => request(path, { method: 'POST', body: JSON.stringify(body) });
+  return {
+    signedIn: () => loadCredentials() !== null,
+    account: (broker) => request(`/api/terminal/broker${q(broker)}`),
+    place: (order, broker) => post('/api/terminal/orders', { ...order, ...(broker ? { broker } : {}) }),
+    confirm: (confirmId, broker) => post('/api/terminal/orders/confirm', { confirmId, ...(broker ? { broker } : {}) }),
+    cancel: (orderId, broker) => post('/api/terminal/orders/cancel', { orderId, ...(broker ? { broker } : {}) }),
+    watchlist: () => request('/api/terminal/watchlist'),
+    saveWatchlist: (symbols) => request('/api/terminal/watchlist', { method: 'PUT', body: JSON.stringify({ symbols }) }),
+  };
+}
+
+/** What went wrong, in words for the user (a locked session gets the fix). */
+export function tradeError(r: ApiAnswer): string {
+  if (r.status === 423) return 'trading is locked: run `b1dz unlock`, then try again';
+  return r.body.error ?? r.body.result?.message ?? `request failed (${r.status})`;
+}
+
+/** The account as plain lines: broker, buying power, positions, open orders. */
+export function accountLines(a: Json): string[] {
+  if (!a.brokers?.length) return ['No broker linked. Add Alpaca or moomoo at b1dz.com/settings (Plugins).'];
+  if (a.error) return [`${a.label ?? a.broker}: ${a.error}`];
+  const out = [`${a.label}  ${a.paper ? 'PAPER' : 'LIVE'}${a.session ? `  market ${a.session}` : ''}`, `Buying power  ${money(a.buyingPowerUsd)}`];
+  if (a.brokers.length > 1) out.push(`Linked        ${a.brokers.map((b: Json) => `${b.id}${b.paper ? ' (paper)' : ''}`).join(', ')}`);
+  out.push('', 'Positions');
+  if (!a.positions?.length) out.push('  none');
+  for (const p of a.positions ?? []) out.push(`  ${String(p.symbol).padEnd(7)} ${String(p.qty).padStart(10)}  avg ${p.avgEntry}  ${p.marketValue ? money(p.marketValue) : ''}`);
+  if (a.ordersSupported) {
+    out.push('', 'Open orders');
+    const open = (a.orders ?? []).filter((o: Json) => o.open);
+    if (!open.length) out.push('  none');
+    for (const o of open) out.push(`  ${orderLine(o)}`);
+  }
+  return out;
+}
+
+function orderLine(o: Json): string {
+  const px = o.type === 'limit' && o.limitPrice ? `limit ${o.limitPrice}` : o.type;
+  return `${String(o.side).padEnd(4)} ${String(o.qty || '').padStart(8)} ${String(o.symbol).padEnd(7)} ${String(px).padEnd(14)} ${String(o.status).padEnd(9)} ${o.fillPrice ? `filled ${o.fillPrice}  ` : ''}${o.orderId}`;
+}
+
+async function call(path: string, init: RequestInit = {}): Promise<ApiAnswer> {
+  const r = await request(path, init);
+  if (r.status === 401) {
+    console.error(r.body.error);
     process.exit(1);
   }
-  const res = await fetch(`${base()}${path}`, { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${c.accessToken}` } });
-  const body = (await res.json().catch(() => ({}))) as Json;
-  if (res.status === 401) {
-    console.error('session expired: run `b1dz login` again');
-    process.exit(1);
-  }
-  return { ok: res.ok, status: res.status, body };
+  return r;
 }
 
 const money = (v: unknown) => (typeof v === 'number' ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '');
 
-function fail(r: { status: number; body: Json }): never {
-  if (r.status === 423) console.error('✗ trading is locked: run `b1dz unlock`, then try again');
-  else console.error(`✗ ${r.body.error ?? `request failed (${r.status})`}`);
+function fail(r: ApiAnswer): never {
+  console.error(`✗ ${tradeError(r)}`);
   process.exit(1);
 }
 
 function printOrders(orders: Json[], openOnly = false) {
   const shown = openOnly ? orders.filter((o) => o.open) : orders;
   if (!shown.length) return console.log(openOnly ? '  no open orders' : '  no orders');
-  for (const o of shown) {
-    const px = o.type === 'limit' && o.limitPrice ? `limit ${o.limitPrice}` : o.type;
-    console.log(`  ${String(o.side).padEnd(4)} ${String(o.qty || '').padStart(8)} ${String(o.symbol).padEnd(7)} ${String(px).padEnd(14)} ${String(o.status).padEnd(9)} ${o.fillPrice ? `filled ${o.fillPrice}  ` : ''}${o.orderId}`);
-  }
+  for (const o of shown) console.log(`  ${orderLine(o)}`);
 }
 
 async function account(flags: TradeFlags, ordersOnly: boolean) {
@@ -153,16 +237,7 @@ async function account(flags: TradeFlags, ordersOnly: boolean) {
     console.log(`${a.label} (${a.paper ? 'paper' : 'LIVE'}) orders`);
     return printOrders(a.orders ?? []);
   }
-  console.log(`${a.label}  ${a.paper ? 'PAPER' : 'LIVE'}${a.session ? `  market ${a.session}` : ''}`);
-  console.log(`Buying power  ${money(a.buyingPowerUsd)}`);
-  if (a.brokers.length > 1) console.log(`Linked        ${a.brokers.map((b: Json) => `${b.id}${b.paper ? ' (paper)' : ''}`).join(', ')}   (--broker <id>)`);
-  console.log('\nPositions');
-  if (!a.positions?.length) console.log('  none');
-  for (const p of a.positions ?? []) console.log(`  ${String(p.symbol).padEnd(7)} ${String(p.qty).padStart(10)}  avg ${p.avgEntry}  ${p.marketValue ? money(p.marketValue) : ''}`);
-  if (a.ordersSupported) {
-    console.log('\nOpen orders');
-    printOrders(a.orders ?? [], true);
-  }
+  console.log(accountLines(a).join('\n'));
 }
 
 async function order(o: BrokerOrderArgs, flags: TradeFlags) {

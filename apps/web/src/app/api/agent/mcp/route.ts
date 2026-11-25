@@ -5,6 +5,7 @@ import { createAdminSupabase } from '@/lib/supabase';
 import { getAgentBudget, getAgentPortfolio, getAgentQuote, placeAgentOrder } from '@/lib/agent-trade';
 import { cardAsText, researchCatalog, researchSearch, runResearchCard } from '@/lib/research-api';
 import { changeWatchlist, readWatchlist } from '@/lib/terminal-api';
+import { cancelAgentStockOrder, getAgentBrokerAccount, placeAgentStockOrder, type AgentEquityResult } from '@/lib/agent-equity';
 
 export const dynamic = 'force-dynamic';
 
@@ -136,6 +137,52 @@ const TOOLS = [
     // Changes a saved list the user can change back; touches nothing outside b1dz.
     annotations: { title: 'Edit the watchlist', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
+  {
+    name: 'broker_account',
+    title: 'Read the broker account',
+    description:
+      'The user\'s linked stock broker (Alpaca, moomoo, ...): which brokers are linked, paper or live, buying power, positions, and open and recent orders. Read-only. Fails with "locked" until the user unlocks trading with their passphrase.',
+    inputSchema: {
+      type: 'object',
+      properties: { broker: { type: 'string', description: 'Linked broker id, e.g. alpaca or moomoo. Default: the user\'s chosen broker' } },
+      additionalProperties: false,
+    },
+    annotations: { title: 'Read the broker account', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: 'place_stock_order',
+    title: 'Place a stock order',
+    description:
+      'Buy or sell a U.S. stock or ETF through the user\'s own broker. Needs the trade:equity scope and, for a buy, budget: the cost is charged to this connection\'s budget. A buy must have a known maximum cost: notionalUsd (a market order for that many dollars), or a limit order with qty and limitPrice. A market buy by share count is refused. A sell can never exceed the shares held. Check broker_account first: "paper": false means real money. Confirm the symbol, side and size with the user before calling.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker, e.g. AAPL' },
+        side: { type: 'string', enum: ['buy', 'sell'] },
+        qty: { type: 'number', description: 'Shares. Use this or notionalUsd, not both' },
+        notionalUsd: { type: 'number', description: 'Dollar amount for a market order (brokers with fractional shares; others round down to whole shares)' },
+        type: { type: 'string', enum: ['market', 'limit'], description: 'Default market' },
+        limitPrice: { type: 'number', description: 'Required for a limit order' },
+        tif: { type: 'string', enum: ['day', 'gtc'], description: 'Default day' },
+        extendedHours: { type: 'boolean', description: 'Limit orders only' },
+        broker: { type: 'string', description: 'Linked broker id. Default: the user\'s chosen broker' },
+      },
+      required: ['symbol', 'side'],
+    },
+    // Spends real money at a broker when the account is live: not read-only, not undoable.
+    annotations: { title: 'Place a stock order', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: 'cancel_stock_order',
+    title: 'Cancel a stock order',
+    description: 'Cancel an open order at the user\'s broker by its orderId (from broker_account). Needs the trade:equity scope.',
+    inputSchema: {
+      type: 'object',
+      properties: { orderId: { type: 'string' }, broker: { type: 'string', description: 'Linked broker id. Default: the user\'s chosen broker' } },
+      required: ['orderId'],
+    },
+    annotations: { title: 'Cancel a stock order', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  },
 ] as const;
 
 function rpcResult(id: unknown, result: unknown) {
@@ -170,6 +217,12 @@ function toolText(payload: unknown, isError = false) {
   return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload) }], isError };
 }
 
+/** A refused broker call is a tool error with the refusal as its text. */
+function equity(r: AgentEquityResult): Record<string, unknown> {
+  if (r.status >= 400) throw new Error(String(r.body.error ?? `request failed (${r.status})`));
+  return r.body;
+}
+
 async function runTool(agent: AuthedAgent, name: string, args: Record<string, unknown>) {
   switch (name) {
     case 'get_budget': return (await getAgentBudget(agent)).body;
@@ -197,6 +250,12 @@ async function runTool(agent: AuthedAgent, name: string, args: Record<string, un
       if ('error' in body) throw new Error(body.error);
       return args.format === 'json' ? body : cardAsText(body);
     }
+    case 'broker_account':
+      return equity(await getAgentBrokerAccount(agent, args.broker));
+    case 'place_stock_order':
+      return equity(await placeAgentStockOrder(agent, args));
+    case 'cancel_stock_order':
+      return equity(await cancelAgentStockOrder(agent, args));
     case 'watchlist_get':
       return readWatchlist(agent.admin, agent.userId);
     case 'watchlist_edit':
@@ -220,9 +279,9 @@ export async function POST(req: NextRequest) {
     return rpcResult(msg.id, {
       protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
       capabilities: { tools: { listChanged: false } },
-      serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.3.0' },
+      serverInfo: { name: 'b1dz-agent', title: 'b1dz', version: '1.4.0' },
       instructions:
-        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source. watchlist_get and watchlist_edit read and change the user\'s research watchlist; a watchlist never trades. Stock orders through the user\'s broker are not available to agents: the user places those at b1dz.com/terminal.',
+        'b1dz crypto trading and market research for agents. get_budget, get_portfolio and get_quote are read-only. place_order queues a crypto BUY, hard-capped by this connection\'s budget; it fails when the connection has no trading budget. Research (read-only, public sources): research_catalog lists the cards, research_search finds a ticker or dataset, research_card runs one card (quotes, financials, option chains, yield curves, macro, filings, news) and names its source. watchlist_get and watchlist_edit read and change the user\'s research watchlist; a watchlist never trades. Stocks through the user\'s own broker: broker_account reads it; place_stock_order and cancel_stock_order need the trade:equity scope, charge buys to this connection\'s budget, and can be real money when the account is live, so confirm with the user first.',
     });
   }
   if (msg.method.startsWith('notifications/')) return new Response(null, { status: 202, headers: CORS_HEADERS });

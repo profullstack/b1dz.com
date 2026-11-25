@@ -6,6 +6,7 @@ filings and news. Every card reads a public or official source and names it.
 No b1dz account is needed, and all but one card work with no API key.
 
 ```sh
+b1dz                                 # open the terminal (same as b1dz research)
 b1dz research                        # open the TUI
 b1dz research company symbol=NVDA    # open on a dashboard
 b1dz research help                   # every command
@@ -24,11 +25,11 @@ cards:
 
 | Surface | Where | Notes |
 |---|---|---|
-| TUI | `b1dz research` | `apps/cli/src/research/tui.ts` |
+| TUI | `b1dz` (also `b1dz terminal`, `b1dz research`) | `apps/cli/src/research/tui.ts`. Bare `b1dz` opens it; the header links the web terminal and `u` prints a link to the same view |
 | Web | `https://b1dz.com/terminal` | `apps/web/src/app/terminal/`: the same dashboards in the browser, keyboard driven, installable with the PWA. Public to browse; live data needs a signed-in user. Links are shareable (`/terminal?d=company&symbol=NVDA`) |
 | CLI | `b1dz research card <id> [name=value ...] [--json\|--csv]` | text, JSON or CSV for scripts |
 | HTTP API | `GET /api/research`, `/api/research/card/<id>`, `/api/research/search` | catalog is public; cards need a session or a `b1dz_agent_` token |
-| MCP | `research_catalog`, `research_search`, `research_card`, `watchlist_get`, `watchlist_edit` on `/api/agent/mcp` | research tools are read-only; the watchlist tools edit a list and never trade |
+| MCP | `research_catalog`, `research_search`, `research_card`, `watchlist_get`, `watchlist_edit`, `broker_account`, `place_stock_order`, `cancel_stock_order` on `/api/agent/mcp` | research tools are read-only; the watchlist tools never trade; stock orders need the `trade:equity` scope and budget |
 
 ## Watchlist and trading
 
@@ -45,6 +46,7 @@ broker account and an order ticket. The CLI has the same account features as
 | `b1dz trade watch [+NVDA -TSLA]` | on your account | the same list the web shows |
 | `b1dz research watchlist` | on that machine (`~/.config/b1dz/research.json`) | the account-free TUI list |
 | MCP | on your account | `watchlist_get`, `watchlist_edit` |
+| TUI (`b1dz`) signed in | on your account | the list named `Account` mirrors it; `w` edits it |
 | HTTP | on your account | `GET` / `PUT /api/terminal/watchlist` |
 
 It holds up to 100 tickers of any kind the cards can price (`AAPL`, `BRK.B`,
@@ -67,8 +69,10 @@ Then unlock trading (Settings, or `b1dz unlock`): broker credentials are sealed
 under your passphrase and only the daemon can read them, only while your
 session is unlocked. The web server relays the ticket and never sees a key.
 
-In the terminal: `buy` / `sell` on a watchlist row or a position, `b` / `x` on
-a company page. The ticket takes shares (or dollars where the broker allows),
+In the web terminal: `buy` / `sell` on a watchlist row or a position, `b` / `x` on
+a company page. In the TUI (`b1dz`): `a` shows the account, `b` / `x` open a
+one-line ticket for the tab's symbol (`5`, `$500`, or `5 @190.50 gtc`), and a
+live order is sent only after you type `live`. The ticket takes shares (or dollars where the broker allows),
 market or limit, day or good-until-canceled, and optional extended hours on a
 limit order. You review it, and a live order needs a tick on "this is a real
 order" before the button works. Open orders can be canceled from the panel.
@@ -98,7 +102,12 @@ ticket shows it and sends only if you confirm. If a broker does not answer in
 time the ticket says so and never retries by itself, because a placed order is
 not idempotent: check your open orders first.
 
-Agents cannot place stock orders: the MCP server exposes the watchlist only.
+Agents (MCP) get less than you do at the ticket. `broker_account` reads the
+account. `place_stock_order` and `cancel_stock_order` need a token with the
+`trade:equity` scope; a buy must have a known maximum cost (a dollar amount, or
+a limit order) and that cost is charged to the token's budget before the order
+is sent and released if the broker refuses it. A broker warning that needs a
+person's yes is never answered for an agent. Code: `apps/web/src/lib/agent-equity.ts`.
 
 Code: `packages/core/src/terminal.ts` (shared ticket rules),
 `apps/daemon/src/manual-trade.ts` and `brokers.ts`, `packages/source-moomoo`,

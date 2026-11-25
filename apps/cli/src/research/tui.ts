@@ -29,6 +29,8 @@ import {
 } from '@b1dz/research';
 import { cycle, sideBySide, sidebarItems, visibleLength, windowStart, type SidebarItem } from './layout.js';
 import type { ResearchStore } from './store.js';
+import { describeOrder } from '@b1dz/core';
+import { accountLines, parseTicketLine, tradeError, type TradeClient } from '../trade.js';
 
 /* blessed ships no types; the widgets used here are small and stable. */
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -36,11 +38,24 @@ type Widget = any;
 const B = blessed as any;
 
 const MY_DASHBOARD = 'my';
+/** The same terminal in a browser. */
+export const WEB_TERMINAL = 'https://b1dz.com/terminal';
+
+/** A link that opens the web terminal on the same dashboard, tab and inputs. */
+export function webLink(dashboard: string | undefined, tab: string | undefined, params: Record<string, string>): string {
+  if (!dashboard || dashboard === MY_DASHBOARD) return WEB_TERMINAL;
+  const q = new URLSearchParams({ d: dashboard });
+  if (tab) q.set('t', tab);
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  return `${WEB_TERMINAL}?${q.toString()}`;
+}
 const RANGES = ['1M', '3M', '6M', '1Y', '2Y', '5Y', '10Y', 'MAX'];
 /** Params tried, in order, by the `s` shortcut. */
 const PRIMARY_PARAMS = ['symbol', 'symbols', 'country', 'query', 'series', 'currency'];
 
-export const HELP = `Keys
+export const HELP = `b1dz terminal. The same terminal in a browser: https://b1dz.com/terminal
+
+Keys
 
   Move
     h / Left        focus the dashboard list        l / Right / Enter   focus the cards
@@ -58,13 +73,18 @@ export const HELP = `Keys
 
   Lists and layout
     w               watchlist: +AAPL adds, -TSLA removes, a name switches list
-                    (to buy or sell: b1dz trade, or the ticket at b1dz.com/terminal)
+                    (signed in: the list named Account is the one b1dz.com/terminal shows)
+
+  Trade (your own broker, after b1dz login and b1dz unlock)
+    b / x           buy / sell this tab's symbol: 5 shares, $500, or 5 @190.50 for a limit
+    a               account: broker, buying power, positions, open orders
     c               compare: plot tickers or FRED:SERIES on one axis
     +               pin the focused card to "My dashboard"     -   unpin (in My dashboard)
 
   Data
     r               reload this tab                 R                   clear the cache and reload
     e               export the focused card to CSV  o                   show the card's source page
+    u               link to this view in the web terminal (b1dz.com/terminal)
     ?               this help                       q / Ctrl-C          quit
 
 Press any key to close.`;
@@ -91,6 +111,8 @@ export interface ResearchTuiOptions {
   start?: { dashboard?: string; tab?: string; params?: Record<string, string> };
   /** Called instead of process.exit (tests). */
   onQuit?: () => void;
+  /** Account features (watchlist sync, orders). Absent: research only. */
+  trader?: TradeClient;
 }
 
 export interface ResearchTui {
@@ -101,9 +123,9 @@ export interface ResearchTui {
 }
 
 export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
-  const { registry, ctx, store } = opts;
+  const { registry, ctx, store, trader } = opts;
 
-  const screen: Widget = B.screen({ smartCSR: true, title: 'b1dz research', fullUnicode: true, forceUnicode: true, dockBorders: true, ...opts.screen });
+  const screen: Widget = B.screen({ smartCSR: true, title: 'b1dz terminal', fullUnicode: true, forceUnicode: true, dockBorders: true, ...opts.screen });
 
   const SIDEBAR_W = 30;
   const header: Widget = B.box({ parent: screen, top: 0, left: 0, right: 0, height: 1, tags: true, style: { bg: 'blue', fg: 'white' } });
@@ -279,7 +301,7 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
 
     const ps = Object.entries(dashParams()).map(([k, v]) => `${k}=${v}`).join(' ');
     const right = `${transform === 'level' ? '' : `${TRANSFORM_LABEL[transform]}  `}${ps}`;
-    header.setContent(` {bold}b1dz research{/bold}  ${paint(d ? `${d.group} › ${d.title}` : 'no dashboards', undefined, 'blessed')}${right ? `   ${paint(right, undefined, 'blessed')}` : ''}`);
+    header.setContent(` {bold}b1dz terminal{/bold}  ${paint(d ? `${d.group} › ${d.title}` : 'no dashboards', undefined, 'blessed')}${right ? `   ${paint(right, undefined, 'blessed')}` : ''}{|}${WEB_TERMINAL.replace('https://', '')} `);
     renderSidebar(sidebarItems(all));
 
     tabsBar.setContent(
@@ -317,7 +339,7 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
     const loading = [...results.values()].filter((r) => r.status === 'loading').length;
     const hint = maximized
       ? 'Esc back · t transform · e export CSV · < > range · ? help'
-      : '/ search · s set input · p params · [ ] tabs · Tab card · Enter maximize · w watchlist · c compare · ? help · q quit';
+      : '/ search · s input · [ ] tabs · Tab card · Enter max · w watchlist · a account · b buy · x sell · u web link · ? help · q quit';
     footer.setContent(` ${message ? `{yellow-fg}${paint(message, undefined, 'blessed')}{/yellow-fg}` : paint(hint, 'dim', 'blessed')}${loading ? `{|}{cyan-fg}loading ${loading}…{/cyan-fg} ` : ''}`);
     screen.render();
   }
@@ -375,10 +397,13 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
   }
 
   function showHelp(): void {
+    showText('Help', HELP);
+  }
+  function showText(title: string, content: string): void {
     modal = true;
     const box: Widget = B.box({
-      parent: screen, top: 'center', left: 'center', width: Math.min((screen.width as number) - 2, 96), height: Math.min((screen.height as number) - 2, HELP.split('\n').length + 2),
-      label: ' Help ', border: { type: 'line' }, style: { border: { fg: 'yellow' } }, content: HELP, scrollable: true, keys: true,
+      parent: screen, top: 'center', left: 'center', width: Math.min((screen.width as number) - 2, 96), height: Math.min((screen.height as number) - 2, content.split('\n').length + 2),
+      label: ` ${title} `, border: { type: 'line' }, style: { border: { fg: 'yellow' } }, content, scrollable: true, keys: true,
     });
     box.focus();
     box.once('keypress', () => {
@@ -448,6 +473,64 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
     const h = hits[i];
     if (!go(h.dashboard, h.tab, h.params)) say(`dashboard not available: ${h.dashboard}`);
   }
+  // ---- account: watchlist sync, account view, order ticket -----------------
+  const ACCOUNT_LIST = 'Account';
+  /** Signed in: mirror the account watchlist into a list named Account. */
+  async function pullAccountWatchlist(): Promise<void> {
+    if (!trader?.signedIn()) return;
+    const r = await trader.watchlist();
+    if (!r.ok || !Array.isArray(r.body.symbols) || destroyed) return;
+    store.state.watchlists[ACCOUNT_LIST] = r.body.symbols.map(String);
+    store.save();
+    if (store.state.activeWatchlist === ACCOUNT_LIST) scheduleRender();
+  }
+  function pushAccountWatchlist(): void {
+    if (!trader?.signedIn() || store.state.activeWatchlist !== ACCOUNT_LIST) return;
+    void trader.saveWatchlist(store.watchlist()).then((r) => {
+      if (!r.ok) say(`account watchlist not saved: ${tradeError(r)}`, 8000);
+    });
+  }
+  async function showAccount(): Promise<void> {
+    if (!trader?.signedIn()) return say('sign in first: b1dz login');
+    say('loading your account…', 15_000);
+    const r = await trader.account();
+    say('', 1);
+    if (!r.ok) return say(tradeError(r), 10_000);
+    showText('Account', `${accountLines(r.body).join('\n')}\n\nPress any key to close.`);
+  }
+  async function ticket(side: 'buy' | 'sell'): Promise<void> {
+    if (!trader?.signedIn()) return say('sign in first: b1dz login');
+    const symbol = ((dashParams().symbol ?? '') || (await ask(`${side === 'buy' ? 'Buy' : 'Sell'} which ticker`)) || '').toUpperCase();
+    if (!symbol) return;
+    say('loading your account…', 15_000);
+    const acct = await trader.account();
+    say('', 1);
+    if (!acct.ok) return say(tradeError(acct), 10_000);
+    const a = acct.body;
+    if (!a.broker) return say('no broker linked: add Alpaca or moomoo at b1dz.com/settings (Plugins)', 10_000);
+    if (a.error) return say(`${a.label}: ${a.error}`, 10_000);
+    const where = `${a.label} ${a.paper ? 'PAPER' : 'LIVE'}`;
+    const held = (a.positions ?? []).find((p: { symbol: string }) => p.symbol === symbol)?.qty ?? 0;
+    const line = await ask(`${side === 'buy' ? 'Buy' : 'Sell'} ${symbol} on ${where} (hold ${held}, power $${Math.round(a.buyingPowerUsd ?? 0).toLocaleString('en-US')}): shares, $dollars, or 5 @190.50`);
+    if (!line) return;
+    const parsed = parseTicketLine(side, symbol, line);
+    if (!parsed.ok) return say(parsed.error, 8000);
+    // A live order needs the word typed out; a paper one a plain yes.
+    const word = a.paper ? 'yes' : 'live';
+    const answer = await ask(`${describeOrder(parsed.order)} on ${where}${a.paper ? '' : ' (real money)'}. Type ${word} to send`);
+    if (answer?.toLowerCase() !== word) return say('not sent');
+    say('sending…', 30_000);
+    let r = await trader.place(parsed.order, a.broker);
+    const need = r.body.result?.needsConfirm;
+    if (need) {
+      const ok = await ask(`${a.label} asks: ${String(r.body.result.message).slice(0, 120)} Type yes to confirm`);
+      if (ok?.toLowerCase() !== 'yes') return say('not sent');
+      r = await trader.confirm(need.id, a.broker);
+    }
+    if (!r.ok || !r.body.result?.ok) return say(`not placed: ${tradeError(r)}`, 12_000);
+    say(`${describeOrder(parsed.order)}: ${r.body.result.status ?? 'sent'} on ${where}`, 12_000);
+  }
+
   function exportCsv(): void {
     const v = viewCards()[cardIndex];
     const state = v && results.get(keyOf(v));
@@ -585,9 +668,14 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
       return void ask(`Watchlist “${store.state.activeWatchlist}” (+AAPL adds, -TSLA removes, a name switches list)`).then((v) => {
         if (!v) return;
         say(store.editWatchlist(v));
+        pushAccountWatchlist();
         scheduleRender();
       });
     }
+    if (ch === 'u') return say(`web: ${webLink(dash()?.id, tab()?.id, dashParams())}`, 15_000);
+    if (ch === 'a') return void showAccount();
+    if (ch === 'b') return void ticket('buy');
+    if (ch === 'x') return void ticket('sell');
     if (ch === 'c') {
       return void ask('Compare (tickers or FRED:SERIES, comma separated)').then((v) => {
         if (v) go('summary', 'compare', { symbols: v.toUpperCase() });
@@ -612,6 +700,7 @@ export function startResearchTui(opts: ResearchTuiOptions): ResearchTui {
   const start = opts.start ?? {};
   const first = start.dashboard ?? store.state.last?.dashboard;
   if (!(first && go(first, start.tab ?? (start.dashboard ? undefined : store.state.last?.tab), start.params))) render();
+  void pullAccountWatchlist();
 
   return {
     screen,

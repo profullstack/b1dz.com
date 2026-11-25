@@ -98,8 +98,10 @@ function help() {
   console.log(`b1dz — multi-source profit monitor
 
 At a glance:
-  Dashboard:          b1dz tui
-  Market research:    b1dz research       (TUI: equities, options, rates, macro, filings)
+  Terminal:           b1dz                (research, watchlist, account, buy and sell;
+                                           the same app as https://b1dz.com/terminal)
+  Crypto dashboard:   b1dz tui
+  Market research:    b1dz research       (the terminal's commands for scripts: card, quote, search)
   Buy and sell:       b1dz trade          (your own broker: Alpaca, moomoo, ...)
   Backtesting:        b1dz backtest <tf>
   Spread/edge audit:  b1dz audit-arb
@@ -129,8 +131,10 @@ Dashboard:
   b1dz tui                 live crypto dashboard (production API)
   b1dz tui --dev           live crypto dashboard (local API)
 
-Research (no account needed):
-  b1dz research            market research TUI: 28+ dashboards from public sources
+Terminal (research needs no account; trading needs b1dz login and b1dz unlock):
+  b1dz                     open the terminal (also: b1dz terminal, b1dz research)
+                           in a browser: https://b1dz.com/terminal
+  b1dz research            the same terminal: dashboards from public sources
   b1dz research company symbol=NVDA   open on a dashboard
   b1dz research card <id> [name=value ...] [--json|--csv]   one card for scripts
   b1dz research help       every research command
@@ -354,14 +358,22 @@ if (source === '--version' || source === '-v' || source === 'version') {
   process.exit(0);
 }
 
-if (!source || source === 'help' || source === '--help' || source === '-h') {
+if (source === 'help' || source === '--help' || source === '-h') {
+  help();
+  process.exit(0);
+}
+
+// Bare `b1dz` is the terminal: the same app as https://b1dz.com/terminal
+// (research dashboards, watchlist, your broker account and the order ticket).
+// Piped or scripted, there is no screen to draw on, so it prints the help.
+if (!source && !(process.stdout.isTTY && process.stdin.isTTY)) {
   help();
   process.exit(0);
 }
 
 // Auth commands run before requireAuth so unauthenticated users can sign up
 // Market research reads public sources only: no account needed.
-if (source === 'research') {
+if (!source || source === 'research' || source === 'terminal') {
   const { runResearchCli } = await import('./research/cli.js');
   const code = await runResearchCli(process.argv.slice(3));
   // Exit only after stdout has drained: a large --json piped to another program is cut short otherwise.

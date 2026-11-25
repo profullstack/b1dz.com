@@ -17,15 +17,18 @@ import {
 } from '@b1dz/research';
 import { ResearchStore, storePath } from './store.js';
 
-export const RESEARCH_USAGE = `b1dz research: market research terminal (TUI)
+export const RESEARCH_USAGE = `b1dz: the terminal (research, watchlist, account, buy and sell)
+In a browser: https://b1dz.com/terminal
 
-  b1dz research                            open the TUI
+  b1dz                                     open the terminal (same as b1dz research)
+  b1dz research                            open the terminal
   b1dz research <dashboard> [name=value]   open on a dashboard, e.g. b1dz research company symbol=NVDA
   b1dz research list [prefix]              dashboards, tabs and card ids
   b1dz research card <id> [name=value ...] one card as text   (--json | --csv | --width N)
   b1dz research quote <symbol ...>         quote board for some tickers
   b1dz research search <query>             find a ticker, company, dataset or dashboard (--json)
   b1dz research watchlist [+SYM -SYM name] show or edit your watchlists
+                                           (in the TUI: a account, b buy, x sell; see b1dz trade help)
   b1dz research keys                       optional free API keys and whether each is set
   b1dz research keys set <NAME> <value>    save a key (FRED, EIA, BLS, CONGRESS)
   b1dz research keys unset <NAME>
@@ -175,14 +178,15 @@ export async function runResearchCli(args: string[]): Promise<number> {
     return 2;
   }
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
-    console.error('b1dz research needs an interactive terminal for the TUI.\nFor scripts use: b1dz research card <id> [name=value ...] --json   (see: b1dz research help)');
+    console.error('b1dz needs an interactive terminal for the TUI (or open https://b1dz.com/terminal).\nFor scripts use: b1dz research card <id> [name=value ...] --json   (see: b1dz research help)');
     return 2;
   }
   const { startResearchTui } = await import('./tui.js');
   const dashboard = cmd && dashboards.includes(cmd) ? cmd : undefined;
   const params = parseParams(args);
   const tab = rest.find((a) => !a.includes('=') && !a.startsWith('--'));
-  startResearchTui({ registry: reg, ctx, store, start: { dashboard: dashboard ?? (Object.keys(params).length ? 'summary' : undefined), tab, params } });
+  const { tradeClient } = await import('../trade.js');
+  startResearchTui({ registry: reg, ctx, store, trader: tradeClient(), start: { dashboard: dashboard ?? (Object.keys(params).length ? 'summary' : undefined), tab, params } });
   // The TUI owns the process from here; it exits on q.
   await new Promise(() => {});
   return 0;

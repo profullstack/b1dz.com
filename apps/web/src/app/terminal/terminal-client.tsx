@@ -503,7 +503,7 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
               <Link href="/signup" className="underline">
                 create a free account
               </Link>{' '}
-              to load live data. Prefer a real terminal? <code className="text-amber-100">b1dz research</code> needs no account.
+              to load live data. Prefer a real terminal? Install the CLI and run <code className="text-amber-100">b1dz</code>: the same terminal, no account needed for research.
             </div>
           )}
           <div className={maximized === null ? 'grid grid-cols-1 gap-3 2xl:grid-cols-2' : ''}>
@@ -559,7 +559,7 @@ export function TerminalClient({ catalog, signedIn }: { catalog: Catalog; signed
               ))}
             </dl>
             <p className="mt-3 text-xs text-zinc-500">
-              Each card names its source. Pin a card to build your own dashboard. Orders go through your own broker, linked in Settings. The same cards run in a real terminal with <code>b1dz research</code>.
+              Each card names its source. Pin a card to build your own dashboard. Orders go through your own broker, linked in Settings. The same terminal runs in a real terminal: install the CLI and run <code>b1dz</code>.
             </p>
           </div>
         </div>
