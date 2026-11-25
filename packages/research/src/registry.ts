@@ -72,6 +72,14 @@ export interface CatalogCard {
   params: { name: string; label: string; default?: string; choices?: string[]; hint?: string }[];
 }
 
+/** Take one hit from each provider in turn, so every area's best match shows before any area's tenth. */
+export function interleave<T>(lists: T[][]): T[] {
+  const out: T[] = [];
+  const longest = lists.reduce((m, l) => Math.max(m, l.length), 0);
+  for (let i = 0; i < longest; i++) for (const l of lists) if (i < l.length) out.push(l[i]);
+  return out;
+}
+
 export class Registry {
   readonly dashboards: DashboardDef[] = [];
   private readonly cards = new Map<string, CardDef>();
@@ -171,7 +179,7 @@ export class Registry {
     const seen = new Set<string>();
     const out: SearchHit[] = [];
     // Securities and datasets first: someone typing "aapl" wants Apple, not a card with "aapl" in its id.
-    for (const h of [...remote.flat(), ...local]) {
+    for (const h of [...interleave(remote), ...local]) {
       const k = `${h.kind}|${h.label}|${h.dashboard}|${h.tab ?? ''}|${JSON.stringify(h.params ?? {})}`;
       if (seen.has(k)) continue;
       seen.add(k);

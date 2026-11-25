@@ -57,7 +57,7 @@ b1dz tui           # live dashboard
 b1dz research      # market research TUI (no account needed)
 ```
 
-`b1dz research` is a market research TUI: 28 dashboards over equities, options,
+`b1dz` opens the terminal (also at b1dz.com/terminal): 37 dashboards over crypto, equities, options,
 rates, credit, FX, futures, energy, shipping, macro, SEC filings and news, from
 public and official sources. The same cards are served in the browser at
 `/terminal`, by the CLI

@@ -1,4 +1,4 @@
-/** Derivatives area: equity options, futures and positioning, crypto. */
+/** Derivatives area: equity options, futures and positioning, and the Deribit crypto cards (their dashboards are in ../crypto). */
 import type { AreaModule, DashboardDef, SearchHit } from '../../types.js';
 import { cryptoCurrency } from './chain.js';
 import { cryptoCards } from './crypto.js';
@@ -32,18 +32,6 @@ const dashboards: DashboardDef[] = [
         cards: ['derivatives.vix-futures', 'derivatives.futures-board', 'derivatives.fed-funds-futures', 'derivatives.wti-curve'],
       },
       { id: 'positioning', title: 'Positioning', cards: ['derivatives.cot-financial', 'derivatives.cot-history'] },
-    ],
-  },
-  {
-    id: 'crypto',
-    title: 'Crypto',
-    group: 'Crypto',
-    tabs: [
-      { id: 'spot', title: 'Spot', cards: ['derivatives.crypto-spot', 'derivatives.crypto-history'] },
-      { id: 'book', title: 'Order book', cards: ['derivatives.crypto-order-book'] },
-      { id: 'options', title: 'Options', cards: ['derivatives.crypto-options', 'derivatives.crypto-options-expiries'] },
-      { id: 'volatility', title: 'Volatility', cards: ['derivatives.crypto-smile', 'derivatives.crypto-surface', 'derivatives.crypto-dvol'] },
-      { id: 'funding', title: 'Funding', cards: ['derivatives.crypto-funding', 'derivatives.crypto-basis'] },
     ],
   },
 ];

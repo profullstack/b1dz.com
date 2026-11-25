@@ -258,7 +258,7 @@ describe('PKCE flow', () => {
     const list = await mcp(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { authorization: `Bearer ${t.access_token}` }));
     expect(list.status).toBe(200);
     const result = ((await list.json()) as { result: { tools: Array<{ name: string; annotations: Record<string, unknown> }>; ttlMs: number; cacheScope: string } }).result;
-    expect(result.tools.map((x) => x.name).sort()).toEqual(['get_budget', 'get_portfolio', 'get_quote', 'place_order', 'research_card', 'research_catalog', 'research_search', 'watchlist_edit', 'watchlist_get']);
+    expect(result.tools.map((x) => x.name).sort()).toEqual(['broker_account', 'cancel_stock_order', 'get_budget', 'get_portfolio', 'get_quote', 'place_order', 'place_stock_order', 'research_card', 'research_catalog', 'research_search', 'watchlist_edit', 'watchlist_get']);
     expect(result.cacheScope).toBe('public');
     for (const tool of result.tools) expect(typeof tool.annotations.readOnlyHint).toBe('boolean');
 
