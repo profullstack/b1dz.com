@@ -2,6 +2,8 @@
  * `b1dz redeem <code>`            redeem a credit code for Pro days
  * `b1dz invites`                  quota, invites sent, Pro-day balance, referral link
  * `b1dz invites create [note]`    create an invite (the link is printed once)
+ * `b1dz pro`                      plan, analyst allowance, prices
+ * `b1dz analyst <question>`       ask the AI analyst
  *
  * Calls the hosted API with the stored session (see auth.ts).
  */
@@ -68,4 +70,36 @@ export async function invites(args: string[]) {
     console.log(`  ${when}  ${i.status.padEnd(8)} ${i.bonus ? `bonus ${i.bonus}  ` : ''}${i.note}`);
   }
   console.log(`Referral link: ${o.affiliateUrl}`);
+}
+
+export async function pro() {
+  const r = await call('/api/billing/status');
+  if (!r.ok) {
+    console.error(`✗ ${r.body.error ?? `could not load your plan (${r.status})`}`);
+    process.exit(1);
+  }
+  const s = r.body;
+  const day = (v: string | null) => (v ? v.slice(0, 10) : '');
+  if (s.tier === 'pro') console.log(s.via === 'pass' ? `Plan: Pro (Profullstack Pass until ${day(s.passUntil)})` : `Plan: Pro until ${day(s.proUntil)}`);
+  else console.log('Plan: Free');
+  const a = s.analyst;
+  console.log(`AI analyst: $${Number(a.monthCostUsd).toFixed(2)} of $${Number(a.monthCapUsd).toFixed(2)} used this month${a.dailyQueries != null ? `, ${a.todayQueries}/${a.dailyQueries} questions today` : ''}`);
+  if (s.agentCreditUsd > 0) console.log(`Agent credit: $${Number(s.agentCreditUsd).toFixed(2)}`);
+  console.log(`Pro: $${s.prices.pro30} for 30 days, $${s.prices.pro365} for 365 days: ${base()}/pricing`);
+}
+
+export async function analyst(args: string[]) {
+  const question = args.join(' ').trim();
+  if (!question) {
+    console.error('usage: b1dz analyst <question>');
+    process.exit(1);
+  }
+  const r = await call('/api/research/analyst', { method: 'POST', body: JSON.stringify({ question }) });
+  if (!r.ok) {
+    console.error(`✗ ${r.body.error ?? `the analyst failed (${r.status})`}`);
+    process.exit(1);
+  }
+  console.log(r.body.answer);
+  const src = (r.body.sources ?? []) as Array<{ title: string; source: string; asOf?: string }>;
+  if (src.length) console.log(`\nFrom: ${src.map((x) => `${x.title} (${x.source}${x.asOf ? `, ${x.asOf}` : ''})`).join('; ')}`);
 }

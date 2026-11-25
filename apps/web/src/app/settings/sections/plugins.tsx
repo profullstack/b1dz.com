@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { BrokerLinks } from '@/components/broker-links';
 import { useEffect, useRef, useState } from 'react';
 import { PLUGIN_CATALOG } from '@b1dz/core/catalog';
 import { normalizeConfigSchema, splitConfigSchema, type PluginConfigField } from '@profullstack/pluginstore';
@@ -282,6 +283,7 @@ export function PluginsSection({
 
   return (
     <div className="space-y-4">
+      <BrokerLinks />
       {data && (
         <SectionShell
           title="System"

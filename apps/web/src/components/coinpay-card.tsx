@@ -32,11 +32,13 @@ export function CoinpayCard({ linked, coinpayOnly }: { linked: boolean; coinpayO
       {isLinked ? (
         coinpayOnly ? (
           <p className="mt-2 text-xs text-zinc-400">
-            This account was made with CoinPay, which is its only way in, so it cannot be disconnected.
+            This account was made with CoinPay, which is its only way in, so it cannot be disconnected.{' '}
+            <a href="/api/v1/coinpay/oauth/start?mode=connect" className="text-orange-400 hover:text-orange-300">Refresh Profullstack Pass</a>
           </p>
         ) : (
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
             <span>Connected: you can sign in here with CoinPay.</span>
+            <a href="/api/v1/coinpay/oauth/start?mode=connect" className="text-orange-400 hover:text-orange-300">Refresh Profullstack Pass</a>
             <button onClick={disconnect} disabled={busy} className="text-orange-400 hover:text-orange-300 disabled:opacity-50">
               {busy ? 'Disconnecting...' : 'Disconnect CoinPay'}
             </button>
@@ -44,7 +46,7 @@ export function CoinpayCard({ linked, coinpayOnly }: { linked: boolean; coinpayO
         )
       ) : (
         <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
-          <span>Connect your CoinPay account to sign in here with it.</span>
+          <span>Connect your CoinPay account to sign in here with it. A Profullstack Pass on that account counts as b1dz Pro.</span>
           <a href="/api/v1/coinpay/oauth/start?mode=connect" className="text-orange-400 hover:text-orange-300">Connect CoinPay</a>
         </div>
       )}

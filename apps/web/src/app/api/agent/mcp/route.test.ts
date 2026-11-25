@@ -80,7 +80,7 @@ describe('MCP route (e2e)', () => {
     const res = await POST(rpc('tools/list') as never);
     const body = await res.json();
     const names = (body.result.tools as Array<{ name: string }>).map((t) => t.name).sort();
-    expect(names).toEqual(['broker_account', 'cancel_stock_order', 'get_budget', 'get_portfolio', 'get_quote', 'place_order', 'place_stock_order', 'research_card', 'research_catalog', 'research_search', 'watchlist_edit', 'watchlist_get']);
+    expect(names).toEqual(['broker_account', 'cancel_stock_order', 'get_budget', 'get_portfolio', 'get_quote', 'place_order', 'place_stock_order', 'research_analyst', 'research_card', 'research_catalog', 'research_search', 'watchlist_edit', 'watchlist_get']);
     for (const t of body.result.tools.filter((x: { name: string }) => x.name.startsWith('research_'))) {
       expect(t.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     }
@@ -128,22 +128,44 @@ describe('MCP route (e2e)', () => {
   });
 
   it('research_card returns rendered text by default and raw blocks for format json', async () => {
-    const run = { id: 'rates.us-curve', title: 'U.S. Treasury curve', source: 'U.S. Treasury', params: {}, blocks: [] };
+    const run = { id: 'rates.curve', title: 'U.S. Treasury curve', source: 'U.S. Treasury', params: {}, blocks: [] };
     runResearchCardMock.mockResolvedValue({ status: 200, body: run });
     const { POST } = await importRoute();
-    const text = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'rates.us-curve', params: { country: 'US' } } }) as never)).json();
-    expect(runResearchCardMock).toHaveBeenCalledWith('rates.us-curve', { country: 'US' });
+    const text = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'rates.curve', params: { country: 'US' } } }) as never)).json();
+    expect(runResearchCardMock).toHaveBeenCalledWith('rates.curve', { country: 'US' });
     expect(text.result.content[0].text).toBe('U.S. Treasury curve as text');
     expect(text.result.isError).toBe(false);
-    const json = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'rates.us-curve', format: 'json' } }) as never)).json();
-    expect(JSON.parse(json.result.content[0].text)).toMatchObject({ id: 'rates.us-curve', source: 'U.S. Treasury' });
+    const json = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'rates.curve', format: 'json' } }) as never)).json();
+    expect(JSON.parse(json.result.content[0].text)).toMatchObject({ id: 'rates.curve', source: 'U.S. Treasury' });
+  });
+
+  it('research_card for a metered card asks for payment (HTTP 402) without credit; a quote card stays free', async () => {
+    const { setPayStoreForTest } = await import('@/lib/research-billing');
+    setPayStoreForTest({
+      insertCharge: async () => 1, chargeByNonce: async () => null, claimRetry: async () => false,
+      markDelivered: async () => undefined, markUndelivered: async () => undefined,
+      spendCents: async () => false, refundCents: async () => undefined, balanceCents: async () => 0,
+    });
+    runResearchCardMock.mockReset();
+    runResearchCardMock.mockResolvedValue({ status: 200, body: { id: 'overview.chart', title: 'Price chart', source: 'Nasdaq', params: {}, blocks: [] } });
+    const { POST } = await importRoute();
+    const paid = await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'equities.risk-stats' } }) as never);
+    expect(paid.status).toBe(402);
+    const body = await paid.json();
+    expect(body.error.code).toBe(402);
+    expect(body.error.data.price_usd).toBe(0.03);
+    expect(runResearchCardMock).not.toHaveBeenCalled();
+    const free = await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'overview.chart' } }) as never);
+    expect(free.status).toBe(200);
+    expect(runResearchCardMock).toHaveBeenCalledWith('overview.chart', {});
+    setPayStoreForTest(undefined);
   });
 
   it('research_card reports a failed source as a tool error, and research_search returns hits', async () => {
     runResearchCardMock.mockResolvedValue({ status: 502, body: { error: 'Nasdaq: HTTP 503' } });
     researchSearchMock.mockResolvedValue([{ kind: 'security', label: 'AAPL', dashboard: 'company', params: { symbol: 'AAPL' } }]);
     const { POST } = await importRoute();
-    const failed = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'x.y' } }) as never)).json();
+    const failed = await (await POST(rpc('tools/call', { name: 'research_card', arguments: { id: 'overview.chart' } }) as never)).json();
     expect(failed.result.isError).toBe(true);
     expect(JSON.parse(failed.result.content[0].text).error).toBe('Nasdaq: HTTP 503');
     const found = await (await POST(rpc('tools/call', { name: 'research_search', arguments: { query: 'apple' } }) as never)).json();

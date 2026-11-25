@@ -287,8 +287,8 @@ importers:
         specifier: ^0.25.0
         version: 0.25.0(@types/node@26.6.7)
       '@profullstack/coinpay-onboard':
-        specifier: 0.3.1
-        version: 0.3.1
+        specifier: 0.5.1
+        version: 0.5.1
       '@profullstack/footer':
         specifier: latest
         version: 0.7.0(react@19.3.1)
@@ -1671,8 +1671,8 @@ packages:
     engines: {node: '>=22.13'}
     hasBin: true
 
-  '@profullstack/coinpay-onboard@0.3.1':
-    resolution: {integrity: sha512-+K7D6uaX10y+0V5sg7To1jKwNG8iCNbN9SSW6q5ACzoiDNswMox3G7gzY/Swxd128klq7ecN2Ni4JVNr50nRIQ==}
+  '@profullstack/coinpay-onboard@0.5.1':
+    resolution: {integrity: sha512-vuM/1vYvkXP2E/tBcTBZ8JY4K49qtSPPY1N9XRQvIlcy0Sezr+spOf6vYBkRPhasKcFqda44MRLgxPseG9Kvdg==}
     engines: {node: '>=20'}
     hasBin: true
 
@@ -4611,7 +4611,7 @@ snapshots:
     transitivePeerDependencies:
       - react
 
-  '@profullstack/coinpay-onboard@0.3.1':
+  '@profullstack/coinpay-onboard@0.5.1':
     dependencies:
       '@modelcontextprotocol/sdk': 1.32.2(zod@4.6.7)
       zod: 4.6.7

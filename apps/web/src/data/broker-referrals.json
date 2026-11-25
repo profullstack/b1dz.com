@@ -1,0 +1,11 @@
+{
+  "_comment": "Where 'Open an account' links go. Put a referral URL in `referral` to earn from it (zero maintenance: no program is joined by code). Empty = the plain link. BROKER_REFERRAL_URLS in app.env ({\"alpaca\":\"https://...\"}) overrides these without a deploy.",
+  "brokers": [
+    { "id": "alpaca", "name": "Alpaca", "kind": "stocks", "url": "https://alpaca.markets/", "referral": "" },
+    { "id": "moomoo", "name": "moomoo", "kind": "stocks", "url": "https://www.moomoo.com/us", "referral": "" },
+    { "id": "kraken", "name": "Kraken", "kind": "crypto", "url": "https://www.kraken.com/sign-up", "referral": "" },
+    { "id": "coinbase", "name": "Coinbase", "kind": "crypto", "url": "https://www.coinbase.com/signup", "referral": "" },
+    { "id": "binance-us", "name": "Binance.US", "kind": "crypto", "url": "https://www.binance.us/register", "referral": "" },
+    { "id": "gemini", "name": "Gemini", "kind": "crypto", "url": "https://exchange.gemini.com/register", "referral": "" }
+  ]
+}

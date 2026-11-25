@@ -11,3 +11,5 @@ export * as market from './lib/market.js';
 export { TRANSFORMS, TRANSFORM_LABEL, applyTransform, transformChart, indexed, yoy, drawdown, sma, combine } from './transform.js';
 export type { Transform } from './transform.js';
 export { fredSeries, fredChart } from './lib/fred.js';
+export { cardBilling, isRawQuoteSource, DERIVED_CARDS, RAW_QUOTE_SOURCES, RAW_QUOTE_PATTERN } from './billing.js';
+export type { CardBilling, MeterBasis } from './billing.js';

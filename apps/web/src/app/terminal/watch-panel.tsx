@@ -14,6 +14,7 @@
  * daemon, which needs the user's trading session unlocked.
  */
 import Link from 'next/link';
+import { BrokerLinks } from '@/components/broker-links';
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react';
 import { DEFAULT_TERMINAL_WATCHLIST, describeOrder, editWatchlist, estimateOrderUsd, isOrderSymbol, normalizeWatchSymbol, parseManualOrder, parseWatchlist } from '@b1dz/core/terminal';
 import { formatValue } from '@b1dz/research/format';
@@ -420,13 +421,16 @@ export function WatchPanel(props: {
               </p>
             )}
             {account && !account.locked && !account.brokers.length && !account.error && (
-              <p className="text-zinc-400">
-                No broker linked.{' '}
-                <Link href="/settings?tab=plugins" className="text-amber-300 underline">
-                  Add Alpaca or moomoo
-                </Link>{' '}
-                to buy and sell from here.
-              </p>
+              <>
+                <p className="text-zinc-400">
+                  No broker linked.{' '}
+                  <Link href="/settings?tab=plugins" className="text-amber-300 underline">
+                    Add Alpaca or moomoo
+                  </Link>{' '}
+                  to buy and sell from here.
+                </p>
+                <BrokerLinks kind="stocks" />
+              </>
             )}
             {account && account.brokers.length > 1 && (
               <label className="flex items-center gap-2 text-zinc-500">

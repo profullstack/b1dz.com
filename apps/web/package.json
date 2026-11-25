@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/web",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,7 +24,7 @@
     "@b1dz/storage-supabase": "workspace:*",
     "@profullstack/affiliates": "0.3.0",
     "@profullstack/coinpay": "^0.25.0",
-    "@profullstack/coinpay-onboard": "0.3.1",
+    "@profullstack/coinpay-onboard": "0.5.1",
     "@profullstack/footer": "latest",
     "@profullstack/form-guard": "^0.2.2",
     "@profullstack/key-grants": "0.1.0",

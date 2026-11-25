@@ -114,7 +114,7 @@ describe('the OAuth round trip', () => {
       }) as typeof fetch;
     expect(await fetchCoinpayClaims(cfg, { code: 'c', verifier: 'v'.repeat(43), nonce: 'right' }, fake('wrong'))).toMatchObject({ ok: false });
     const ok = await fetchCoinpayClaims(cfg, { code: 'c', verifier: 'v'.repeat(43), nonce: 'right' }, fake('right'));
-    expect(ok).toEqual({ ok: true, claims: { sub: 's', email: 'x@example.com', name: null } });
+    expect(ok).toEqual({ ok: true, claims: { sub: 's', email: 'x@example.com', name: null, pass: { active: false, expiresAt: null } } });
     expect(sent[0].get('client_secret')).toBe('secret');
     expect(sent[0].get('code_verifier')).toBe('v'.repeat(43));
   });

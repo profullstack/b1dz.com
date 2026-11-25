@@ -33,7 +33,7 @@ import { cryptoTradeSource } from '@b1dz/source-crypto-trade';
 import { signup, login, logout, whoami, currentUser } from './auth.js';
 import { settings } from './settings.js';
 import { setup } from './setup.js';
-import { redeem, invites } from './credits.js';
+import { redeem, invites, pro, analyst } from './credits.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // In the monorepo, JSON storage lives in <root>/data; an npm install keeps it
@@ -121,6 +121,8 @@ Auth:
   b1dz settings         show account settings (API keys, thresholds, toggles)
   b1dz redeem <code>    redeem a credit code for Pro days
   b1dz invites [create [note]]  your invites, Pro-day balance, referral link
+  b1dz pro              your plan (Pro or free), analyst allowance, prices
+  b1dz analyst <question>  ask the AI analyst (free: a few a day; Pro: more)
   b1dz setup [section]  guided walkthrough — prompts for keys with docs URLs
   b1dz unlock [--ttl 8h] let the daemon trade with your keys (max 7d; passphrase
                        prompt, or B1DZ_VAULT_PASSPHRASE / B1DZ_VAULT_PASSPHRASE_FILE)
@@ -408,6 +410,8 @@ if (source === 'trade') {
 }
 if (source === 'redeem') { await redeem(process.argv.slice(3)); process.exit(0); }
 if (source === 'invites') { await invites(process.argv.slice(3)); process.exit(0); }
+if (source === 'pro') { await pro(); process.exit(0); }
+if (source === 'analyst') { await analyst(process.argv.slice(3)); process.exit(0); }
 if (source === 'status') runDaemonStatus();
 if (source === 'restart') runDaemonRestart();
 

@@ -20,6 +20,8 @@ const PUBLIC_PATHS = [
   '/i',
   // Research terminal: the shell and catalog are public; card data needs a session.
   '/terminal',
+  // Prices and plans are public.
+  '/pricing',
   // MCP OAuth consent (the page itself sends signed-out users to /login with the
   // full query), plus the default OAuth paths an MCP client falls back to: they
   // must answer 404, never a 200 HTML login page (breaks the client's JSON parse).

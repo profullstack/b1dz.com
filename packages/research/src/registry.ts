@@ -1,5 +1,6 @@
 /** The card registry: every surface (TUI, CLI, API, MCP) goes through here. */
 import { Http } from './http.js';
+import { cardBilling, type MeterBasis } from './billing.js';
 import {
   MissingKeyError,
   type AreaModule,
@@ -69,6 +70,9 @@ export interface CatalogCard {
   source: string;
   description?: string;
   needsKey?: KeyName;
+  /** Agents pay per call for metered cards (derived analytics, FRED, EIA). Raw quotes are always free. */
+  metered: boolean;
+  meterBasis?: MeterBasis;
   params: { name: string; label: string; default?: string; choices?: string[]; hint?: string }[];
 }
 
@@ -149,6 +153,7 @@ export class Registry {
         source: c.source,
         description: c.description,
         needsKey: c.needsKey,
+        ...(() => { const b = cardBilling(c); return b.metered ? { metered: true, meterBasis: b.basis } : { metered: false }; })(),
         params: (c.params ?? []).map((p) => ({ name: p.name, label: p.label, default: p.default, choices: p.choices, hint: p.hint })),
       })),
     };
