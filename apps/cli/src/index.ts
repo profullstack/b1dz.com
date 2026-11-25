@@ -103,6 +103,7 @@ At a glance:
   Crypto dashboard:   b1dz tui
   Market research:    b1dz research       (the terminal's commands for scripts: card, quote, search)
   Buy and sell:       b1dz trade          (your own broker: Alpaca, moomoo, ...)
+  Live TV:            b1dz tv             (CNBC, Bloomberg, Fox Business from your hdtilt.com playlists)
   Backtesting:        b1dz backtest <tf>
   Spread/edge audit:  b1dz audit-arb
   Live quotes:        b1dz observe        (CEX + DEX multi-venue)
@@ -145,6 +146,12 @@ Trading (your own broker, linked at b1dz.com/settings):
   b1dz trade sell AAPL 5 --limit 190.50
   b1dz trade orders | cancel <order-id> | watch [+SYM -SYM]
   b1dz trade help          every trade command
+
+Live TV (your own hdtilt.com account; plays in mpv):
+  b1dz tv login            connect hdtilt.com (OAuth 2.1, opens the browser)
+  b1dz tv                  CNBC, Bloomberg, Fox Business as found in your playlists
+  b1dz tv watch cnbc       play one (also: bloomberg, fox)
+  b1dz tv help             every tv command
 
 Daemon:
   b1dz status              show b1dzd status (user systemd, then system-wide)
@@ -390,6 +397,10 @@ if (source === 'unlock' || source === 'lock' || source === 'vault') {
   const { vaultCommand } = await import('./vault.js');
   await vaultCommand(source, process.argv.slice(3));
   process.exit(0);
+}
+if (source === 'tv') {
+  const { runTvCli } = await import('./tv.js');
+  process.exit(await runTvCli(process.argv.slice(3)));
 }
 if (source === 'trade') {
   const { runTradeCli } = await import('./trade.js');

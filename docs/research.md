@@ -120,6 +120,54 @@ Operator setup for moomoo: register a public OAuth client once
 `token_endpoint_auth_method: "none"`) and set `MOOMOO_OAUTH_CLIENT_ID`. There
 is no client secret.
 
+## Live TV
+
+CNBC, Bloomberg and Fox Business play inside the terminal from your own
+[hdtilt.com](https://hdtilt.com) account. hdtilt is an IPTV player for a
+playlist you already have; b1dz supplies no streams.
+
+| Where | How |
+|---|---|
+| Web (`/terminal`) | the `tv` button or `v` opens a small tile, bottom right. `Connect hdtilt` the first time. Channel buttons, `,` and `.` to zap, `unmute`, and `pop out` for picture-in-picture, which stays on top of other windows and keeps playing if you close the tile |
+| CLI | `b1dz tv login`, `b1dz tv` (what each channel matched), `b1dz tv watch cnbc` (plays in [mpv](https://mpv.io)), `b1dz tv logout` |
+| TUI (`b1dz`) | `v` picks a channel and starts it in mpv |
+
+How it works:
+
+- **Sign-in is OAuth 2.1 with PKCE** against hdtilt.com, as a public client
+  with no secret: `b1dz-web` (redirect `https://b1dz.com/api/tv/callback`) for
+  the web tile and `b1dz-cli` (loopback redirect) for the CLI. hdtilt's consent
+  screen names the app.
+- **Tokens.** On the web the refresh token is an httpOnly cookie scoped to
+  `/api/tv`; page script only ever gets the one-hour access token from
+  `/api/tv/token`. Nothing is stored on the server. The CLI keeps its tokens in
+  `~/.config/b1dz/tv.json` (mode 600).
+- **Channels are found by name** with hdtilt's `POST /api/tv/find`, so neither
+  the page nor the CLI holds your playlist address or provider password. The
+  result is remembered for a week (web: this browser) and looked up again if a
+  stream stops working.
+- **Video goes straight from hdtilt to your browser** (its stream proxy, your
+  token on every request). b1dz relays none of it.
+- **Player:** `@profullstack/player` (`attachSource`): hls.js for HLS,
+  mpegts.js for raw transport streams, one `<video>` element for both and for
+  picture-in-picture.
+
+Things to know:
+
+- hdtilt keeps your playlists sealed under your passphrase. The first lookup
+  needs your hdtilt library unlocked (open hdtilt.com and unlock); the tile
+  says so when it is not.
+- A channel that is not in your playlists shows as a greyed button.
+- Browsers only start video muted; click `unmute`.
+- Safari plays HLS natively and cannot send the token with it, so an HLS-only
+  channel does not play in Safari yet. Transport streams (most IPTV) do.
+- The MCP server has no TV tools: the connection lives in your browser or CLI,
+  not on the server. hdtilt.com has its own MCP server.
+
+Code: `apps/web/src/lib/tv-oauth.ts`, `apps/web/src/app/terminal/tv-tile.tsx`
+and `tv.ts`, `apps/cli/src/tv.ts`, channel list in `packages/core/src/terminal.ts`.
+`HDTILT_URL` points a dev build at another hdtilt.
+
 ## Coverage
 
 | Group | Dashboards (id: tabs) |
