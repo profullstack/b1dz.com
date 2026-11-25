@@ -1,5 +1,6 @@
 /** Futures & Positioning dashboard: front-month board, VIX / Fed funds / WTI curves, CFTC positioning. */
 import { csvObjects, num } from '../../http.js';
+import { CDE, CDE_URL, futuresNotes } from '../../lib/exchange-futures.js';
 import { getQuotes, type Quote } from '../../lib/market.js';
 import { SourceError, type CardDef, type Ctx, type Row } from '../../types.js';
 import { COT_URL, cotNetChange, cotNetSeries, getCot, isCotCode, type CotData } from './cot.js';
@@ -149,8 +150,8 @@ export const FRONT_MONTH: BoardItem[] = [
   { symbol: 'ZC=F', label: 'Corn', group: 'Commodity' },
   { symbol: 'ZS=F', label: 'Soybeans', group: 'Commodity' },
   { symbol: 'ZW=F', label: 'Wheat', group: 'Commodity' },
-  { symbol: 'BTC=F', label: 'CME Bitcoin', group: 'Crypto' },
-  { symbol: 'ETH=F', label: 'CME Ether', group: 'Crypto' },
+  { symbol: 'BTC=F', label: 'Bitcoin', group: 'Crypto' },
+  { symbol: 'ETH=F', label: 'Ether', group: 'Crypto' },
 ];
 
 /** Quotes that priced, plus the provider names that answered. Throws when none did. */
@@ -173,23 +174,23 @@ const boardCard: CardDef = {
   id: 'derivatives.futures-board',
   title: 'Front-Month Futures',
   source: 'Market data',
-  description: 'Front-month equity-index, Treasury, currency, commodity and CME crypto futures ranked by the move since the last settlement.',
+  description: 'Front-month equity-index, Treasury, currency, commodity and crypto futures ranked by their latest move, with the venue that priced each.',
   async run(ctx) {
     const got = await quoted(ctx, FRONT_MONTH.map((f) => f.symbol), 'front-month futures');
     const rows: Row[] = [];
     got.quotes.forEach((q, i) => {
       if (q.price === null) return;
-      rows.push({ name: FRONT_MONTH[i].label, group: FRONT_MONTH[i].group, symbol: q.symbol, price: q.price, chg: q.change, pct: q.changePct, prev: q.prevClose });
+      rows.push({ name: FRONT_MONTH[i].label, group: FRONT_MONTH[i].group, symbol: q.symbol, price: q.price, chg: q.change, pct: q.changePct, prev: q.prevClose, venue: q.source });
     });
     rows.sort((a, b) => ((b.pct as number | null) ?? -Infinity) - ((a.pct as number | null) ?? -Infinity));
-    const notes = [QUOTE_NOTE];
+    const notes = futuresNotes(got.source, QUOTE_NOTE);
     if (got.missing.length) notes.push(`No quote for: ${got.missing.join(', ')}.`);
     const stamp = got.quotes.find((q) => q.time)?.time;
     return {
       blocks: [
         {
           kind: 'table',
-          title: 'Ranked by change since last settlement',
+          title: 'Ranked by change',
           columns: [
             { key: 'name', label: 'Contract' },
             { key: 'group', label: 'Group' },
@@ -197,7 +198,8 @@ const boardCard: CardDef = {
             { key: 'price', label: 'Last', format: 'num' },
             { key: 'chg', label: 'Chg', format: 'signed' },
             { key: 'pct', label: 'Chg %', format: 'signedPct', digits: 2 },
-            { key: 'prev', label: 'Prior settle', format: 'num' },
+            { key: 'prev', label: 'Prior', format: 'num' },
+            { key: 'venue', label: 'Venue' },
           ],
           rows,
         },
@@ -347,9 +349,9 @@ const wtiCard: CardDef = {
         },
       ],
       source: got.source,
-      sourceUrl: 'https://www.cmegroup.com/markets/energy/crude-oil/light-sweet-crude.html',
+      sourceUrl: got.source.includes(CDE) ? CDE_URL : 'https://www.cmegroup.com/markets/energy/crude-oil/light-sweet-crude.html',
       asOf: got.quotes.find((q) => q.time)?.time,
-      notes: [QUOTE_NOTE, ...(got.missing.length ? [`No quote for: ${got.missing.join(', ')}.`] : [])],
+      notes: [...futuresNotes(got.source, QUOTE_NOTE), ...(got.missing.length ? [`No quote for: ${got.missing.join(', ')}.`] : [])],
     };
   },
 };

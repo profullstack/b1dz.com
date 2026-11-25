@@ -1,6 +1,6 @@
 {
   "name": "@b1dz/research",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "Market research cards for b1dz: equities, options, rates, credit, FX, futures, energy, shipping, macro, filings and news from public and official sources. One registry, rendered by the TUI, CLI, API and MCP.",

@@ -12,7 +12,8 @@
  *   BTC-USD              crypto
  *
  * Providers, in order:
- *   U.S. stocks and ETFs   Nasdaq, then Yahoo
+ *   U.S. stocks and ETFs   Nasdaq, NicheDB (the Alpaca-fed history the b1dz
+ *                          console reads), then Yahoo
  *   indices                Cboe daily index files (^GSPC ^VIX ^RUT ^DJI ^OEX ^RUI
  *                          ^VVIX ^VIX9D ^VIX3M ^SKEW ^MXEA ^MXEF), Nasdaq
  *                          (^IXIC ^NDX ^SOX and any other Nasdaq-calculated
@@ -20,13 +21,18 @@
  *   crypto                 Coinbase Exchange, Kraken, then Yahoo
  *   currency pairs         Frankfurter (ECB daily reference rates), then Yahoo
  *   Canada (.TO, .V, ^GSPTSE ^TX60 ^JX)  TMX Money, then Yahoo
- *   futures, other non-U.S. listings and indices   Yahoo only
+ *   futures                Coinbase Derivatives for crude, natural gas, gold,
+ *                          silver, copper, platinum, bitcoin and ether (that
+ *                          exchange's own contracts; 24-hour change), then Yahoo
+ *   other futures, other non-U.S. listings and indices   Yahoo only
  * History is price return: closes are split-adjusted but not
  * dividend-adjusted. Index quotes from Cboe files are previous-close values.
  */
 import { pctChange } from '../format.js';
 import { firstOf, parseCsv } from '../http.js';
 import { SourceError, type Ctx, type Row, type TableBlock } from '../types.js';
+import { CDE, cdeBars, cdeContract, cdeCovers } from './exchange-futures.js';
+import { NICHEDB, nichedbBars } from './nichedb.js';
 import { NASDAQ, nasdaqHistory, nasdaqHistoryAuto, nasdaqInfo, parseTrade, type NasdaqInfo } from './nasdaq.js';
 import { YAHOO, yahooChart } from './yahoo.js';
 
@@ -363,11 +369,14 @@ async function historyFrom(ctx: Ctx, rawSymbol: string, from: Date): Promise<His
     chain.push({ name: KRAKEN, run: async () => ({ bars: cut(await krakenBars(ctx, symbol)) }) });
   } else if (cls === 'fx') {
     chain.push({ name: FRANKFURTER, run: async () => ({ bars: cut(await frankfurterBars(ctx, symbol, from)) }) });
+  } else if (cls === 'future' && cdeCovers(symbol)) {
+    chain.push({ name: CDE, run: async () => ({ bars: cut((await cdeBars(ctx, symbol, from, to)).bars) }) });
   } else if (cls === 'stock' && isUsListing(symbol)) {
     chain.push({
       name: NASDAQ,
       run: async () => ({ bars: await nasdaqHistoryAuto(ctx, symbol, nasdaqFloor(from, to), to) }),
     });
+    chain.push({ name: NICHEDB, run: async () => ({ bars: cut(await nichedbBars(ctx, symbol)) }) });
   }
   chain.push(viaYahoo);
 
@@ -494,8 +503,20 @@ export async function getQuote(ctx: Ctx, rawSymbol: string): Promise<Quote> {
     chain.push({ name: KRAKEN, run: async () => fromBars(symbol, await krakenBars(ctx, symbol), KRAKEN, undefined, symbol.split('-')[1]) });
   } else if (cls === 'fx') {
     chain.push({ name: FRANKFURTER, run: async () => fromBars(symbol, await frankfurterBars(ctx, symbol, recent), FRANKFURTER, undefined, fxPair(symbol)?.quote) });
+  } else if (cls === 'future' && cdeCovers(symbol)) {
+    chain.push({
+      name: CDE,
+      run: async () => {
+        const c = await cdeContract(ctx, symbol);
+        const price = c.price as number;
+        // Coinbase reports the move over 24 hours, not from a daily settlement.
+        const prev = c.changePct !== null && c.changePct > -100 ? price / (1 + c.changePct / 100) : null;
+        return { symbol, name: c.name, price, change: prev !== null ? price - prev : null, changePct: c.changePct, prevClose: prev, currency: 'USD', exchange: CDE, time: now.toISOString(), source: CDE };
+      },
+    });
   } else if (cls === 'stock' && isUsListing(symbol)) {
     chain.push({ name: NASDAQ, run: async () => fromNasdaq(symbol, (await nasdaqInfo(ctx, symbol)).info) });
+    chain.push({ name: NICHEDB, run: async () => fromBars(symbol, await nichedbBars(ctx, symbol), NICHEDB, undefined, 'USD') });
   }
   chain.push({ name: YAHOO, run: () => yahooQuote(ctx, symbol) });
   return (await firstOf(chain)).value;

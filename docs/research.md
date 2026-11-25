@@ -75,8 +75,8 @@ Fiscal Data, Federal Reserve, New York / Atlanta / Cleveland / Philadelphia
 Fed, FRED, ECB, Bank of England, Japan MoF, Bank of Canada, Riksbank, Tesouro
 Direto, BIS, IMF and IMF PortWatch, OECD, CFTC, DTCC SDR, FDIC, EIA, BLS,
 U.S. Census, USDA FAS, Freddie Mac, Congress.gov, U.S. Senate, USAspending,
-UN Comtrade, Deribit, Coinbase, Kraken, Montreal Exchange, and publisher and
-agency RSS feeds.
+UN Comtrade, Deribit, Coinbase and Coinbase Derivatives, Kraken, NicheDB
+(Alpaca), Montreal Exchange, and publisher and agency RSS feeds.
 
 Where a card has more than one provider it tries them in order, shows the one
 that answered in its header, and lists the ones it skipped in its notes.
@@ -100,13 +100,23 @@ environment variables.
 - **Quotes are daily closes or delayed.** Boards show price return, not total
   return, and say so. Index levels from Cboe files are previous-close values.
   FX is the ECB daily reference rate.
-- **Yahoo Finance is the only source for futures quotes and most non-U.S.
-  listings**, and it refuses data-centre networks. Those cards (front-month
-  futures board, Fed funds futures, WTI curve, commodity and agriculture
-  boards and curves, world indices outside North America) work from a home or
-  office connection and report "unavailable" through the hosted API and MCP.
-  Their Yahoo parser is covered by a fixture test but has not been run live
-  from the build server.
+- **Commodity and crypto futures come from Coinbase Derivatives**, the same
+  exchange the b1dz console prices crypto from: crude oil, natural gas, gold,
+  silver, copper, platinum, bitcoin and ether, with dated contracts for the
+  forward curves. These are Coinbase's own contracts (crude is 10 barrels, not
+  NYMEX's 1,000), quoted in the usual unit. They track the benchmark futures
+  closely but are not CME settlements: the change is over 24 hours, far-dated
+  contracts often have not traded yet (so a curve can be two points), and a
+  contract's history starts when it was listed. Each row names its venue.
+- **U.S. stock and ETF history falls back to NicheDB**, the Alpaca-fed daily
+  bars the b1dz console and backtester read, when Nasdaq does not answer.
+- **Yahoo Finance is still the only source for the rest**: equity-index,
+  Treasury, currency and agricultural futures, Brent and refined products,
+  Fed funds futures, and listings and indices outside North America. Yahoo
+  refuses data-centre networks, so those rows are blank and the Fed funds
+  and agriculture futures cards report "unavailable" on the hosted site, API
+  and MCP. From the TUI on a home or office connection they should work; that
+  path has a fixture test but has not been run live.
 - **Option implied volatility is computed here.** Nasdaq chains carry no IV, so
   it is solved from bid/ask mids against the forward implied by put-call
   parity, with SOFR as the rate. Dealer gamma exposure uses the usual
