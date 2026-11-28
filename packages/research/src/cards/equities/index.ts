@@ -44,6 +44,7 @@ const dashboards: DashboardDef[] = [
       { id: 'overview', title: 'Overview', cards: ['equities.price-history', 'equities.snapshot', 'equities.analyst-targets', 'equities.rating-changes', 'equities.news'] },
       { id: 'statements', title: 'Statements', cards: ['equities.income-statement', 'equities.balance-sheet', 'equities.cash-flow'] },
       { id: 'estimates', title: 'Estimates', cards: ['equities.earnings', 'equities.surprise-history', 'equities.estimate-revisions', 'equities.earnings-release'] },
+      { id: 'technicals', title: 'Technicals', cards: ['technicals.summary', 'technicals.trendlines', 'technicals.patterns'] },
       { id: 'peers', title: 'Price & Peers', cards: ['equities.comps', 'equities.risk-peers'] },
       { id: 'ratios', title: 'Growth & Ratios', cards: ['equities.valuation-history', 'equities.roic', 'equities.dupont'] },
       { id: 'ownership', title: 'Ownership', cards: ['equities.insiders', 'equities.institutions'] },

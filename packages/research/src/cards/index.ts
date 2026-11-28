@@ -8,13 +8,15 @@ import { equities } from './equities/index.js';
 import { macro } from './macro/index.js';
 import { overview } from './overview/index.js';
 import { rates } from './rates/index.js';
+import { technicals } from './technicals/index.js';
 
-export const AREAS: AreaModule[] = [overview, equities, rates, derivatives, commodities, crypto, macro];
+export const AREAS: AreaModule[] = [overview, equities, technicals, rates, derivatives, commodities, crypto, macro];
 
 /** Sidebar group order. Groups not listed sort after these, alphabetically. */
 export const GROUP_ORDER = [
   'Overview',
   'Equities',
+  'Technicals',
   'Indices, ETFs & Factors',
   'Rates & Credit',
   'Derivatives',

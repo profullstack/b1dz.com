@@ -1,6 +1,6 @@
 # b1dz research
 
-A market research TUI: 37 dashboards, 156 tabs and 282 cards covering equities,
+A market research TUI: 38 dashboards, 161 tabs and 290 cards covering equities,
 options, sovereign curves, credit, FX, futures, energy, shipping, crypto, macro,
 SEC filings and news. Every card reads a public or official source and names it.
 No b1dz account is needed, and all but one card work with no API key.
@@ -276,6 +276,37 @@ environment variables.
   tariffs, crude exports by country (the EIA series is complete only through
   2018), and earnings call transcripts.
 - **Macro shows official releases and IMF forecasts**, not survey consensus.
+
+## Technical analysis
+
+Automated chart reading for any symbol the cards can price: stocks, ETFs,
+indices, currency pairs, futures and crypto. Dashboard **Technical Analysis**
+(`b1dz research technicals symbol=NVDA`, `/terminal?d=technicals&symbol=NVDA`),
+plus a **Technicals** tab on the Company and Coin dashboards.
+
+| Card | What it does |
+|---|---|
+| `technicals.summary` | Verdict and net score from the 50/200-day averages, RSI, MACD, trendline status, nearest support and resistance, the latest candlestick and chart patterns |
+| `technicals.trendlines` | Auto support and resistance trendlines through swing points, horizontal levels from clustered swings, overlaid on the closes; touches, slope and holding / testing / broken |
+| `technicals.patterns` | Head and shoulders (and inverse), double tops and bottoms, triangles, wedges, channels and ranges, with trigger line, status and measured-move target |
+| `technicals.candlesticks` | Hammer, hanging man, shooting star, engulfing, harami, piercing line, dark cloud, morning and evening star, three soldiers or crows, doji, marubozu in the last 30 bars |
+| `technicals.fibonacci` | Retracement and extension levels of the window's dominant swing, nearest level to the price |
+
+`crypto.technical-summary`, `crypto.trendlines` and `crypto.patterns` are the
+same cards for the Coin dashboard: they always read the input as a coin pair,
+because a bare `BTC` or `ETH` is also a U.S. ETF ticker. The other cards try
+the symbol as given and fall back to `<symbol>-USD` only when it does not price.
+
+Everything is computed from daily bars by fixed rules in
+`packages/research/src/cards/technicals/` (`analysis.ts`, `candles.ts`,
+`patterns.ts`), with no dependencies and no AI. Overlays are extra chart series,
+so the TUI, the web terminal, the CLI CSV and agents all get the same lines.
+Swings are bars that out-reach their neighbours (about one bar per 50 each
+side); a trendline may not be closed through by more than half an ATR, and a
+line that has run more than max(8 ATR, 20%) from the price is dropped. The AI
+analyst reads these cards when a question about a ticker mentions support,
+resistance, trendlines, patterns, RSI and the like. Agents pay the derived-card
+rate for all eight.
 
 ## Crypto
 
