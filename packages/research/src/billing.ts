@@ -78,6 +78,14 @@ export const DERIVED_CARDS: Readonly<Record<string, string>> = {
   'fx.strength': 'currency strength index computed from reference rates',
   'fx.pair-differential': 'pair versus its policy-rate differential',
   'rates.curve-changes': 'yield curve changes by tenor',
+  'technicals.summary': 'technical verdict scored from averages, RSI, MACD, trendlines and patterns',
+  'technicals.trendlines': 'trendlines and support/resistance levels computed from swing points',
+  'technicals.patterns': 'chart patterns detected from swing points, with measured-move targets',
+  'technicals.candlesticks': 'candlestick patterns detected from daily bars',
+  'technicals.fibonacci': 'Fibonacci retracement and extension levels of the dominant swing',
+  'crypto.technical-summary': 'technical verdict for a coin (same rules as technicals.summary)',
+  'crypto.trendlines': 'trendlines and levels for a coin (same rules as technicals.trendlines)',
+  'crypto.patterns': 'chart patterns for a coin (same rules as technicals.patterns)',
 };
 
 export function isRawQuoteSource(source: string): boolean {

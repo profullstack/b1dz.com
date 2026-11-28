@@ -75,11 +75,19 @@ function cleanCards(given: unknown): CardRef[] {
 
 const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'is', 'are', 'what', 'how', 'why', 'does', 'do', 'it', 'its', 'vs', 'with', 'me', 'about', 'now', 'today', 'this', 'that']);
 
+/** A question about the chart itself: answered from the technicals cards instead of the ticker's overview. */
+export const TECHNICAL_QUESTION = /\b(technicals?|chart|support|resistance|trend ?lines?|breakouts?|breakdowns?|patterns?|candles?|candlesticks?|fib(onacci)?|retracements?|rsi|macd|moving averages?|golden cross|death cross|double (top|bottom)|head and shoulders|triangle|wedge|overbought|oversold)\b/i;
+
 /** Cards for a question nobody chose cards for: a ticker's dashboard if it names one, else the best title matches. */
 export async function pickCards(question: string, deps: Pick<AnalystDeps, 'search'>): Promise<CardRef[]> {
   const reg = registry();
   const hits = await deps.search(question).catch(() => [] as SearchHit[]);
   const sec = hits.find((h) => h.kind === 'security' && h.params && Object.keys(h.params).length > 0);
+  if (sec && TECHNICAL_QUESTION.test(question)) {
+    const crypto = sec.dashboard === 'crypto';
+    const ids = crypto ? ['crypto.technical-summary', 'crypto.trendlines', 'crypto.patterns'] : ['technicals.summary', 'technicals.trendlines', 'technicals.patterns'];
+    return ids.filter((id) => reg.card(id)).map((id) => ({ id, params: sec.params }));
+  }
   if (sec) {
     const dash = reg.dashboard(sec.dashboard);
     const ids = dash?.tabs[0]?.cards.filter((id) => reg.card(id)).slice(0, 3) ?? [];

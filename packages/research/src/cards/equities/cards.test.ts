@@ -312,7 +312,8 @@ describe('module wiring', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids.every((id) => /^equities\.[a-z0-9-]+$/.test(id))).toBe(true);
     const used = new Set(equities.dashboards.flatMap((d) => d.tabs.flatMap((t) => t.cards)));
-    expect([...used].filter((id) => !ids.includes(id))).toEqual([]);
+    // Shared cards from other areas (the Technicals tab) are checked by the registry's danglingCards test.
+    expect([...used].filter((id) => id.startsWith('equities.') && !ids.includes(id))).toEqual([]);
     expect(ids.filter((id) => !used.has(id))).toEqual([]);
     expect(equities.dashboards.map((d) => d.id)).toEqual(['company', 'screeners', 'calendars', 'canada', 'nordics', 'indices', 'etfs', 'factors', 'sec']);
   });

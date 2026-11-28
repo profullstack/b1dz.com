@@ -36,6 +36,7 @@ export const cryptoDashboards: DashboardDef[] = [
     group: GROUP,
     tabs: [
       { id: 'spot', title: 'Overview', cards: ['crypto.coin-profile', 'derivatives.crypto-history', 'crypto.coin-cap-history'] },
+      { id: 'technicals', title: 'Technicals', cards: ['crypto.technical-summary', 'crypto.trendlines', 'crypto.patterns'] },
       { id: 'venues', title: 'Venues', cards: ['crypto.price-compare', 'crypto.coin-venues'] },
       { id: 'book', title: 'Order book', cards: ['crypto.spot-book', 'derivatives.crypto-order-book'] },
       { id: 'options', title: 'Options', cards: ['derivatives.crypto-options', 'derivatives.crypto-options-expiries'] },
