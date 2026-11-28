@@ -6,6 +6,7 @@ import { SettingsClient } from './settings-client';
 import { SignOutForm } from '@/components/sign-out-form';
 import { RedeemCodeCard } from '@/components/redeem-code-card';
 import { CoinpayCard } from '@/components/coinpay-card';
+import { PasskeysCard } from '@/components/passkeys-card';
 import { ProCard } from '@/components/pro-card';
 import { isAdminUser } from '@/lib/monetization';
 import { createAdminSupabase } from '@/lib/supabase';
@@ -52,6 +53,9 @@ export default async function SettingsPage() {
       </div>
       <div className="mx-auto max-w-4xl px-6 pt-4">
         <CoinpayCard linked={linked} coinpayOnly={coinpayOnly} />
+      </div>
+      <div className="mx-auto max-w-4xl px-6 pt-4">
+        <PasskeysCard />
       </div>
       <SettingsClient />
     </main>

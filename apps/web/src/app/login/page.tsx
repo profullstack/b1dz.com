@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { CoinpaySigninButton } from '@/components/coinpay-signin-button';
+import { PasskeySigninButton } from '@/components/passkey-signin-button';
 
 export default function LoginPage() {
   const [next, setNext] = useState('/dashboard');
@@ -46,12 +47,13 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold">Sign in to <span className="bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">b1dz</span></h1>
           <p className="text-sm text-zinc-400 mt-1">AI Arbitrage Terminal</p>
         </div>
+        <PasskeySigninButton next={next} onError={setError} />
         <CoinpaySigninButton next={next} />
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
             <label className="block text-sm text-zinc-400 mb-1">Email</label>
             <input className="w-full bg-zinc-900 border border-zinc-700 focus:border-orange-500 rounded-lg px-4 py-2.5 outline-none transition"
-              type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+              type="email" autoComplete="username webauthn" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
           </div>
           <div>
             <div className="flex items-center justify-between mb-1">
